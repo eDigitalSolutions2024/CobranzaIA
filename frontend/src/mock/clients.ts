@@ -1,0 +1,38 @@
+export const clients = [
+  {
+    id: 1,
+    name: "Juan Pérez",
+    debt: "$12,500",
+    status: "Pendiente",
+    risk: "Alto",
+    channel: "WhatsApp",
+    lastContact: "Hace 5 min",
+  },
+  {
+    id: 2,
+    name: "María López",
+    debt: "$8,200",
+    status: "Promesa",
+    risk: "Medio",
+    channel: "SMS",
+    lastContact: "Hace 20 min",
+  },
+  {
+    id: 3,
+    name: "Carlos Ramírez",
+    debt: "$21,900",
+    status: "Escalado",
+    risk: "Crítico",
+    channel: "Llamada",
+    lastContact: "Hace 1 hora",
+  },
+  {
+    id: 4,
+    name: "Ana Torres",
+    debt: "$4,300",
+    status: "Pagado",
+    risk: "Bajo",
+    channel: "Email",
+    lastContact: "Hace 2 horas",
+  },
+]
