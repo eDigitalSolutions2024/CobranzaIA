@@ -28,7 +28,29 @@ function detectIntent(text: string): string {
     t.includes("depósito") ||
     t.includes("deposito") ||
     t.includes("te pago") ||
-    t.includes("voy a pagar")
+    t.includes("voy a pagar") ||
+    t.includes("semana que entra") ||
+    t.includes("semana próxima") ||
+    t.includes("próxima semana") ||
+    t.includes("la próxima") ||
+    t.includes("este viernes") ||
+    t.includes("este lunes") ||
+    t.includes("este martes") ||
+    t.includes("este miércoles") ||
+    t.includes("este jueves") ||
+    t.includes("fin de semana") ||
+    t.includes("en unos días") ||
+    t.includes("unos días") ||
+    t.includes("ahorita") ||
+    t.includes("al rato") ||
+    t.includes("hoy mismo") ||
+    t.includes("hoy en la tarde") ||
+    t.includes("hoy en la mañana") ||
+    t.includes("en la tarde") ||
+    t.includes("ahorita que") ||
+    t.includes("puedo pagar") ||
+    t.includes("voy a ver") ||
+    t.includes("a ver si")
   ) {
     return "promesa_pago"
   }
@@ -38,7 +60,10 @@ function detectIntent(text: string): string {
     t.includes("sin dinero") ||
     t.includes("no puedo") ||
     t.includes("imposible") ||
-    t.includes("no hay")
+    t.includes("no hay") ||
+    t.includes("no tengo dinero") ||
+    t.includes("estoy mal") ||
+    t.includes("no tengo nada")
   ) {
     return "riesgo_alto"
   }

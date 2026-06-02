@@ -14,6 +14,13 @@ export async function prepareWhatsappMessage(data: any) {
 
   const templateName = data.template || "cobranza_recordatorio"
 
+  console.log("Template:", templateName)
+console.log("Language:", "es_419")
+console.log("Client:", data.clientName)
+console.log("Debt:", data.debt)
+console.log("Phone ID:", process.env.META_PHONE_NUMBER_ID)
+
+
   const response = await axios.post(
     `https://graph.facebook.com/v25.0/${process.env.META_PHONE_NUMBER_ID}/messages`,
     {
@@ -24,14 +31,20 @@ export async function prepareWhatsappMessage(data: any) {
         name: templateName,
         language: { code: "es_MX" },
         components: [
-          {
-            type: "body",
-            parameters: [
-              { type: "text", text: data.clientName },
-              { type: "text", text: String(data.debt) },
-            ],
-          },
-        ],
+  {
+    type: "body",
+    parameters: [
+      {
+        type: "text",
+        text: data.clientName,
+      },
+      {
+        type: "text",
+        text: String(data.debt),
+      },
+    ],
+  },
+]
       },
     },
     {
