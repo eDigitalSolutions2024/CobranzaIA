@@ -4,6 +4,7 @@ import {
   MessageSquare,
   MessageCircle,
   BarChart3,
+  Phone,
 } from "lucide-react"
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
 const menu = [
   { id: "dashboard", name: "Dashboard", icon: LayoutDashboard },
   { id: "clients", name: "Clientes", icon: Users },
+  { id: "calls", name: "Llamadas", icon: Phone },
   { id: "conversations", name: "Conversaciones", icon: MessageCircle },
   { id: "messages", name: "Enviar WhatsApp", icon: MessageSquare },
   { id: "analytics", name: "Analytics", icon: BarChart3 },

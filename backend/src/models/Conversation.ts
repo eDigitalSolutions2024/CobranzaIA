@@ -50,7 +50,6 @@ const ConversationSchema = new mongoose.Schema(
   }
 )
 
-ConversationSchema.index({ phone: 1 }, { unique: true })
 ConversationSchema.index({ lastMessageAt: -1 })
 
 export default mongoose.model("Conversation", ConversationSchema)

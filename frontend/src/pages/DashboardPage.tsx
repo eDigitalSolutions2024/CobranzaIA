@@ -114,6 +114,31 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Métricas de llamadas */}
+      {metrics?.callStats && (
+        <div className="mt-4">
+          <h2 className="text-sm font-medium text-zinc-500 mb-3 uppercase tracking-wider">Llamadas de voz</h2>
+          <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 text-center">
+              <p className="text-sm text-zinc-400">Total llamadas</p>
+              <p className="text-2xl font-bold text-white mt-1">{metrics.callStats.total}</p>
+            </div>
+            <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-4 text-center">
+              <p className="text-sm text-zinc-400">Completadas</p>
+              <p className="text-2xl font-bold text-green-400 mt-1">{metrics.callStats.completed ?? 0}</p>
+            </div>
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-center">
+              <p className="text-sm text-zinc-400">Con promesa</p>
+              <p className="text-2xl font-bold text-emerald-400 mt-1">{metrics.callStats.withPromise}</p>
+            </div>
+            <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center">
+              <p className="text-sm text-zinc-400">Requieren asesor</p>
+              <p className="text-2xl font-bold text-orange-400 mt-1">{metrics.callStats.requires_human ?? 0}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         <div className="xl:col-span-2">
           <RecoveryChart />

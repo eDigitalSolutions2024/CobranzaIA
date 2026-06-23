@@ -3,6 +3,7 @@ import Client from "../models/Client"
 import Message from "../models/Message"
 import PaymentPromise from "../models/PaymentPromise"
 import Conversation from "../models/Conversation"
+import Call from "../models/Call"
 
 export async function getMetrics(req: Request, res: Response) {
   try {
@@ -16,27 +17,20 @@ export async function getMetrics(req: Request, res: Response) {
       riskAgg,
       messageStatusAgg,
       conversationStatusAgg,
+      callStatusAgg,
+      callsWithPromise,
     ] = await Promise.all([
       Client.countDocuments(),
       Client.countDocuments({ status: { $ne: "paid" } }),
-      Client.aggregate([
-        { $group: { _id: null, total: { $sum: "$debt" } } },
-      ]),
-      Client.aggregate([
-        { $match: { status: "paid" } },
-        { $group: { _id: null, total: { $sum: "$debt" } } },
-      ]),
+      Client.aggregate([{ $group: { _id: null, total: { $sum: "$debt" } } }]),
+      Client.aggregate([{ $match: { status: "paid" } }, { $group: { _id: null, total: { $sum: "$debt" } } }]),
       PaymentPromise.countDocuments({ status: "pending" }),
       Client.countDocuments({ totalReplies: { $gt: 0 } }),
-      Client.aggregate([
-        { $group: { _id: "$risk", count: { $sum: 1 } } },
-      ]),
-      Message.aggregate([
-        { $group: { _id: "$status", count: { $sum: 1 } } },
-      ]),
-      Conversation.aggregate([
-        { $group: { _id: "$status", count: { $sum: 1 } } },
-      ]),
+      Client.aggregate([{ $group: { _id: "$risk", count: { $sum: 1 } } }]),
+      Message.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+      Conversation.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+      Call.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+      Call.countDocuments({ promiseDate: { $ne: null } }),
     ])
 
     const totalDebt = debtAgg[0]?.total || 0
@@ -69,6 +63,12 @@ export async function getMetrics(req: Request, res: Response) {
       if (c._id) convStats[c._id] = c.count
     })
 
+    const callStats: Record<string, number> = { in_progress: 0, completed: 0, failed: 0, requires_human: 0 }
+    let totalCalls = 0
+    callStatusAgg.forEach((c: any) => {
+      if (c._id) { callStats[c._id] = c.count; totalCalls += c.count }
+    })
+
     res.json({
       totalClients,
       activeClients,
@@ -79,6 +79,7 @@ export async function getMetrics(req: Request, res: Response) {
       riskBreakdown,
       messageStats: { ...msgStats, total: totalMessages },
       conversationStats: convStats,
+      callStats: { ...callStats, total: totalCalls, withPromise: callsWithPromise },
     })
   } catch (error) {
     console.log("Error getMetrics:", error)

@@ -3,26 +3,12 @@ Router
 }
 from "express"
 
-import {
+import { getClients, createClient, getClientDetail } from "../controllers/clientController"
 
-getClients,
+const router = Router()
 
-createClient
-
-}
-from "../controllers/clientController"
-
-const router=
-Router()
-
-router.get(
-"/clients",
-getClients
-)
-
-router.post(
-"/clients",
-createClient
-)
+router.get("/clients", getClients)
+router.get("/clients/:id/detail", getClientDetail)
+router.post("/clients", createClient)
 
 export default router

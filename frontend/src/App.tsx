@@ -4,6 +4,7 @@ import DashboardPage from "./pages/DashboardPage"
 import ClientsPage from "./pages/clientsPage"
 import MessagesPage from "./pages/MessagesPage"
 import ConversationsPage from "./pages/ConversationsPage"
+import CallsPage from "./pages/CallsPage"
 
 export default function App() {
   const [page, setPage] = useState("dashboard")
@@ -14,6 +15,8 @@ export default function App() {
       {page === "dashboard" && <DashboardPage />}
 
       {page === "clients" && <ClientsPage />}
+
+      {page === "calls" && <CallsPage />}
 
       {page === "conversations" && <ConversationsPage />}
 
