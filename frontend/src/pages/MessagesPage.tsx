@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { getClients } from "../services/clients"
+import { sendWhatsapp } from "../services/messages"
 
 const templates = [
   {
@@ -65,23 +66,11 @@ export default function MessagesPage() {
     }
 
     try {
-      const response = await fetch("http://localhost:3002/api/send-whatsapp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        alert(`Message sent to ${client.name} (${client.phone})`)
-      } else {
-        console.log("Error Meta:", data.error)
-        alert(`Error sending message: ${data.message}`)
-      }
-    } catch (error) {
+      await sendWhatsapp(body)
+      alert(`Message sent to ${client.name} (${client.phone})`)
+    } catch (error: any) {
       console.log(error)
-      alert("Error connecting to the server")
+      alert(`Error sending message: ${error.message || "Error connecting to the server"}`)
     } finally {
       setSending(false)
     }

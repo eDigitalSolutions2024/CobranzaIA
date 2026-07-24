@@ -11,6 +11,8 @@ import {
   Tooltip,
 } from "recharts"
 
+import { getClients } from "../services/clients"
+
 export default function RecoveryChart() {
 
   const [
@@ -28,15 +30,9 @@ export default function RecoveryChart() {
 
     try {
 
-      const response =
-
-        await fetch(
-          "http://localhost:3002/api/clients"
-        )
-
       const clients =
 
-        await response.json()
+        await getClients()
 
       const grouped =
         clients.reduce(
