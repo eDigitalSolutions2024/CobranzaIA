@@ -4,6 +4,7 @@ import cors from "cors"
 import http from "http"
 import { WebSocketServer } from "ws"
 
+import authRoutes from "./routes/auth"
 import whatsappRoutes from "./routes/whatsapp"
 import clientRoutes from "./routes/clients"
 import messageRoutes from "./routes/messages"
@@ -27,6 +28,7 @@ app.use(express.urlencoded({ extended: false })) // required for Twilio webhooks
 
 app.get("/", (_, res) => res.send("CobranzaAI API OK"))
 
+app.use("/api", authRoutes)
 app.use("/api", whatsappRoutes)
 app.use("/api", clientRoutes)
 app.use("/api", messageRoutes)
@@ -35,6 +37,11 @@ app.use("/api", conversationRoutes)
 app.use("/api", voiceRoutes)
 
 async function start() {
+  if (!process.env.JWT_SECRET) {
+    console.error("Falta JWT_SECRET en el .env. El servidor no puede iniciar sin él.")
+    process.exit(1)
+  }
+
   await connectDB()
   validateTwilioConfig()
 

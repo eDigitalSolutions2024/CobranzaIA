@@ -1,10 +1,11 @@
 import { Router } from "express"
 
 import {sendWhatsapp,verifyWebhook,receiveWebhook}from "../controllers/whatsappController"
+import { requireAuth } from "../middleware/auth"
 
 const router = Router()
 
-router.post("/send-whatsapp",sendWhatsapp)
+router.post("/send-whatsapp",requireAuth,sendWhatsapp)
 
 // META → valida webhook
 router.get("/webhook",verifyWebhook)

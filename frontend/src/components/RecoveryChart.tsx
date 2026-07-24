@@ -53,7 +53,7 @@ export default function RecoveryChart() {
               )
 
               .toLocaleDateString(
-                "es-MX",
+                "en-US",
                 {
 
                   weekday:
@@ -151,7 +151,7 @@ export default function RecoveryChart() {
           "
         >
 
-          Recuperación semanal
+          Weekly recovery
 
         </h2>
 
@@ -162,7 +162,7 @@ export default function RecoveryChart() {
           "
         >
 
-          Cobranza registrada
+          Collections recorded
 
         </p>
 
@@ -203,10 +203,10 @@ export default function RecoveryChart() {
                     `$${Number(
                       value
                     ).toLocaleString(
-                      "es-MX"
+                      "en-US"
                     )}`,
 
-                    "Cobranza",
+                    "Collections",
 
                   ]
 

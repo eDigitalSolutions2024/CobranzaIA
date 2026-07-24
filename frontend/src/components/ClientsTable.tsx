@@ -12,12 +12,12 @@ interface Props {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  pending: "Pendiente",
-  contacted: "Contactado",
-  negotiating: "Negociando",
-  promised: "Promesa",
-  paid: "Pagado",
-  no_response: "Sin respuesta",
+  pending: "Pending",
+  contacted: "Contacted",
+  negotiating: "Negotiating",
+  promised: "Promise",
+  paid: "Paid",
+  no_response: "No response",
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -30,9 +30,9 @@ const STATUS_COLOR: Record<string, string> = {
 }
 
 const RISK_LABEL: Record<string, string> = {
-  low: "Bajo",
-  medium: "Medio",
-  high: "Alto",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
 }
 
 const RISK_COLOR: Record<string, string> = {
@@ -46,20 +46,20 @@ export default function ClientsTable({ clients }: Props) {
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
 
       <div className="mb-6">
-        <h2 className="text-xl font-semibold">Clientes recientes</h2>
-        <p className="text-sm text-zinc-400">Seguimiento de cobranza inteligente</p>
+        <h2 className="text-xl font-semibold">Recent clients</h2>
+        <p className="text-sm text-zinc-400">Smart collection tracking</p>
       </div>
 
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr className="border-b border-zinc-800 text-left">
-              <th className="pb-4 text-sm text-zinc-500">Cliente</th>
-              <th className="pb-4 text-sm text-zinc-500">Deuda</th>
-              <th className="pb-4 text-sm text-zinc-500">Estado</th>
-              <th className="pb-4 text-sm text-zinc-500">Riesgo IA</th>
-              <th className="pb-4 text-sm text-zinc-500">Canal</th>
-              <th className="pb-4 text-sm text-zinc-500">Último contacto</th>
+              <th className="pb-4 text-sm text-zinc-500">Client</th>
+              <th className="pb-4 text-sm text-zinc-500">Debt</th>
+              <th className="pb-4 text-sm text-zinc-500">Status</th>
+              <th className="pb-4 text-sm text-zinc-500">AI Risk</th>
+              <th className="pb-4 text-sm text-zinc-500">Channel</th>
+              <th className="pb-4 text-sm text-zinc-500">Last contact</th>
             </tr>
           </thead>
           <tbody>
@@ -100,7 +100,7 @@ export default function ClientsTable({ clients }: Props) {
             {clients.length === 0 && (
               <tr>
                 <td colSpan={6} className="py-8 text-center text-zinc-500">
-                  Sin clientes registrados
+                  No clients registered
                 </td>
               </tr>
             )}

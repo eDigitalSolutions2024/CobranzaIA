@@ -12,16 +12,16 @@ const RISK_COLOR: Record<string, string> = {
 }
 
 const RISK_LABEL: Record<string, string> = {
-  low: "Bajo",
-  medium: "Medio",
-  high: "Alto",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
 }
 
 const INTENT_LABEL: Record<string, string> = {
-  promesa_pago: "Promesa de pago",
-  pago_realizado: "Pago realizado",
-  riesgo_alto: "Riesgo alto",
-  saludo: "Saludo",
+  promesa_pago: "Payment promise",
+  pago_realizado: "Payment made",
+  riesgo_alto: "High risk",
+  saludo: "Greeting",
   general: "",
 }
 
@@ -80,10 +80,10 @@ export default function ConversationsPage() {
 
   function getStatusLabel(status: string) {
     const map: Record<string, string> = {
-      active: "Activa",
-      awaiting_client: "Esperando cliente",
-      awaiting_agent: "Requiere atención",
-      closed: "Cerrada",
+      active: "Active",
+      awaiting_client: "Awaiting client",
+      awaiting_agent: "Needs attention",
+      closed: "Closed",
     }
     return map[status] || status
   }
@@ -105,7 +105,7 @@ export default function ConversationsPage() {
 
         <div className="p-4 border-b border-zinc-800">
           <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold">Conversaciones</h1>
+            <h1 className="text-2xl font-bold">Conversations</h1>
             {totalUnread > 0 && (
               <span className="bg-blue-600 text-white text-xs font-bold rounded-full px-2 py-0.5">
                 {totalUnread}
@@ -113,18 +113,18 @@ export default function ConversationsPage() {
             )}
           </div>
           <p className="text-sm text-zinc-400 mt-1">
-            {conversations.length} conversaciones
+            {conversations.length} conversations
           </p>
         </div>
 
         <div className="flex-1 overflow-y-auto">
           {loading && conversations.length === 0 && (
-            <div className="p-6 text-zinc-400 text-sm">Cargando...</div>
+            <div className="p-6 text-zinc-400 text-sm">Loading...</div>
           )}
 
           {!loading && conversations.length === 0 && (
             <div className="p-6 text-zinc-500 text-sm">
-              Sin conversaciones aún. Envía el primer mensaje.
+              No conversations yet. Send the first message.
             </div>
           )}
 
@@ -155,13 +155,13 @@ export default function ConversationsPage() {
               </div>
 
               <p className="text-xs text-zinc-500 mt-1 truncate ml-4">
-                {conv.lastMessage || "Sin mensajes"}
+                {conv.lastMessage || "No messages"}
               </p>
 
               <div className="flex items-center justify-between mt-1 ml-4">
                 <span className="text-xs text-zinc-600">
                   {conv.lastMessageAt
-                    ? new Date(conv.lastMessageAt).toLocaleString("es-MX", {
+                    ? new Date(conv.lastMessageAt).toLocaleString("en-US", {
                         day: "2-digit",
                         month: "2-digit",
                         hour: "2-digit",
@@ -189,8 +189,8 @@ export default function ConversationsPage() {
       <div className="flex-1 flex flex-col">
         {!selected && (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500">
-            <p className="text-lg">Selecciona una conversación</p>
-            <p className="text-sm mt-1">para ver los mensajes</p>
+            <p className="text-lg">Select a conversation</p>
+            <p className="text-sm mt-1">to view the messages</p>
           </div>
         )}
 
@@ -206,7 +206,7 @@ export default function ConversationsPage() {
                   {selected.phone}
                   {selected.clientId?.debt != null && (
                     <span className="ml-2">
-                      · Deuda: ${Number(selected.clientId.debt).toLocaleString("es-MX")} MXN
+                      · Debt: ${Number(selected.clientId.debt).toLocaleString("en-US")} MXN
                     </span>
                   )}
                 </p>
@@ -219,7 +219,7 @@ export default function ConversationsPage() {
                       RISK_COLOR[selected.clientId.risk] || ""
                     }`}
                   >
-                    Riesgo {RISK_LABEL[selected.clientId.risk]}
+                    Risk {RISK_LABEL[selected.clientId.risk]}
                   </span>
                 )}
                 <span className="text-xs text-zinc-400 bg-zinc-800 rounded-full px-3 py-1">
@@ -231,7 +231,7 @@ export default function ConversationsPage() {
             {/* Thread de mensajes */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {messages.length === 0 && (
-                <div className="text-center text-zinc-500 mt-8">Sin mensajes</div>
+                <div className="text-center text-zinc-500 mt-8">No messages</div>
               )}
 
               {messages.map((msg) => (
@@ -255,7 +255,7 @@ export default function ConversationsPage() {
 
                     <div className="flex items-center justify-between mt-2 gap-3">
                       <span className="text-xs opacity-50">
-                        {new Date(msg.createdAt).toLocaleTimeString("es-MX", {
+                        {new Date(msg.createdAt).toLocaleTimeString("en-US", {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
@@ -273,13 +273,13 @@ export default function ConversationsPage() {
                             }`}
                           >
                             {msg.status === "read"
-                              ? "✓✓ Leído"
+                              ? "✓✓ Read"
                               : msg.status === "delivered"
-                                ? "✓✓ Entregado"
+                                ? "✓✓ Delivered"
                                 : msg.status === "sent"
-                                  ? "✓ Enviado"
+                                  ? "✓ Sent"
                                   : msg.status === "failed"
-                                    ? "✗ Fallido"
+                                    ? "✗ Failed"
                                     : ""}
                           </span>
                         )}

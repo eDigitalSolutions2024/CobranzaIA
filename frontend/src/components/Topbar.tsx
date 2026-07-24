@@ -8,9 +8,11 @@ import {
 } from "lucide-react"
 
 import { useState } from "react"
+import { useAuth } from "../context/AuthContext"
 
 export default function Topbar() {
 
+  const { user, logout } = useAuth()
   const [openMenu, setOpenMenu] = useState(false)
 
   return (
@@ -31,7 +33,7 @@ export default function Topbar() {
         <Search size={18} className="text-zinc-500" />
 
         <input
-          placeholder="Buscar clientes..."
+          placeholder="Search clients..."
           className="
             bg-transparent
             text-sm
@@ -76,17 +78,17 @@ export default function Topbar() {
               flex h-10 w-10 items-center justify-center
               rounded-full bg-blue-500 font-semibold
             ">
-              A
+              {(user?.name || "?").charAt(0).toUpperCase()}
             </div>
 
             <div>
 
               <p className="text-sm font-medium">
-                Admin
+                {user?.name || "User"}
               </p>
 
               <p className="text-xs text-zinc-500">
-                Super Admin
+                {user?.email || ""}
               </p>
 
             </div>
@@ -124,7 +126,7 @@ export default function Topbar() {
               ">
                 <User size={18} />
 
-                Mi perfil
+                My profile
               </button>
 
               <button className="
@@ -135,12 +137,14 @@ export default function Topbar() {
               ">
                 <Settings size={18} />
 
-                Configuración
+                Settings
               </button>
 
               <div className="border-t border-zinc-800" />
 
-              <button className="
+              <button
+                onClick={logout}
+                className="
                 flex w-full items-center gap-3
                 px-4 py-3
                 text-red-400
@@ -149,7 +153,7 @@ export default function Topbar() {
               ">
                 <LogOut size={18} />
 
-                Cerrar sesión
+                Log out
               </button>
 
             </div>

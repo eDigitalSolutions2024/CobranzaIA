@@ -2,10 +2,10 @@ import { useEffect, useState } from "react"
 import { getCalls } from "../services/calls"
 
 const STATUS_LABEL: Record<string, string> = {
-  in_progress: "En curso",
-  completed: "Completada",
-  failed: "Fallida",
-  requires_human: "Requiere asesor",
+  in_progress: "In progress",
+  completed: "Completed",
+  failed: "Failed",
+  requires_human: "Requires agent",
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -35,8 +35,8 @@ export default function CallsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-4xl font-bold">Llamadas</h1>
-        <p className="mt-2 text-zinc-400">Historial de llamadas de cobranza</p>
+        <h1 className="text-4xl font-bold">Calls</h1>
+        <p className="mt-2 text-zinc-400">Collection call history</p>
       </div>
 
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
@@ -44,11 +44,11 @@ export default function CallsPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-zinc-800 text-left">
-                <th className="pb-4 text-sm text-zinc-500">Cliente</th>
-                <th className="pb-4 text-sm text-zinc-500">Teléfono</th>
-                <th className="pb-4 text-sm text-zinc-500">Fecha</th>
-                <th className="pb-4 text-sm text-zinc-500">Estado</th>
-                <th className="pb-4 text-sm text-zinc-500">Promesa de pago</th>
+                <th className="pb-4 text-sm text-zinc-500">Client</th>
+                <th className="pb-4 text-sm text-zinc-500">Phone</th>
+                <th className="pb-4 text-sm text-zinc-500">Date</th>
+                <th className="pb-4 text-sm text-zinc-500">Status</th>
+                <th className="pb-4 text-sm text-zinc-500">Payment promise</th>
                 <th className="pb-4 text-sm text-zinc-500">Transcript</th>
               </tr>
             </thead>
@@ -57,13 +57,13 @@ export default function CallsPage() {
                 <>
                   <tr key={call._id} className="border-b border-zinc-800">
                     <td className="py-4 font-medium">
-                      {call.clientId?.name ?? <span className="text-zinc-500">Desconocido</span>}
+                      {call.clientId?.name ?? <span className="text-zinc-500">Unknown</span>}
                     </td>
 
                     <td className="py-4 text-zinc-400">{call.phone}</td>
 
                     <td className="py-4 text-zinc-400 text-sm">
-                      {new Date(call.createdAt).toLocaleString("es-MX")}
+                      {new Date(call.createdAt).toLocaleString("en-US")}
                     </td>
 
                     <td className="py-4">
@@ -76,10 +76,10 @@ export default function CallsPage() {
                       {call.promiseDate ? (
                         <div className="text-sm">
                           <span className="text-emerald-400 font-medium">
-                            ${Number(call.amount).toLocaleString("es-MX")}
+                            ${Number(call.amount).toLocaleString("en-US")}
                           </span>
                           <span className="text-zinc-500 ml-2">
-                            {new Date(call.promiseDate).toLocaleDateString("es-MX")}
+                            {new Date(call.promiseDate).toLocaleDateString("en-US")}
                           </span>
                         </div>
                       ) : (
@@ -92,7 +92,7 @@ export default function CallsPage() {
                         onClick={() => setExpanded(expanded === call._id ? null : call._id)}
                         className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700 transition-colors"
                       >
-                        {expanded === call._id ? "Ocultar" : `Ver (${call.transcript?.length ?? 0} turnos)`}
+                        {expanded === call._id ? "Hide" : `View (${call.transcript?.length ?? 0} turns)`}
                       </button>
                     </td>
                   </tr>
@@ -109,7 +109,7 @@ export default function CallsPage() {
                                   : "bg-blue-600/20 text-blue-300"
                               }`}>
                                 <span className="block text-[10px] mb-1 opacity-50">
-                                  {turn.role === "assistant" ? "IA" : "Cliente"}
+                                  {turn.role === "assistant" ? "AI" : "Client"}
                                 </span>
                                 {turn.content}
                               </div>
@@ -125,7 +125,7 @@ export default function CallsPage() {
               {calls.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-zinc-500">
-                    Sin llamadas registradas
+                    No calls registered
                   </td>
                 </tr>
               )}

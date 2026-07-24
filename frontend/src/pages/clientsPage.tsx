@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react"
-import { getClients } from "../services/clients"
+import { getClients, exportClientsExcel } from "../services/clients"
 import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
+import ImportClientsModal from "../components/ImportClientsModal"
 
 const STATUS_LABEL: Record<string, string> = {
-  pending: "Pendiente",
-  contacted: "Contactado",
-  negotiating: "Negociando",
-  promised: "Promesa",
-  paid: "Pagado",
-  no_response: "Sin respuesta",
+  pending: "Pending",
+  contacted: "Contacted",
+  negotiating: "Negotiating",
+  promised: "Promise",
+  paid: "Paid",
+  no_response: "No response",
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -23,9 +24,9 @@ const STATUS_COLOR: Record<string, string> = {
 }
 
 const RISK_LABEL: Record<string, string> = {
-  low: "Bajo",
-  medium: "Medio",
-  high: "Alto",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
 }
 
 const RISK_COLOR: Record<string, string> = {
@@ -37,8 +38,22 @@ const RISK_COLOR: Record<string, string> = {
 export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
   const [openModal, setOpenModal] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      await exportClientsExcel()
+    } catch (error) {
+      console.log(error)
+      alert("Error exporting Excel file")
+    } finally {
+      setExporting(false)
+    }
+  }
 
   async function handleCall(clientId: string) {
     setCallingId(clientId)
@@ -48,7 +63,7 @@ export default function ClientsPage() {
         body: JSON.stringify({ clientId }),
       })
     } catch {
-      alert("Error al iniciar la llamada")
+      alert("Error starting the call")
     } finally {
       setCallingId(null)
     }
@@ -73,15 +88,30 @@ export default function ClientsPage() {
 
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-4xl font-bold">Clientes</h1>
-            <p className="mt-2 text-zinc-400">Gestión inteligente de cobranza</p>
+            <h1 className="text-4xl font-bold">Clients</h1>
+            <p className="mt-2 text-zinc-400">Smart collection management</p>
           </div>
-          <button
-            onClick={() => setOpenModal(true)}
-            className="rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500"
-          >
-            Nuevo cliente
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setImportOpen(true)}
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700"
+            >
+              Import Excel
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exporting ? "Exporting..." : "Export Excel"}
+            </button>
+            <button
+              onClick={() => setOpenModal(true)}
+              className="rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500"
+            >
+              New client
+            </button>
+          </div>
         </div>
 
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
@@ -89,15 +119,30 @@ export default function ClientsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-zinc-800 text-left">
-                  <th className="pb-4 text-sm text-zinc-500">Cliente</th>
-                  <th className="pb-4 text-sm text-zinc-500">Teléfono</th>
-                  <th className="pb-4 text-sm text-zinc-500">Deuda</th>
-                  <th className="pb-4 text-sm text-zinc-500">Estado</th>
-                  <th className="pb-4 text-sm text-zinc-500">Riesgo IA</th>
-                  <th className="pb-4 text-sm text-zinc-500">Canal</th>
-                  <th className="pb-4 text-sm text-zinc-500">Último contacto</th>
-                  <th className="pb-4 text-sm text-zinc-500">Intención</th>
-                  <th className="pb-4 text-sm text-zinc-500">Acciones</th>
+                  <th className="pb-4 text-sm text-zinc-500">Client</th>
+                  <th className="pb-4 text-sm text-zinc-500">Phone</th>
+                  <th className="pb-4 text-sm text-zinc-500">Country</th>
+                  <th className="pb-4 text-sm text-zinc-500">Customer ID</th>
+                  <th className="pb-4 text-sm text-zinc-500">Team</th>
+                  <th className="pb-4 text-sm text-zinc-500">Team Leader</th>
+                  <th className="pb-4 text-sm text-zinc-500">Collector</th>
+                  <th className="pb-4 text-sm text-zinc-500">Invoice #</th>
+                  <th className="pb-4 text-sm text-zinc-500">Create Date</th>
+                  <th className="pb-4 text-sm text-zinc-500">Due Date</th>
+                  <th className="pb-4 text-sm text-zinc-500">Aging Days</th>
+                  <th className="pb-4 text-sm text-zinc-500">Loan/Lease</th>
+                  <th className="pb-4 text-sm text-zinc-500">Debt</th>
+                  <th className="pb-4 text-sm text-zinc-500">USD Amount</th>
+                  <th className="pb-4 text-sm text-zinc-500">Status</th>
+                  <th className="pb-4 text-sm text-zinc-500">AI Risk</th>
+                  <th className="pb-4 text-sm text-zinc-500">Channel</th>
+                  <th className="pb-4 text-sm text-zinc-500">Contact</th>
+                  <th className="pb-4 text-sm text-zinc-500">Last contact</th>
+                  <th className="pb-4 text-sm text-zinc-500">Next Action</th>
+                  <th className="pb-4 text-sm text-zinc-500">Payment Promise</th>
+                  <th className="pb-4 text-sm text-zinc-500">Date Promise</th>
+                  <th className="pb-4 text-sm text-zinc-500">Intent</th>
+                  <th className="pb-4 text-sm text-zinc-500">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -112,8 +157,42 @@ export default function ClientsPage() {
 
                     <td className="py-4 text-zinc-400">{client.phone}</td>
 
+                    <td className="py-4 text-zinc-300">{client.country || "—"}</td>
+
+                    <td className="py-4 text-zinc-300">{client.customerId ?? "—"}</td>
+
+                    <td className="py-4 text-zinc-300">{client.team || "—"}</td>
+
+                    <td className="py-4 text-zinc-300">{client.teamLeader || "—"}</td>
+
+                    <td className="py-4 text-zinc-300">{client.collector || "—"}</td>
+
+                    <td className="py-4 text-zinc-300">{client.invoiceNumber || "—"}</td>
+
+                    <td className="py-4 text-zinc-500">
+                      {client.createDate
+                        ? new Date(client.createDate).toLocaleDateString("en-US")
+                        : "—"}
+                    </td>
+
+                    <td className="py-4 text-zinc-500">
+                      {client.dueDate
+                        ? new Date(client.dueDate).toLocaleDateString("en-US")
+                        : "—"}
+                    </td>
+
+                    <td className="py-4 text-zinc-300">{client.agingDays ?? "—"}</td>
+
+                    <td className="py-4 text-zinc-300">{client.loanLease || "—"}</td>
+
                     <td className="py-4">
-                      ${Number(client.debt).toLocaleString("es-MX")}
+                      ${Number(client.debt).toLocaleString("en-US")}
+                    </td>
+
+                    <td className="py-4 text-zinc-300">
+                      {client.usdAmount != null
+                        ? `$${Number(client.usdAmount).toLocaleString("en-US")}`
+                        : "—"}
                     </td>
 
                     <td className="py-4">
@@ -138,9 +217,25 @@ export default function ClientsPage() {
 
                     <td className="py-4 text-zinc-300">{client.channel}</td>
 
+                    <td className="py-4 text-zinc-300">{client.contact || "—"}</td>
+
                     <td className="py-4 text-zinc-500">
                       {client.lastContactAt
-                        ? new Date(client.lastContactAt).toLocaleDateString("es-MX")
+                        ? new Date(client.lastContactAt).toLocaleDateString("en-US")
+                        : "—"}
+                    </td>
+
+                    <td className="py-4 text-zinc-300">{client.nextAction || "—"}</td>
+
+                    <td className="py-4 text-zinc-300">
+                      {client.paymentPromiseAmount != null
+                        ? `$${Number(client.paymentPromiseAmount).toLocaleString("en-US")}`
+                        : "—"}
+                    </td>
+
+                    <td className="py-4 text-zinc-500">
+                      {client.datePromise
+                        ? new Date(client.datePromise).toLocaleDateString("en-US")
                         : "—"}
                     </td>
 
@@ -164,14 +259,14 @@ export default function ClientsPage() {
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
                             </svg>
-                            Llamando...
+                            Calling...
                           </>
                         ) : (
                           <>
                             <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
                               <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
                             </svg>
-                            Llamar
+                            Call
                           </>
                         )}
                       </button>
@@ -182,8 +277,8 @@ export default function ClientsPage() {
 
                 {clients.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-zinc-500">
-                      Sin clientes registrados
+                    <td colSpan={24} className="py-8 text-center text-zinc-500">
+                      No clients registered
                     </td>
                   </tr>
                 )}
@@ -206,6 +301,12 @@ export default function ClientsPage() {
       <ClientDetailModal
         clientId={detailId}
         onClose={() => setDetailId(null)}
+      />
+
+      <ImportClientsModal
+        isOpen={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={loadClients}
       />
     </>
   )

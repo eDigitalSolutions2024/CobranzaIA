@@ -105,6 +105,107 @@ default:0
 notes:{
 type:String,
 default:null
+},
+
+// PAIS
+country:{
+type:String,
+default:"Mexico"
+},
+
+// ID CLIENTE (SISTEMA EXTERNO)
+customerId:{
+type:Number,
+default:null
+},
+
+// ID COBRADOR
+collectorId:{
+type:Number,
+default:null
+},
+
+// EQUIPO
+team:{
+type:String,
+default:null
+},
+
+// LIDER DE EQUIPO
+teamLeader:{
+type:String,
+default:null
+},
+
+// COBRADOR
+collector:{
+type:String,
+default:null
+},
+
+// NUMERO DE FACTURA
+invoiceNumber:{
+type:String,
+default:null
+},
+
+// FECHA DE CREACION (DEL CREDITO/FACTURA)
+createDate:{
+type:Date,
+default:null
+},
+
+// FECHA DE VENCIMIENTO
+dueDate:{
+type:Date,
+default:null
+},
+
+// DIAS DE MORA
+agingDays:{
+type:Number,
+default:null
+},
+
+// PRESTAMO O ARRENDAMIENTO
+loanLease:{
+type:String,
+enum:[
+"Loan",
+"Lease",
+null
+],
+default:null
+},
+
+// MONTO EN DOLARES
+usdAmount:{
+type:Number,
+default:null
+},
+
+// CONTACTO
+contact:{
+type:String,
+default:null
+},
+
+// PROXIMA ACCION
+nextAction:{
+type:String,
+default:null
+},
+
+// MONTO DE LA PROMESA DE PAGO
+paymentPromiseAmount:{
+type:Number,
+default:null
+},
+
+// FECHA DE LA PROMESA DE PAGO
+datePromise:{
+type:Date,
+default:null
 }
 
 },

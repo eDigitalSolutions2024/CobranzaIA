@@ -14,10 +14,10 @@ interface Props {
 
 const menu = [
   { id: "dashboard", name: "Dashboard", icon: LayoutDashboard },
-  { id: "clients", name: "Clientes", icon: Users },
-  { id: "calls", name: "Llamadas", icon: Phone },
-  { id: "conversations", name: "Conversaciones", icon: MessageCircle },
-  { id: "messages", name: "Enviar WhatsApp", icon: MessageSquare },
+  { id: "clients", name: "Clients", icon: Users },
+  { id: "calls", name: "Calls", icon: Phone },
+  { id: "conversations", name: "Conversations", icon: MessageCircle },
+  { id: "messages", name: "Send WhatsApp", icon: MessageSquare },
   { id: "analytics", name: "Analytics", icon: BarChart3 },
 ]
 

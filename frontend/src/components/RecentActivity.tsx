@@ -35,13 +35,13 @@ export default function RecentActivity() {
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
 
       <div className="mb-6">
-        <h2 className="text-lg font-semibold">Actividad reciente</h2>
-        <p className="text-sm text-zinc-400">Últimos mensajes</p>
+        <h2 className="text-lg font-semibold">Recent activity</h2>
+        <p className="text-sm text-zinc-400">Latest messages</p>
       </div>
 
       <div className="space-y-3">
         {activities.length === 0 && (
-          <div className="text-zinc-500 text-sm">Sin actividad</div>
+          <div className="text-zinc-500 text-sm">No activity</div>
         )}
 
         {activities.map((activity) => (
@@ -68,7 +68,7 @@ export default function RecentActivity() {
             <p className="text-sm text-zinc-400 truncate">{activity.message}</p>
 
             <span className="text-xs text-zinc-600 mt-1 block">
-              {new Date(activity.createdAt).toLocaleString("es-MX")}
+              {new Date(activity.createdAt).toLocaleString("en-US")}
             </span>
           </div>
         ))}

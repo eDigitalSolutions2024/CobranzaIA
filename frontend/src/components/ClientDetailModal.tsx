@@ -2,12 +2,12 @@ import { useEffect, useState } from "react"
 import { getClientDetail } from "../services/clients"
 
 const STATUS_LABEL: Record<string, string> = {
-  pending: "Pendiente", contacted: "Contactado", negotiating: "Negociando",
-  promised: "Promesa", paid: "Pagado", no_response: "Sin respuesta",
+  pending: "Pending", contacted: "Contacted", negotiating: "Negotiating",
+  promised: "Promise", paid: "Paid", no_response: "No response",
 }
 
 const PROMISE_STATUS_LABEL: Record<string, string> = {
-  pending: "Pendiente", completed: "Cumplida", broken: "Incumplida", cancelled: "Cancelada",
+  pending: "Pending", completed: "Fulfilled", broken: "Broken", cancelled: "Cancelled",
 }
 
 const PROMISE_STATUS_COLOR: Record<string, string> = {
@@ -25,8 +25,8 @@ const CALL_STATUS_COLOR: Record<string, string> = {
 }
 
 const CALL_STATUS_LABEL: Record<string, string> = {
-  in_progress: "En curso", completed: "Completada",
-  failed: "Fallida", requires_human: "Requiere asesor",
+  in_progress: "In progress", completed: "Completed",
+  failed: "Failed", requires_human: "Requires agent",
 }
 
 interface Props {
@@ -58,20 +58,46 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
           {data ? (
             <div>
               <h2 className="text-xl font-bold">{data.client.name}</h2>
-              <p className="text-sm text-zinc-400 mt-1">{data.client.phone}</p>
-              <div className="flex gap-3 mt-2 text-sm">
-                <span className="text-zinc-400">Deuda:</span>
+              <p className="text-sm text-zinc-400 mt-1">
+                {data.client.phone}
+                {data.client.customerId != null && ` · Customer ID: ${data.client.customerId}`}
+                {data.client.country && ` · ${data.client.country}`}
+              </p>
+              <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-sm">
+                <span className="text-zinc-400">Debt:</span>
                 <span className="font-medium text-white">
-                  ${Number(data.client.debt).toLocaleString("es-MX")} MXN
+                  ${Number(data.client.debt).toLocaleString("en-US")} MXN
                 </span>
-                <span className="text-zinc-400 ml-2">Estado:</span>
+                {data.client.usdAmount != null && (
+                  <>
+                    <span className="text-zinc-400 ml-2">USD:</span>
+                    <span className="text-zinc-300">
+                      ${Number(data.client.usdAmount).toLocaleString("en-US")}
+                    </span>
+                  </>
+                )}
+                <span className="text-zinc-400 ml-2">Status:</span>
                 <span className="text-zinc-300">
                   {STATUS_LABEL[data.client.status] ?? data.client.status}
                 </span>
               </div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-3 text-xs text-zinc-500">
+                {data.client.team && <span>Team: <span className="text-zinc-300">{data.client.team}</span></span>}
+                {data.client.teamLeader && <span>Team Leader: <span className="text-zinc-300">{data.client.teamLeader}</span></span>}
+                {data.client.collector && <span>Collector: <span className="text-zinc-300">{data.client.collector}</span></span>}
+                {data.client.invoiceNumber && <span>Invoice #: <span className="text-zinc-300">{data.client.invoiceNumber}</span></span>}
+                {data.client.loanLease && <span>Loan/Lease: <span className="text-zinc-300">{data.client.loanLease}</span></span>}
+                {data.client.agingDays != null && <span>Aging Days: <span className="text-zinc-300">{data.client.agingDays}</span></span>}
+                {data.client.createDate && <span>Create Date: <span className="text-zinc-300">{new Date(data.client.createDate).toLocaleDateString("en-US")}</span></span>}
+                {data.client.dueDate && <span>Due Date: <span className="text-zinc-300">{new Date(data.client.dueDate).toLocaleDateString("en-US")}</span></span>}
+                {data.client.contact && <span>Contact: <span className="text-zinc-300">{data.client.contact}</span></span>}
+                {data.client.nextAction && <span>Next Action: <span className="text-zinc-300">{data.client.nextAction}</span></span>}
+                {data.client.paymentPromiseAmount != null && <span>Payment Promise: <span className="text-zinc-300">${Number(data.client.paymentPromiseAmount).toLocaleString("en-US")}</span></span>}
+                {data.client.datePromise && <span>Date Promise: <span className="text-zinc-300">{new Date(data.client.datePromise).toLocaleDateString("en-US")}</span></span>}
+              </div>
             </div>
           ) : (
-            <div className="text-zinc-500 text-sm">Cargando...</div>
+            <div className="text-zinc-500 text-sm">Loading...</div>
           )}
           <button onClick={onClose} className="text-zinc-500 hover:text-white transition-colors text-xl leading-none ml-4">
             ✕
@@ -86,7 +112,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
               tab === "promises" ? "border-b-2 border-blue-500 text-white" : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            Promesas de pago ({data?.promises?.length ?? 0})
+            Payment promises ({data?.promises?.length ?? 0})
           </button>
           <button
             onClick={() => setTab("calls")}
@@ -94,32 +120,32 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
               tab === "calls" ? "border-b-2 border-blue-500 text-white" : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            Llamadas ({data?.calls?.length ?? 0})
+            Calls ({data?.calls?.length ?? 0})
           </button>
         </div>
 
         {/* Content */}
         <div className="overflow-y-auto flex-1 p-6">
           {!data && (
-            <div className="text-center text-zinc-500 py-8">Cargando información...</div>
+            <div className="text-center text-zinc-500 py-8">Loading information...</div>
           )}
 
           {data && tab === "promises" && (
             <div className="space-y-3">
               {data.promises.length === 0 && (
-                <p className="text-zinc-500 text-sm text-center py-6">Sin promesas registradas</p>
+                <p className="text-zinc-500 text-sm text-center py-6">No promises registered</p>
               )}
               {data.promises.map((p: any) => (
                 <div key={p._id} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-lg font-semibold text-white">
-                        ${Number(p.amount).toLocaleString("es-MX")} MXN
+                        ${Number(p.amount).toLocaleString("en-US")} MXN
                       </p>
                       <p className="text-sm text-zinc-400 mt-0.5">
-                        Fecha compromiso:{" "}
+                        Commitment date:{" "}
                         <span className="text-zinc-200">
-                          {new Date(p.promisedDate).toLocaleDateString("es-MX", {
+                          {new Date(p.promisedDate).toLocaleDateString("en-US", {
                             day: "numeric", month: "long", year: "numeric",
                           })}
                         </span>
@@ -133,7 +159,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                         {PROMISE_STATUS_LABEL[p.status] ?? p.status}
                       </span>
                       {p.detectedByAI && (
-                        <p className="text-xs text-zinc-600">Detectada por IA</p>
+                        <p className="text-xs text-zinc-600">Detected by AI</p>
                       )}
                     </div>
                   </div>
@@ -145,22 +171,22 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
           {data && tab === "calls" && (
             <div className="space-y-3">
               {data.calls.length === 0 && (
-                <p className="text-zinc-500 text-sm text-center py-6">Sin llamadas registradas</p>
+                <p className="text-zinc-500 text-sm text-center py-6">No calls registered</p>
               )}
               {data.calls.map((call: any) => (
                 <div key={call._id} className="rounded-xl border border-zinc-800 bg-zinc-950">
                   <div className="flex items-center justify-between p-4">
                     <div>
                       <p className="text-sm text-zinc-300">
-                        {new Date(call.createdAt).toLocaleString("es-MX")}
+                        {new Date(call.createdAt).toLocaleString("en-US")}
                       </p>
                       {call.promiseDate && (
                         <p className="text-sm mt-1">
                           <span className="text-emerald-400 font-medium">
-                            ${Number(call.amount).toLocaleString("es-MX")} MXN
+                            ${Number(call.amount).toLocaleString("en-US")} MXN
                           </span>
                           <span className="text-zinc-500 ml-2">
-                            — {new Date(call.promiseDate).toLocaleDateString("es-MX")}
+                            — {new Date(call.promiseDate).toLocaleDateString("en-US")}
                           </span>
                         </p>
                       )}
@@ -173,7 +199,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                         onClick={() => setExpandedCall(expandedCall === call._id ? null : call._id)}
                         className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-700 transition-colors"
                       >
-                        {expandedCall === call._id ? "Ocultar" : `Transcript (${call.transcript?.length ?? 0})`}
+                        {expandedCall === call._id ? "Hide" : `Transcript (${call.transcript?.length ?? 0})`}
                       </button>
                     </div>
                   </div>
@@ -188,7 +214,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                               : "bg-blue-600/20 text-blue-300"
                           }`}>
                             <span className="block text-[10px] mb-1 opacity-50">
-                              {turn.role === "assistant" ? "IA" : "Cliente"}
+                              {turn.role === "assistant" ? "AI" : "Client"}
                             </span>
                             {turn.content}
                           </div>

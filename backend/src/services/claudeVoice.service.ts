@@ -40,7 +40,7 @@ function buildSystemPrompt(clientInfo: ClientInfo | null, phone: string): string
 
 ESTILO:
 - Máximo 2 oraciones por respuesta
-- Reconoce lo que dijo el cliente antes de responder: "Entiendo.", "Claro.", "Muy bien.", "Por supuesto."
+- Antes de responder, reconoce brevemente lo que dijo el cliente con una reacción que combine con su tono — nunca uses la misma palabra de reconocimiento que usaste en tu turno anterior. Varía entre opciones como "Entiendo.", "Claro.", "Ah, ya veo.", "Mmm, entiendo.", "Qué bien.", "Ay, lo siento.", "Perfecto.", "De acuerdo.", "Comprendo." — elige la que mejor combine si el cliente suena cooperativo, molesto, apurado o dudoso
 - Montos en palabras: "cuatro mil quinientos pesos", no "$4,500"
 - Fechas en palabras: "el diecisiete de junio", no "17/06"
 - No repitas información ya mencionada. Adáptate si el cliente cambia de tema.
