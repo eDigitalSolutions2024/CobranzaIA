@@ -38,6 +38,15 @@ function cleanText(text: string): string {
     .trim()
 }
 
+// El marcador MARCAR_EXTENSION produce un mensaje vacío (no hay nada que decirle al cliente),
+// pero `transcript.content` es requerido en el schema. Usamos un texto entre corchetes —
+// mismo prefijo que '[silencio]' — que handleStatus ya excluye del análisis post-llamada.
+function transcriptContent(agentResponse: AgentResponse): string {
+  if (agentResponse.message.trim()) return agentResponse.message
+  if (agentResponse.intent === 'dial_extension') return `[MARCAR_EXTENSION:${agentResponse.extension}]`
+  return '[sin_respuesta]'
+}
+
 function getBaseUrl(req: Request): string {
   const host = req.headers['x-forwarded-host'] ?? req.get('host') ?? 'localhost:3002'
   const proto = req.headers['x-forwarded-proto'] ?? req.protocol ?? 'https'
@@ -80,6 +89,33 @@ function sayAndGather(message: string, callSid: string, baseUrl: string): string
   })
 
   speakSegments(gather.say({ voice: VOICE, language: LANGUAGE }, ''), message)
+
+  twiml.redirect({ method: 'POST' }, `${gatherUrl}?callSid=${encodeURIComponent(callSid)}&noInput=true`)
+
+  return twiml.toString()
+}
+
+// Reproduce tonos DTMF reales (para navegar un conmutador) y luego sigue escuchando,
+// ya que tras marcar la extensión normalmente contesta una persona o se abre otro menú.
+function playDigitsAndGather(message: string, digits: string, callSid: string, baseUrl: string): string {
+  const twiml = new VoiceResponse()
+  const gatherUrl = `${baseUrl}/api/voice/gather`
+
+  twiml.play({ digits })
+
+  const gather = twiml.gather({
+    input: ['speech'],
+    action: `${gatherUrl}?callSid=${encodeURIComponent(callSid)}`,
+    method: 'POST',
+    speechTimeout: 'auto',
+    speechModel: 'experimental_conversations',
+    language: LANGUAGE,
+    timeout: 10,
+  })
+
+  if (message.trim()) {
+    speakSegments(gather.say({ voice: VOICE, language: LANGUAGE }, ''), message)
+  }
 
   twiml.redirect({ method: 'POST' }, `${gatherUrl}?callSid=${encodeURIComponent(callSid)}&noInput=true`)
 
@@ -203,7 +239,7 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
         $push: {
           transcript: {
             role: 'assistant',
-            content: agentResponse.message,
+            content: transcriptContent(agentResponse),
             timestamp: new Date(),
           },
         },
@@ -211,6 +247,14 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
     )
 
     console.log(`[Voice][latency] callSid=${CallSid} turn=greeting claudeMs=${claudeMs} totalMs=${Date.now() - receivedAt}`)
+
+    if (agentResponse.intent === 'dial_extension' && agentResponse.extension) {
+      res.type('text/xml').send(
+        playDigitsAndGather(agentResponse.message, agentResponse.extension, CallSid, getBaseUrl(req))
+      )
+      return
+    }
+
     res.type('text/xml').send(sayAndGather(agentResponse.message, CallSid, getBaseUrl(req)))
   } catch (err) {
     console.error('[Voice] handleIncoming error:', err)
@@ -362,9 +406,17 @@ export async function handleGatherContinue(req: Request, res: Response): Promise
 
     call.transcript.push({
       role: 'assistant',
-      content: agentResponse.message,
+      content: transcriptContent(agentResponse),
       timestamp: new Date(),
     })
+
+    if (agentResponse.intent === 'dial_extension' && agentResponse.extension) {
+      await call.save()
+      respond(
+        playDigitsAndGather(agentResponse.message, agentResponse.extension, callSid, getBaseUrl(req))
+      )
+      return
+    }
 
     if (agentResponse.intent === 'requires_human') {
       call.requiresHuman = true

@@ -25,10 +25,11 @@ export interface PaymentInstallment {
 
 export interface AgentResponse {
   message: string
-  intent: 'greeting' | 'collecting' | 'promise_of_payment' | 'requires_human' | 'goodbye' | 'general'
+  intent: 'greeting' | 'collecting' | 'promise_of_payment' | 'requires_human' | 'goodbye' | 'dial_extension' | 'general'
   promises?: PaymentInstallment[]
   promiseDate?: string  // first installment (for Call record)
   amount?: number       // first installment (for Call record)
+  extension?: string    // DTMF digits to dial when intent is 'dial_extension'
 }
 
 function buildSystemPrompt(clientInfo: ClientInfo | null, phone: string): string {
@@ -37,6 +38,8 @@ function buildSystemPrompt(clientInfo: ClientInfo | null, phone: string): string
   })
 
   const base = `Eres Guadalupe Martínez, agente del departamento de cobranza. Hablas por teléfono. Hoy: ${fechaHoy}.
+
+CONMUTADOR: Si quien contesta es un menú automático o conmutador (voz grabada, tono de espera, "marque la extensión de..."), no es una persona — no converses con él. Simplemente emite el marcador MARCAR_EXTENSION:7475 sin texto hablado adicional, para marcar la extensión de cobranza y esperar a que conteste una persona real.
 
 ESTILO:
 - Máximo 2 oraciones por respuesta
@@ -50,7 +53,8 @@ MARCADORES (siempre al final, nunca dentro del texto hablado):
 - Pago único confirmado → PROMESA_PAGO:FECHA=YYYY-MM-DD,MONTO=número
 - Plan de pagos (varios) → una línea PROMESA_PAGO por cuota con fecha exacta, máx 12. Luego FIN_LLAMADA.
 - Cliente pide hablar con persona → REQUIERE_HUMANO
-- Conversación termina (con o sin acuerdo) → FIN_LLAMADA`
+- Conversación termina (con o sin acuerdo) → FIN_LLAMADA
+- Contestó un conmutador/menú automático → MARCAR_EXTENSION:7475`
 
   if (!clientInfo) {
     return `${base}
@@ -77,6 +81,16 @@ function normalizeText(text: string): string {
 function parseAgentResponse(raw: string): AgentResponse {
   const text = normalizeText(raw)
   const base: AgentResponse = { message: text, intent: 'general' }
+
+  const extensionMatch = text.match(/MARCAR_EXTENSION:\s*(\d+)/)
+  if (extensionMatch) {
+    return {
+      ...base,
+      intent: 'dial_extension',
+      extension: extensionMatch[1],
+      message: text.replace(/MARCAR_EXTENSION:\s*\d+/g, '').trim(),
+    }
+  }
 
   if (text.includes('REQUIERE_HUMANO')) {
     return {
