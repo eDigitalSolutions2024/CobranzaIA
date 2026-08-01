@@ -4,6 +4,7 @@ import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
 import ImportClientsModal from "../components/ImportClientsModal"
+import { ChevronDown, ChevronUp } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending",
@@ -42,6 +43,7 @@ export default function ClientsPage() {
   const [exporting, setExporting] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
+  const [expandedClientId, setExpandedClientId] = useState<string | null>(null)
 
   async function handleExport() {
     setExporting(true)
@@ -67,6 +69,9 @@ export default function ClientsPage() {
     } finally {
       setCallingId(null)
     }
+  }
+  async function onClickAccordion(id: string) {
+    setExpandedClientId((prev) => (prev === id ? null : id))
   }
 
   useEffect(() => {
@@ -94,20 +99,20 @@ export default function ClientsPage() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setImportOpen(true)}
-              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700"
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
             >
               Import Excel
             </button>
             <button
               onClick={handleExport}
               disabled={exporting}
-              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
             >
               {exporting ? "Exporting..." : "Export Excel"}
             </button>
             <button
               onClick={() => setOpenModal(true)}
-              className="rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500"
+              className="rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500 cursor-pointer"
             >
               New client
             </button>
@@ -119,92 +124,34 @@ export default function ClientsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-zinc-800 text-left">
-                  <th className="pb-4 text-sm text-zinc-500">Client</th>
+                  <th className="pb-4 text-sm text-zinc-500">Customer</th>
                   <th className="pb-4 text-sm text-zinc-500">Phone</th>
-                  <th className="pb-4 text-sm text-zinc-500">Country</th>
-                  <th className="pb-4 text-sm text-zinc-500">Customer ID</th>
-                  <th className="pb-4 text-sm text-zinc-500">Team</th>
-                  <th className="pb-4 text-sm text-zinc-500">Team Leader</th>
-                  <th className="pb-4 text-sm text-zinc-500">Collector</th>
-                  <th className="pb-4 text-sm text-zinc-500">Invoice #</th>
-                  <th className="pb-4 text-sm text-zinc-500">Create Date</th>
-                  <th className="pb-4 text-sm text-zinc-500">Due Date</th>
-                  <th className="pb-4 text-sm text-zinc-500">Aging Days</th>
-                  <th className="pb-4 text-sm text-zinc-500">Loan/Lease</th>
-                  <th className="pb-4 text-sm text-zinc-500">Debt</th>
                   <th className="pb-4 text-sm text-zinc-500">USD Amount</th>
-                  <th className="pb-4 text-sm text-zinc-500">Status</th>
-                  <th className="pb-4 text-sm text-zinc-500">AI Risk</th>
-                  <th className="pb-4 text-sm text-zinc-500">Channel</th>
-                  <th className="pb-4 text-sm text-zinc-500">Contact</th>
+                  <th className="pb-4 text-sm text-zinc-500">Risk</th>
                   <th className="pb-4 text-sm text-zinc-500">Last contact</th>
-                  <th className="pb-4 text-sm text-zinc-500">Next Action</th>
                   <th className="pb-4 text-sm text-zinc-500">Payment Promise</th>
-                  <th className="pb-4 text-sm text-zinc-500">Date Promise</th>
-                  <th className="pb-4 text-sm text-zinc-500">Intent</th>
-                  <th className="pb-4 text-sm text-zinc-500">Actions</th>
+                  <th className="pb-4 text-sm text-zinc-500">Classification</th>
                 </tr>
               </thead>
               <tbody>
-                {clients.map((client) => (
+                {clients.map((client) => {
+                  const expanded = expandedClientId === client._id;
+                  return(
+                  <>
                   <tr
                     key={client._id}
-                    className="border-b border-zinc-800 cursor-pointer hover:bg-zinc-800/40 transition-colors"
-                    onClick={() => setDetailId(client._id)}
+                    className="border-b border-zinc-800 hover:bg-zinc-800/40 transition-colors"
                   >
-
-                    <td className="py-4 font-medium">{client.name}</td>
-
+                    
+                    <td onClick={() => setDetailId(client._id)} className="py-4 font-medium cursor-pointer">{client.name}</td>
                     <td className="py-4 text-zinc-400">{client.phone}</td>
-
-                    <td className="py-4 text-zinc-300">{client.country || "—"}</td>
-
-                    <td className="py-4 text-zinc-300">{client.customerId ?? "—"}</td>
-
-                    <td className="py-4 text-zinc-300">{client.team || "—"}</td>
-
-                    <td className="py-4 text-zinc-300">{client.teamLeader || "—"}</td>
-
-                    <td className="py-4 text-zinc-300">{client.collector || "—"}</td>
-
-                    <td className="py-4 text-zinc-300">{client.invoiceNumber || "—"}</td>
-
-                    <td className="py-4 text-zinc-500">
-                      {client.createDate
-                        ? new Date(client.createDate).toLocaleDateString("en-US")
-                        : "—"}
-                    </td>
-
-                    <td className="py-4 text-zinc-500">
-                      {client.dueDate
-                        ? new Date(client.dueDate).toLocaleDateString("en-US")
-                        : "—"}
-                    </td>
-
                     <td className="py-4 text-zinc-300">{client.agingDays ?? "—"}</td>
-
-                    <td className="py-4 text-zinc-300">{client.loanLease || "—"}</td>
-
-                    <td className="py-4">
-                      ${Number(client.debt).toLocaleString("en-US")}
-                    </td>
-
                     <td className="py-4 text-zinc-300">
+                      
                       {client.usdAmount != null
                         ? `$${Number(client.usdAmount).toLocaleString("en-US")}`
                         : "—"}
                     </td>
-
-                    <td className="py-4">
-                      <span
-                        className={`rounded-full px-3 py-1 text-sm ${
-                          STATUS_COLOR[client.status] || "bg-blue-500/10 text-blue-400"
-                        }`}
-                      >
-                        {STATUS_LABEL[client.status] || client.status}
-                      </span>
-                    </td>
-
                     <td className="py-4">
                       <span
                         className={`rounded-full px-3 py-1 text-sm ${
@@ -214,31 +161,11 @@ export default function ClientsPage() {
                         {RISK_LABEL[client.risk] || client.risk}
                       </span>
                     </td>
-
-                    <td className="py-4 text-zinc-300">{client.channel}</td>
-
-                    <td className="py-4 text-zinc-300">{client.contact || "—"}</td>
-
                     <td className="py-4 text-zinc-500">
                       {client.lastContactAt
                         ? new Date(client.lastContactAt).toLocaleDateString("en-US")
                         : "—"}
                     </td>
-
-                    <td className="py-4 text-zinc-300">{client.nextAction || "—"}</td>
-
-                    <td className="py-4 text-zinc-300">
-                      {client.paymentPromiseAmount != null
-                        ? `$${Number(client.paymentPromiseAmount).toLocaleString("en-US")}`
-                        : "—"}
-                    </td>
-
-                    <td className="py-4 text-zinc-500">
-                      {client.datePromise
-                        ? new Date(client.datePromise).toLocaleDateString("en-US")
-                        : "—"}
-                    </td>
-
                     <td className="py-4">
                       {client.lastIntent && client.lastIntent !== "general" && (
                         <span className="rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-300">
@@ -246,12 +173,31 @@ export default function ClientsPage() {
                         </span>
                       )}
                     </td>
-
+                       <td>
+                    </td>
+                    <td>
+                      <button
+                      onClick={() => onClickAccordion(client._id)}
+                      className="text-blue-400 hover:text-blue-300 flex items center align-center justify-center gap-2 cursor-pointer"
+                    >
+                      {expanded ? (
+                      <>
+                        <p>Hide</p>
+                        <ChevronDown size={24} />
+                      </>
+                    ) : (
+                      <>
+                        <p>Show</p>
+                        <ChevronUp size={24} />                      
+                      </>
+                    )}
+                    </button>
+                    </td>
                     <td className="py-4">
                       <button
                         onClick={(e) => { e.stopPropagation(); handleCall(client._id) }}
                         disabled={callingId === client._id}
-                        className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                        className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
                       >
                         {callingId === client._id ? (
                           <>
@@ -271,9 +217,145 @@ export default function ClientsPage() {
                         )}
                       </button>
                     </td>
-
                   </tr>
-                ))}
+                 {expanded && (
+                  <tr className="bg-zinc-950/50">
+                    <td colSpan={9} className="p-5">
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="border-b border-zinc-800">
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Country
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Customer ID
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Team
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Team Leader
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Collector
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Invoice #
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Create Date
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Due Date
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Aging Bucket
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Loan / Lease
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Debt
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Status
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Channel
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Contact
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Next Action
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Payment Promise
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Date Promise
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Intent
+                              </th>
+                            </tr>
+                          </thead>
+
+                          <tbody>
+                            <tr className="border-b border-zinc-800">
+                              <td className="px-4 py-3">{client.country || "—"}</td>
+
+                              <td className="px-4 py-3">{client.customerId || "—"}</td>
+
+                              <td className="px-4 py-3">{client.team || "—"}</td>
+
+                              <td className="px-4 py-3">{client.teamLeader || "—"}</td>
+
+                              <td className="px-4 py-3">{client.collector || "—"}</td>
+
+                              <td className="px-4 py-3">{client.invoiceNumber || "—"}</td>
+
+                              <td className="px-4 py-3">
+                                {client.createDate
+                                  ? new Date(client.createDate).toLocaleDateString("en-US")
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {client.dueDate
+                                  ? new Date(client.dueDate).toLocaleDateString("en-US")
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">{client.agingDays ?? "—"}</td>
+
+                              <td className="px-4 py-3">{client.loanLease || "—"}</td>
+
+                              <td className="px-4 py-3">
+                                {client.debt != null
+                                  ? `$${Number(client.debt).toLocaleString("en-US")}`
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {STATUS_LABEL[client.status] || client.status || "—"}
+                              </td>
+
+                              <td className="px-4 py-3">{client.channel || "—"}</td>
+
+                              <td className="px-4 py-3">{client.contact || "—"}</td>
+
+                              <td className="px-4 py-3">{client.nextAction || "—"}</td>
+
+                              <td className="px-4 py-3">
+                                {client.paymentPromiseAmount != null
+                                  ? `$${Number(client.paymentPromiseAmount).toLocaleString(
+                                      "en-US"
+                                    )}`
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {client.datePromise
+                                  ? new Date(client.datePromise).toLocaleDateString("en-US")
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {client.lastIntent || "—"}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                  </>
+                  ) 
+             
+                })}
 
                 {clients.length === 0 && (
                   <tr>
