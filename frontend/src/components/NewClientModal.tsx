@@ -1,8 +1,11 @@
-import { useState } from "react"
-import { createClient } from "../services/clients"
+import { useEffect, useState } from "react"
+import { createClient, updateClient } from "../services/clients"
+import { getExchangeRate } from "../services/settings"
+import ExchangeRateModal from "./ExchangeRateModal"
 
 interface Props {
   isOpen: boolean
+  client?: any | null
   onClose: () => void
   onSave: (client: any) => void
 }
@@ -33,22 +36,107 @@ const initialForm = {
   datePromise: "",
 }
 
-export default function NewClientModal({ isOpen, onClose, onSave }: Props) {
+function computeUsd(deuda: string, rate: number | null): string {
+  if (!rate || !deuda) return ""
+  const n = Number(deuda)
+  if (!Number.isFinite(n)) return ""
+  return (n / rate).toFixed(2)
+}
+
+function toDateInput(value: any): string {
+  if (!value) return ""
+  return String(value).slice(0, 10)
+}
+
+function clientToForm(client: any) {
+  return {
+    nombre: client.name ?? "",
+    telefono: client.phone ?? "",
+    email: "",
+    deuda: client.debt != null ? String(client.debt) : "",
+    canal: client.channel ?? "WhatsApp",
+    riesgo: client.risk ?? "medium",
+    notas: client.notes ?? "",
+    country: client.country ?? "Mexico",
+    customerId: client.customerId != null ? String(client.customerId) : "",
+    collectorId: client.collectorId != null ? String(client.collectorId) : "",
+    team: client.team ?? "",
+    teamLeader: client.teamLeader ?? "",
+    collector: client.collector ?? "",
+    invoiceNumber: client.invoiceNumber ?? "",
+    createDate: toDateInput(client.createDate),
+    dueDate: toDateInput(client.dueDate),
+    agingDays: client.agingDays != null ? String(client.agingDays) : "",
+    loanLease: client.loanLease ?? "",
+    usdAmount: client.usdAmount != null ? String(client.usdAmount) : "",
+    contact: client.contact ?? "",
+    nextAction: client.nextAction ?? "",
+    paymentPromiseAmount: client.paymentPromiseAmount != null ? String(client.paymentPromiseAmount) : "",
+    datePromise: toDateInput(client.datePromise),
+  }
+}
+
+export default function NewClientModal({ isOpen, client, onClose, onSave }: Props) {
+  const isEditMode = Boolean(client)
   const [form, setForm] = useState(initialForm)
+  const [exchangeRate, setExchangeRate] = useState<number | null>(null)
+  const [usdTouched, setUsdTouched] = useState(false)
+  const [rateModalOpen, setRateModalOpen] = useState(false)
+  const [errors, setErrors] = useState<{ nombre?: boolean; telefono?: boolean; deuda?: boolean }>({})
+
+  useEffect(() => {
+    if (!isOpen) return
+    setForm(client ? clientToForm(client) : initialForm)
+    // En edición ya hay un usdAmount guardado — no lo pisamos con el cálculo automático
+    // hasta que el usuario toque el campo de deuda o el de USD explícitamente.
+    setUsdTouched(Boolean(client))
+    setErrors({})
+    getExchangeRate()
+      .then((data) => setExchangeRate(data.usdMxn))
+      .catch(() => {})
+  }, [isOpen, client])
 
   if (!isOpen) return null
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
-    setForm({ ...form, [e.target.name]: e.target.value })
+    const { name, value } = e.target
+
+    if (name === "deuda") {
+      setErrors((prev) => ({ ...prev, deuda: false }))
+      setForm((f) => ({
+        ...f,
+        deuda: value,
+        usdAmount: usdTouched ? f.usdAmount : computeUsd(value, exchangeRate),
+      }))
+      return
+    }
+
+    if (name === "usdAmount") {
+      setUsdTouched(true)
+      setForm((f) => ({ ...f, usdAmount: value }))
+      return
+    }
+
+    if (name === "nombre" || name === "telefono") {
+      setErrors((prev) => ({ ...prev, [name]: false }))
+    }
+
+    setForm((f) => ({ ...f, [name]: value }))
   }
 
   async function handleSubmit() {
-    if (!form.nombre || !form.telefono) {
-      alert("Name and phone are required")
+    const newErrors: { nombre?: boolean; telefono?: boolean; deuda?: boolean } = {}
+    if (!form.nombre.trim()) newErrors.nombre = true
+    if (!form.telefono.trim()) newErrors.telefono = true
+    if (!form.deuda.trim()) newErrors.deuda = true
+
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors)
       return
     }
+    setErrors({})
 
     try {
       const payload = {
@@ -76,16 +164,18 @@ export default function NewClientModal({ isOpen, onClose, onSave }: Props) {
         datePromise: form.datePromise || null,
       }
 
-      const saved = await createClient(payload)
+      const saved = isEditMode ? await updateClient(client._id, payload) : await createClient(payload)
 
       onSave(saved)
 
       setForm(initialForm)
+      setUsdTouched(false)
+      setErrors({})
 
       onClose()
-    } catch (error) {
+    } catch (error: any) {
       console.log(error)
-      alert("Error saving client")
+      alert(error.message || "Error saving client")
     }
   }
 
@@ -93,30 +183,40 @@ export default function NewClientModal({ isOpen, onClose, onSave }: Props) {
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto">
 
-        <h2 className="text-2xl font-bold text-white mb-6">New Client</h2>
+        <h2 className="text-2xl font-bold text-white mb-6">{isEditMode ? "Edit Client" : "New Client"}</h2>
 
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
 
           <div>
-            <label className="text-sm text-zinc-400">Full name *</label>
+            <label className="text-sm text-zinc-400">
+              Full name <span className="text-red-500">*</span>
+            </label>
             <input
               name="nombre"
               value={form.nombre}
               onChange={handleChange}
               placeholder="Carlos García"
-              className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-white"
+              className={`w-full mt-1 bg-zinc-950 border rounded-lg p-3 text-white ${
+                errors.nombre ? "border-red-500" : "border-zinc-700"
+              }`}
             />
+            {errors.nombre && <p className="mt-1 text-xs text-red-500">This field is required</p>}
           </div>
 
           <div>
-            <label className="text-sm text-zinc-400">Phone (10 digits) *</label>
+            <label className="text-sm text-zinc-400">
+              Phone (10 digits) <span className="text-red-500">*</span>
+            </label>
             <input
               name="telefono"
               value={form.telefono}
               onChange={handleChange}
               placeholder="6561234567"
-              className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-white"
+              className={`w-full mt-1 bg-zinc-950 border rounded-lg p-3 text-white ${
+                errors.telefono ? "border-red-500" : "border-zinc-700"
+              }`}
             />
+            {errors.telefono && <p className="mt-1 text-xs text-red-500">This field is required</p>}
           </div>
 
           <div>
@@ -240,24 +340,39 @@ export default function NewClientModal({ isOpen, onClose, onSave }: Props) {
           </div>
 
           <div>
-            <label className="text-sm text-zinc-400">Debt ($MXN)</label>
+            <label className="text-sm text-zinc-400">
+              Debt ($MXN) <span className="text-red-500">*</span>
+            </label>
             <input
               name="deuda"
               type="number"
               value={form.deuda}
               onChange={handleChange}
               placeholder="4500"
-              className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-white"
+              className={`w-full mt-1 bg-zinc-950 border rounded-lg p-3 text-white ${
+                errors.deuda ? "border-red-500" : "border-zinc-700"
+              }`}
             />
+            {errors.deuda && <p className="mt-1 text-xs text-red-500">This field is required</p>}
           </div>
 
           <div>
-            <label className="text-sm text-zinc-400">USD Amount</label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm text-zinc-400">USD Amount</label>
+              <button
+                type="button"
+                onClick={() => setRateModalOpen(true)}
+                className="text-xs text-blue-400 hover:text-blue-300"
+              >
+                Rate: {exchangeRate ? exchangeRate.toFixed(2) : "…"} · Edit
+              </button>
+            </div>
             <input
               name="usdAmount"
               type="number"
               value={form.usdAmount}
               onChange={handleChange}
+              placeholder="Auto-calculated"
               className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-white"
             />
           </div>
@@ -358,11 +473,21 @@ export default function NewClientModal({ isOpen, onClose, onSave }: Props) {
             onClick={handleSubmit}
             className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500"
           >
-            Save client
+            {isEditMode ? "Save changes" : "Save client"}
           </button>
         </div>
 
       </div>
+
+      <ExchangeRateModal
+        isOpen={rateModalOpen}
+        currentRate={exchangeRate ?? 17.5}
+        onClose={() => setRateModalOpen(false)}
+        onUpdated={(newRate) => {
+          setExchangeRate(newRate)
+          setForm((f) => (usdTouched ? f : { ...f, usdAmount: computeUsd(f.deuda, newRate) }))
+        }}
+      />
     </div>
   )
 }

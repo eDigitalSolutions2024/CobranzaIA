@@ -11,9 +11,12 @@ import messageRoutes from "./routes/messages"
 import metricsRoutes from "./routes/metrics"
 import conversationRoutes from "./routes/conversations"
 import voiceRoutes from "./routes/voice.routes"
+import settingsRoutes from "./routes/settings"
 import { connectDB } from "./db"
-import { handleMediaStream } from "./services/claudeVoice.service"
+import { handleMediaStream } from "./controllers/voiceStream.controller"
 import { validateTwilioConfig } from "./config/twilio"
+import { validateOpenAIConfig } from "./config/openai"
+import { startReminderScheduler } from "./services/reminderScheduler.service"
 
 const app = express()
 
@@ -35,6 +38,7 @@ app.use("/api", messageRoutes)
 app.use("/api", metricsRoutes)
 app.use("/api", conversationRoutes)
 app.use("/api", voiceRoutes)
+app.use("/api", settingsRoutes)
 
 async function start() {
   if (!process.env.JWT_SECRET) {
@@ -44,15 +48,17 @@ async function start() {
 
   await connectDB()
   validateTwilioConfig()
+  validateOpenAIConfig()
+  startReminderScheduler()
 
   const PORT = Number(process.env.PORT) || 3002
   const server = http.createServer(app)
 
-  // WebSocket for Twilio Media Streams (real-time audio - future upgrade)
+  // Puente de audio en tiempo real Twilio <-> OpenAI Realtime API
   const wss = new WebSocketServer({ server, path: "/api/voice/stream" })
-  wss.on("connection", (ws) => {
+  wss.on("connection", (ws, req) => {
     console.log("[Voice] Media Stream WebSocket conectado")
-    handleMediaStream(ws)
+    handleMediaStream(ws, req).catch((err) => console.error("[Voice] Error en handleMediaStream:", err))
   })
 
   server.listen(PORT, () => {

@@ -23,3 +23,12 @@ export const exportClientsExcel = () =>
 
 export const downloadClientsTemplate = () =>
   apiDownload("/clients/import-template", "plantilla-clientes.xlsx")
+
+export const updateClient = (id: string, data: any) =>
+  api(`/clients/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+
+export const deleteClient = (id: string) =>
+  api(`/clients/${id}`, { method: "DELETE" })

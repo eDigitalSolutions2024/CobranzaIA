@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "ts-node src/server.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-assets.js",
     "start": "node dist/server.js",
     "test:twilio": "ts-node --transpile-only src/scripts/test-twilio.ts",
     "seed:admin": "ts-node --transpile-only src/scripts/seed-admin.ts"
@@ -25,6 +25,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.6.2",
     "multer": "^2.2.0",
+    "node-cron": "^4.6.0",
     "twilio": "^6.0.2",
     "ws": "^8.21.0"
   },
@@ -35,6 +36,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.2.0",
     "@types/node": "^25.9.1",
+    "@types/node-cron": "^3.0.11",
     "@types/twilio": "^3.19.2",
     "@types/ws": "^8.18.1",
     "nodemon": "^3.1.14",

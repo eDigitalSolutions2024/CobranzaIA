@@ -4,10 +4,12 @@ import multer from "multer"
 import {
   getClients,
   createClient,
+  updateClient,
   getClientDetail,
   importClients,
   exportClients,
   downloadImportTemplate,
+  deleteClient,
 } from "../controllers/clientController"
 import { requireAuth } from "../middleware/auth"
 
@@ -44,6 +46,8 @@ router.get("/clients/export", requireAuth, exportClients)
 router.get("/clients/import-template", requireAuth, downloadImportTemplate)
 router.get("/clients/:id/detail", requireAuth, getClientDetail)
 router.post("/clients", requireAuth, createClient)
+router.patch("/clients/:id", requireAuth, updateClient)
 router.post("/clients/import", requireAuth, uploadClientsFile, importClients)
+router.delete("/clients/:id", requireAuth, deleteClient)
 
 export default router

@@ -133,6 +133,44 @@ export async function getClientDetail(req: Request, res: Response) {
   }
 }
 
+export async function updateClient(req: Request, res: Response) {
+  try {
+    const { id } = req.params
+    const client = await Client.findByIdAndUpdate(id, req.body, {
+      new: true,
+      runValidators: true,
+    })
+    if (!client) return res.status(404).json({ message: "Cliente no encontrado" })
+    res.json(client)
+  } catch (error: any) {
+    console.log("Error updateClient:", error)
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        message: "Ya existe un cliente con ese número de teléfono",
+      })
+    }
+
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ message: error.message })
+    }
+
+    res.status(500).json({ message: "Error actualizando cliente" })
+  }
+}
+
+export async function deleteClient(req: Request, res: Response) {
+  try {
+    const { id } = req.params
+    const client = await Client.findByIdAndDelete(id)
+    if (!client) return res.status(404).json({ message: "Cliente no encontrado" })
+    res.json({ message: "Cliente eliminado" })
+  } catch (error) {
+    console.error("Error deleteClient:", error)
+    res.status(500).json({ message: "Error eliminando cliente" })
+  }
+}
+
 export async function createClient(req: Request, res: Response) {
   try {
     const client = await Client.create(req.body)

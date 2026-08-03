@@ -1,5 +1,4 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { WebSocket } from 'ws'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
@@ -160,6 +159,70 @@ export async function generateVoiceResponse(
   return parseAgentResponse(text)
 }
 
+// ─── Funciones de soporte para el motor de flujo (flowEngine.service.ts) ───────
+// A diferencia de generateVoiceResponse (conversación libre), estas son llamadas
+// a Claude acotadas: clasificación de una sola palabra o extracción de JSON corto.
+
+export async function classifyIntent(
+  utterance: string,
+  intents: Record<string, string>
+): Promise<string | null> {
+  const labels = Object.keys(intents)
+
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 20,
+    system: `Clasifica lo que dijo el cliente en UNA sola de estas categorías: ${labels.join(', ')}.
+Responde ÚNICAMENTE con la palabra exacta de la categoría, sin explicación ni puntuación.`,
+    messages: [{ role: 'user', content: utterance }],
+  })
+
+  const text = normalizeText(response.content[0].type === 'text' ? response.content[0].text : '').toLowerCase()
+  return labels.find((label) => label.toLowerCase() === text) ?? null
+}
+
+export interface CommitmentExtraction {
+  amount: number | null
+  paymentDate: string | null // YYYY-MM-DD
+}
+
+export async function extractCommitment(utterance: string, todayIso: string): Promise<CommitmentExtraction> {
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 100,
+    system: `Extrae de la frase del cliente el monto en pesos (solo número, sin signos) y la fecha de pago en formato YYYY-MM-DD (fecha absoluta, hoy es ${todayIso}).
+Responde ÚNICAMENTE con JSON válido, sin markdown: {"amount": number|null, "paymentDate": "YYYY-MM-DD"|null}`,
+    messages: [{ role: 'user', content: utterance }],
+  })
+
+  try {
+    const raw = normalizeText(response.content[0].type === 'text' ? response.content[0].text : '{}')
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+    const parsed = JSON.parse(raw)
+    return {
+      amount: typeof parsed.amount === 'number' ? parsed.amount : null,
+      paymentDate: typeof parsed.paymentDate === 'string' ? parsed.paymentDate : null,
+    }
+  } catch {
+    console.error('[Voice] Error al parsear extractCommitment')
+    return { amount: null, paymentDate: null }
+  }
+}
+
+export async function verifyNameMatch(utterance: string, expectedName: string): Promise<boolean> {
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 10,
+    system: `El cliente dijo su nombre por teléfono (la transcripción de voz puede tener errores de reconocimiento). Determina si razonablemente corresponde al nombre registrado en la cuenta: "${expectedName}". Tolera errores menores de transcripción, acentos, orden de nombre/apellido, o que diga solo parte del nombre si es inequívoco.
+Responde ÚNICAMENTE con "SI" o "NO".`,
+    messages: [{ role: 'user', content: utterance }],
+  })
+
+  const text = normalizeText(response.content[0].type === 'text' ? response.content[0].text : '').toUpperCase()
+  return text.includes('SI')
+}
+
 export interface CallAnalysis {
   hasAgreement: boolean
   promises: PaymentInstallment[]
@@ -224,42 +287,3 @@ Reglas:
   }
 }
 
-// WebSocket handler for Twilio Media Streams (real-time audio - future upgrade)
-// To enable: point <Stream url="wss://YOUR_DOMAIN/api/voice/stream"/> in TwiML
-// Requires a Speech-to-Text service (Deepgram, Google STT, etc.) for full functionality
-export function handleMediaStream(ws: WebSocket): void {
-  let streamSid: string | null = null
-
-  ws.on('message', (raw: Buffer | string) => {
-    try {
-      const msg = JSON.parse(raw.toString()) as { event: string; start?: { streamSid: string }; media?: { payload: string } }
-
-      switch (msg.event) {
-        case 'connected':
-          console.log('[MediaStream] Twilio conectado')
-          break
-
-        case 'start':
-          streamSid = msg.start?.streamSid ?? null
-          console.log(`[MediaStream] Stream iniciado: ${streamSid}`)
-          break
-
-        case 'media':
-          // msg.media.payload = base64 mulaw 8kHz audio from Twilio
-          // TODO: pipe payload to Deepgram/Google STT for real-time transcription
-          // then call generateVoiceResponse() and stream TTS audio back
-          break
-
-        case 'stop':
-          console.log(`[MediaStream] Stream detenido: ${streamSid}`)
-          ws.close()
-          break
-      }
-    } catch (err) {
-      console.error('[MediaStream] Error parsing message:', err)
-    }
-  })
-
-  ws.on('error', (err) => console.error('[MediaStream] WebSocket error:', err))
-  ws.on('close', () => console.log('[MediaStream] WebSocket cerrado'))
-}

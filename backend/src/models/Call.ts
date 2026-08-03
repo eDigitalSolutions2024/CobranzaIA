@@ -15,6 +15,9 @@ export interface ICall extends Document {
   amount?: number
   requiresHuman: boolean
   callSid: string
+  flowStateId?: string | null
+  flowContext?: Record<string, any>
+  summary?: string | null
   createdAt: Date
   updatedAt: Date
 }
@@ -39,6 +42,10 @@ const CallSchema = new Schema<ICall>(
     amount: { type: Number, default: null },
     requiresHuman: { type: Boolean, default: false },
     callSid: { type: String, required: true, unique: true },
+    // Estado y variables de la máquina de estados (backend/src/flows/cobranza_ai_v1.json)
+    flowStateId: { type: String, default: null },
+    flowContext: { type: Schema.Types.Mixed, default: {} },
+    summary: { type: String, default: null },
   },
   { timestamps: true }
 )

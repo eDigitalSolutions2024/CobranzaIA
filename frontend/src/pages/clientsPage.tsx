@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getClients, exportClientsExcel } from "../services/clients"
+import { getClients, exportClientsExcel, deleteClient } from "../services/clients"
 import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
@@ -44,6 +44,8 @@ export default function ClientsPage() {
   const [callingId, setCallingId] = useState<string | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [expandedClientId, setExpandedClientId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [editingClient, setEditingClient] = useState<any | null>(null)
 
   async function handleExport() {
     setExporting(true)
@@ -70,8 +72,23 @@ export default function ClientsPage() {
       setCallingId(null)
     }
   }
+
   async function onClickAccordion(id: string) {
     setExpandedClientId((prev) => (prev === id ? null : id))
+  }
+
+  async function handleDelete(clientId: string, clientName: string) {
+    if (!confirm(`Delete client "${clientName}"? This cannot be undone.`)) return
+    setDeletingId(clientId)
+    try {
+      await deleteClient(clientId)
+      setClients((prev) => prev.filter((c) => c._id !== clientId))
+    } catch (error) {
+      console.log(error)
+      alert("Error deleting client")
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   useEffect(() => {
@@ -111,7 +128,7 @@ export default function ClientsPage() {
               {exporting ? "Exporting..." : "Export Excel"}
             </button>
             <button
-              onClick={() => setOpenModal(true)}
+              onClick={() => { setEditingClient(null); setOpenModal(true) }}
               className="rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500 cursor-pointer"
             >
               New client
@@ -136,18 +153,18 @@ export default function ClientsPage() {
               <tbody>
                 {clients.map((client) => {
                   const expanded = expandedClientId === client._id;
-                  return(
+                  return (
                   <>
                   <tr
                     key={client._id}
                     className="border-b border-zinc-800 hover:bg-zinc-800/40 transition-colors"
                   >
-                    
+
                     <td onClick={() => setDetailId(client._id)} className="py-4 font-medium cursor-pointer">{client.name}</td>
                     <td className="py-4 text-zinc-400">{client.phone}</td>
                     <td className="py-4 text-zinc-300">{client.agingDays ?? "—"}</td>
                     <td className="py-4 text-zinc-300">
-                      
+
                       {client.usdAmount != null
                         ? `$${Number(client.usdAmount).toLocaleString("en-US")}`
                         : "—"}
@@ -188,34 +205,65 @@ export default function ClientsPage() {
                     ) : (
                       <>
                         <p>Show</p>
-                        <ChevronUp size={24} />                      
+                        <ChevronUp size={24} />
                       </>
                     )}
                     </button>
                     </td>
                     <td className="py-4">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleCall(client._id) }}
-                        disabled={callingId === client._id}
-                        className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
-                      >
-                        {callingId === client._id ? (
-                          <>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleCall(client._id) }}
+                          disabled={callingId === client._id}
+                          className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                        >
+                          {callingId === client._id ? (
+                            <>
+                              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                              </svg>
+                              Calling...
+                            </>
+                          ) : (
+                            <>
+                              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+                              </svg>
+                              Call
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setEditingClient(client); setOpenModal(true) }}
+                          className="flex items-center gap-1.5 rounded-lg bg-blue-600/20 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-600/40 transition-colors cursor-pointer"
+                        >
+                          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                          </svg>
+                          Edit
+                        </button>
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDelete(client._id, client.name) }}
+                          disabled={deletingId === client._id}
+                          className="flex items-center gap-1.5 rounded-lg bg-red-600/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                        >
+                          {deletingId === client._id ? (
                             <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
                             </svg>
-                            Calling...
-                          </>
-                        ) : (
-                          <>
-                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
-                              <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+                          ) : (
+                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m2 0-1 12a2 2 0 01-2 2H8a2 2 0 01-2-2L5 7h14z" />
                             </svg>
-                            Call
-                          </>
-                        )}
-                      </button>
+                          )}
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                  {expanded && (
@@ -353,8 +401,7 @@ export default function ClientsPage() {
                   </tr>
                 )}
                   </>
-                  ) 
-             
+                  )
                 })}
 
                 {clients.length === 0 && (
@@ -373,10 +420,12 @@ export default function ClientsPage() {
 
       <NewClientModal
         isOpen={openModal}
-        onClose={() => setOpenModal(false)}
+        client={editingClient}
+        onClose={() => { setOpenModal(false); setEditingClient(null) }}
         onSave={async () => {
           await loadClients()
           setOpenModal(false)
+          setEditingClient(null)
         }}
       />
 
