@@ -1,7 +1,7 @@
-import { api } from "./api"
+import { api, publicApi } from "./api"
 
 export const login = (email: string, password: string) =>
-  api("/auth/login", {
+  publicApi("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
   })
