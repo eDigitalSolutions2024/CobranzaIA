@@ -15,14 +15,14 @@ const STATUS_LABEL: Record<string, string> = {
   no_response: "No response",
 }
 
-const STATUS_COLOR: Record<string, string> = {
+/*const STATUS_COLOR: Record<string, string> = {
   pending: "bg-blue-500/10 text-blue-400",
   contacted: "bg-purple-500/10 text-purple-400",
   negotiating: "bg-orange-500/10 text-orange-400",
   promised: "bg-yellow-500/10 text-yellow-400",
   paid: "bg-green-500/10 text-green-400",
   no_response: "bg-zinc-500/10 text-zinc-400",
-}
+}*/
 
 const RISK_LABEL: Record<string, string> = {
   low: "Low",
@@ -42,6 +42,8 @@ export default function ClientsPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
+  const [notifyingId, setNotifyingId] = useState<string | null>(null)
+  const [notifyResult, setNotifyResult] = useState<Record<string, { label: string; tone: "success" | "warning" | "error" }>>({})
   const [detailId, setDetailId] = useState<string | null>(null)
   const [expandedClientId, setExpandedClientId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -70,6 +72,60 @@ export default function ClientsPage() {
       alert("Error starting the call")
     } finally {
       setCallingId(null)
+    }
+  }
+
+  function showNotifyResult(clientId: string, result: { label: string; tone: "success" | "warning" | "error" }) {
+    setNotifyResult((prev) => ({ ...prev, [clientId]: result }))
+    setTimeout(() => {
+      setNotifyResult((prev) => {
+        const next = { ...prev }
+        delete next[clientId]
+        return next
+      })
+    }, 8000)
+  }
+
+  function describeCallOutcome(data: { status: string; answeredBy: string | null }): { label: string; tone: "success" | "warning" | "error" } {
+    if (data.status === "no-answer") return { label: "No contestó", tone: "error" }
+    if (data.status === "busy") return { label: "Línea ocupada", tone: "error" }
+    if (data.status === "failed" || data.status === "canceled") return { label: "No se pudo conectar", tone: "error" }
+    if (data.answeredBy === "human") return { label: "Contestó el agente", tone: "success" }
+    if (data.answeredBy && data.answeredBy.startsWith("machine")) return { label: "Cayó a buzón de voz", tone: "warning" }
+    return { label: "Llamada completada", tone: "warning" }
+  }
+
+  async function pollNotifyStatus(clientId: string, callSid: string, attempt = 0) {
+    if (attempt > 12) {
+      showNotifyResult(clientId, { label: "No se pudo confirmar", tone: "warning" })
+      return
+    }
+    try {
+      const data = await api(`/voice/notify-human-status/${callSid}`)
+      const finished = ["completed", "busy", "no-answer", "failed", "canceled"].includes(data.status)
+      if (!finished) {
+        setTimeout(() => pollNotifyStatus(clientId, callSid, attempt + 1), 3000)
+        return
+      }
+      showNotifyResult(clientId, describeCallOutcome(data))
+    } catch {
+      setTimeout(() => pollNotifyStatus(clientId, callSid, attempt + 1), 3000)
+    }
+  }
+
+  async function handleNotifyHuman(clientId: string) {
+    setNotifyingId(clientId)
+    try {
+      const { callSid } = await api("/voice/notify-human", {
+        method: "POST",
+        body: JSON.stringify({ clientId }),
+      })
+      setClients((prev) => prev.map((c) => (c._id === clientId ? { ...c, requiresHuman: false } : c)))
+      setNotifyingId(null)
+      if (callSid) pollNotifyStatus(clientId, callSid)
+    } catch {
+      alert("Error notifying the human agent")
+      setNotifyingId(null)
     }
   }
 
@@ -129,7 +185,7 @@ export default function ClientsPage() {
             </button>
             <button
               onClick={() => { setEditingClient(null); setOpenModal(true) }}
-              className="rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500 cursor-pointer"
+              className="rounded-xl bg-brand px-5 py-3 font-medium hover:bg-brand-light cursor-pointer"
             >
               New client
             </button>
@@ -157,10 +213,23 @@ export default function ClientsPage() {
                   <>
                   <tr
                     key={client._id}
-                    className="border-b border-zinc-800 hover:bg-zinc-800/40 transition-colors"
+                    className={`border-b transition-colors ${
+                      client.requiresHuman
+                        ? "border-red-900/60 bg-red-500/10 hover:bg-red-500/20"
+                        : "border-zinc-800 hover:bg-zinc-800/40"
+                    }`}
                   >
 
-                    <td onClick={() => setDetailId(client._id)} className="py-4 font-medium cursor-pointer">{client.name}</td>
+                    <td onClick={() => setDetailId(client._id)} className="py-4 font-medium cursor-pointer">
+                      <div className="flex items-center gap-2">
+                        {client.name}
+                        {client.requiresHuman && (
+                          <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-400">
+                            Needs agent
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="py-4 text-zinc-400">{client.phone}</td>
                     <td className="py-4 text-zinc-300">{client.agingDays ?? "—"}</td>
                     <td className="py-4 text-zinc-300">
@@ -234,6 +303,43 @@ export default function ClientsPage() {
                             </>
                           )}
                         </button>
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleNotifyHuman(client._id) }}
+                          disabled={notifyingId === client._id}
+                          className="flex items-center gap-1.5 rounded-lg bg-red-600/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                        >
+                          {notifyingId === client._id ? (
+                            <>
+                              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                              </svg>
+                              Notifying...
+                            </>
+                          ) : (
+                            <>
+                              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-8.25 3h.008v.008h-.008V15z" />
+                              </svg>
+                              Notify agent
+                            </>
+                          )}
+                        </button>
+
+                        {notifyResult[client._id] && (
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium whitespace-nowrap ${
+                              notifyResult[client._id].tone === "success"
+                                ? "bg-emerald-500/15 text-emerald-400"
+                                : notifyResult[client._id].tone === "warning"
+                                  ? "bg-amber-500/15 text-amber-400"
+                                  : "bg-red-500/15 text-red-400"
+                            }`}
+                          >
+                            {notifyResult[client._id].label}
+                          </span>
+                        )}
 
                         <button
                           onClick={(e) => { e.stopPropagation(); setEditingClient(client); setOpenModal(true) }}

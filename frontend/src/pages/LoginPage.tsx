@@ -1,5 +1,7 @@
 import { useState } from "react"
 import { useAuth } from "../context/AuthContext"
+import loginBg from "../assets/image 39.png"
+import logo from "../assets/logo-iqor 1.png"
 
 export default function LoginPage() {
   const { login } = useAuth()
@@ -23,45 +25,52 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-white">
+    <div
+      className="relative flex min-h-screen items-center justify-center bg-cover bg-center bg-fixed p-4"
+      style={{ backgroundImage: `url(${loginBg})` }}
+    >
+      <div className="absolute inset-0 bg-gradient-to-br from-[#0b1f4f]/90 via-[#1a1a4f]/80 to-[#3b1f6b]/85" />
+
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/50 p-8"
+        className="relative z-10 w-full max-w-[420px] rounded-2xl bg-white p-8 shadow-2xl sm:p-10"
       >
-        <h1 className="text-2xl font-bold mb-1">CobranzaAI</h1>
-        <p className="text-sm text-zinc-400 mb-6">Sign in to continue</p>
+        <div className="mb-6 flex flex-col items-center">
+          <img src={logo} alt="Logo" className="mb-4 w-[160px]" />
+          <h1 className="text-xl font-semibold text-[#0b1f4f]">Sign in to continue</h1>
+        </div>
 
         <div className="space-y-4">
           <div>
-            <label className="text-sm text-zinc-400 block mb-1">Email</label>
+            <label className="mb-1 block text-sm font-medium text-gray-600">Username</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoFocus
               required
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-white"
+              className="h-10 w-full rounded-md border border-gray-200 bg-gray-50 px-3 text-gray-900 outline-none transition focus:border-[#0b1f4f]"
             />
           </div>
 
           <div>
-            <label className="text-sm text-zinc-400 block mb-1">Password</label>
+            <label className="mb-1 block text-sm font-medium text-gray-600">Password</label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-white"
+              className="h-10 w-full rounded-md border border-gray-200 bg-gray-50 px-3 text-gray-900 outline-none transition focus:border-[#0b1f4f]"
             />
           </div>
         </div>
 
-        {error && <p className="text-sm text-red-400 mt-4">{error}</p>}
+        {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
 
         <button
           type="submit"
           disabled={loading}
-          className="mt-6 w-full rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="mt-6 h-11 w-full rounded-md bg-[#0b1f4f] font-medium text-white transition hover:bg-[#16316e] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading ? "Signing in..." : "Sign in"}
         </button>

@@ -13,6 +13,7 @@ interface Props {
 const initialForm = {
   nombre: "",
   telefono: "",
+  rfc: "",
   email: "",
   deuda: "",
   canal: "WhatsApp",
@@ -52,6 +53,7 @@ function clientToForm(client: any) {
   return {
     nombre: client.name ?? "",
     telefono: client.phone ?? "",
+    rfc: client.rfc ?? "",
     email: "",
     deuda: client.debt != null ? String(client.debt) : "",
     canal: client.channel ?? "WhatsApp",
@@ -142,6 +144,7 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
       const payload = {
         name: form.nombre,
         phone: form.telefono,
+        rfc: form.rfc.trim() ? form.rfc.trim().toUpperCase() : null,
         debt: Number(form.deuda) || 0,
         channel: form.canal,
         risk: form.riesgo,
@@ -217,6 +220,18 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
               }`}
             />
             {errors.telefono && <p className="mt-1 text-xs text-red-500">This field is required</p>}
+          </div>
+
+          <div>
+            <label className="text-sm text-zinc-400">RFC</label>
+            <input
+              name="rfc"
+              value={form.rfc}
+              onChange={handleChange}
+              placeholder="GARC800101AB1"
+              maxLength={13}
+              className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-white uppercase"
+            />
           </div>
 
           <div>
@@ -471,7 +486,7 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
           </button>
           <button
             onClick={handleSubmit}
-            className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500"
+            className="px-5 py-2 rounded-lg bg-brand hover:bg-brand-light"
           >
             {isEditMode ? "Save changes" : "Save client"}
           </button>

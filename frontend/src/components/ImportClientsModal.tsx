@@ -54,9 +54,10 @@ export default function ImportClientsModal({ isOpen, onClose, onImported }: Prop
         <h2 className="text-2xl font-bold text-white mb-2">Import clients from Excel</h2>
         <p className="text-sm text-zinc-400 mb-4">
           The file must have <strong>CustomerName</strong> and <strong>Phone</strong> columns.
-          Optional: Country, CustomerID, CollectorID, Team, TeamLeader, Collector, Invoice Number,
+          Optional: RFC, Country, CustomerID, CollectorID, Team, TeamLeader, Collector, Invoice Number,
           Create Date, Due Date, Aging Days, Loan/Lease, Debt, USD Amount, Channel, Risk, Contact,
-          Next Action, Payment Promise, Date Promise and Notes. Phone numbers that already exist are skipped.
+          Next Action, Payment Promise, Date Promise and Notes. Phone numbers that already exist are skipped;
+          rows with an invalid RFC format are imported without RFC.
         </p>
 
         <button
@@ -72,7 +73,7 @@ export default function ImportClientsModal({ isOpen, onClose, onImported }: Prop
           accept=".xlsx,.xls"
           onChange={handleFileChange}
           disabled={loading}
-          className="block w-full text-sm text-zinc-300 file:mr-4 file:rounded-lg file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:text-white hover:file:bg-blue-500 disabled:opacity-50"
+          className="block w-full text-sm text-zinc-300 file:mr-4 file:rounded-lg file:border-0 file:bg-brand file:px-4 file:py-2 file:text-white hover:file:bg-brand-light disabled:opacity-50"
         />
 
         {loading && <p className="text-sm text-zinc-400 mt-4">Importing…</p>}

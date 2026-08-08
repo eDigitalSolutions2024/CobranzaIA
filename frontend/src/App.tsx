@@ -37,12 +37,6 @@ export default function App() {
 
       {page === "messages" && <MessagesPage />}
 
-      {page === "analytics" && (
-        <div className="flex items-center justify-center h-64 text-zinc-500">
-          Analytics — coming soon
-        </div>
-      )}
-
     </MainLayout>
   )
 }

@@ -4,12 +4,15 @@ import mongoose from 'mongoose'
 import Call from '../models/Call'
 import Client from '../models/Client'
 import { runAction } from '../services/flowActions.service'
-import { OpenAIRealtimeSession } from '../services/openaiRealtime.service'
-import { buildVoiceSystemPrompt, parseMarkers, ClientInfo } from '../services/voiceConversation.service'
+import { OpenAIRealtimeSession, RealtimeFunctionCall } from '../services/openaiRealtime.service'
+import { buildVoiceSystemPrompt, ClientInfo } from '../services/voiceConversation.service'
+import { normalizeRFC } from '../utils/rfc'
 
 // Puente de audio Twilio <-> OpenAI Realtime. El modelo conversa libre (guiado por el
-// prompt de voiceConversation.service.ts) — nosotros solo leemos los marcadores que deja
-// al final de lo que dice para disparar las acciones de negocio (flowActions.service.ts).
+// prompt de voiceConversation.service.ts) y dispara las acciones de negocio
+// (flowActions.service.ts) llamando a las funciones (tools) definidas en VOICE_TOOLS —
+// ya no se parsean marcadores de texto del habla del agente, eso resultó poco confiable
+// (el modelo a veces decía "voy a registrar esto" sin emitir el marcador real).
 // A diferencia de la versión anterior basada en flowEngine.service.ts (máquina de estados
 // que exigía coincidencias exactas de texto), esto tolera que la transcripción de voz no
 // sea perfecta — si el modelo no entendió, simplemente vuelve a preguntar de forma natural.
@@ -18,6 +21,12 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   let callDocId: mongoose.Types.ObjectId | null = null
   let isAgentSpeaking = false
   let shouldHangup = false
+  // Cuando requerir_humano/finalizar_llamada disparan una respuesta nueva para la
+  // despedida (ver handleFunctionCall), hay que colgar hasta que ESA respuesta termine,
+  // no con el responseDone de la respuesta anterior (la que llamó a la función) — si no,
+  // se corta la llamada antes de que alcance a decir la despedida.
+  let awaitingHangupResponseCreation = false
+  let hangupAfterResponseId: string | null = null
   let ready = false
   let closed = false
   const pendingAudio: string[] = []
@@ -53,14 +62,29 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
     isAgentSpeaking = false
   })
 
-  session.on('responseDone', (status) => {
+  session.on('responseCreated', (responseId) => {
+    if (awaitingHangupResponseCreation) {
+      hangupAfterResponseId = responseId
+      awaitingHangupResponseCreation = false
+    }
+  })
+
+  session.on('responseDone', (status, responseId) => {
     isAgentSpeaking = false
     if (status === 'cancelled' && streamSid && twilioWs.readyState === WebSocket.OPEN) {
       // Corta el audio ya en el buffer de Twilio para que no siga sonando la frase
       // que el servidor ya decidió cortar.
       twilioWs.send(JSON.stringify({ event: 'clear', streamSid }))
     }
-    if (shouldHangup) closeAll()
+    if (!shouldHangup) return
+    if (hangupAfterResponseId) {
+      // Ya sabemos cuál es la respuesta de despedida — solo colgamos con SU responseDone,
+      // ignoramos el de la respuesta anterior (la que disparó la función) si llega después.
+      if (responseId === hangupAfterResponseId) closeAll()
+    } else if (!awaitingHangupResponseCreation) {
+      // No se disparó ninguna respuesta extra de despedida — comportamiento anterior.
+      closeAll()
+    }
   })
 
   session.on('userTranscript', (text) => {
@@ -71,60 +95,119 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   })
 
   session.on('agentTranscript', (text) => {
-    if (!text) return
-    handleAgentTurn(text).catch((err) => {
-      console.error('[VoiceStream] Error procesando turno del agente:', err)
+    if (!text || !callDocId) return
+    console.log(`[VoiceStream] agente dijo: "${text}"`)
+    Call.findByIdAndUpdate(callDocId, {
+      $push: { transcript: { role: 'assistant', content: text, timestamp: new Date() } },
+    }).catch((err) => console.error('[VoiceStream] Error guardando transcript del agente:', err))
+  })
+
+  session.on('functionCall', (fnCall) => {
+    handleFunctionCall(fnCall).catch((err) => {
+      console.error('[VoiceStream] Error procesando llamada a función:', err)
     })
   })
 
   session.on('close', () => closeAll())
 
-  async function handleAgentTurn(rawText: string): Promise<void> {
+  async function handleFunctionCall({ name, callId, arguments: argsRaw }: RealtimeFunctionCall): Promise<void> {
     if (!callDocId) return
-    const markers = parseMarkers(rawText)
-    console.log(`[VoiceStream] agente dijo: "${rawText}"`)
+    console.log(`[VoiceStream] función llamada: ${name}(${argsRaw})`)
+
+    let args: Record<string, any> = {}
+    try {
+      args = argsRaw ? JSON.parse(argsRaw) : {}
+    } catch {
+      args = {}
+    }
 
     const call = await Call.findById(callDocId)
     if (!call) return
 
-    call.transcript.push({ role: 'assistant', content: markers.cleanMessage || rawText, timestamp: new Date() })
-    await call.save()
+    switch (name) {
+      case 'confirmar_identidad': {
+        call.identityConfirmed = true
+        await call.save()
+        session.sendFunctionCallOutput(callId, { ok: true })
+        session.createResponse()
+        break
+      }
 
-    if (markers.ticketAclaracion) {
-      await runAction('crm', 'create_clarification_ticket', {}, call)
-    }
+      case 'marcar_ticket_aclaracion': {
+        await runAction('crm', 'create_clarification_ticket', {}, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        session.createResponse()
+        break
+      }
 
-    if (markers.promises.length > 0) {
-      for (const p of markers.promises) {
-        const ctx = { amount: p.amount, payment_date: p.paymentDate }
+      case 'registrar_promesa_pago': {
+        const ctx = { amount: args.monto, payment_date: args.fecha }
         await runAction('crm', 'create_payment_commitment', ctx, call)
         await runAction('crm', 'schedule_reminder', ctx, call)
+        await runAction('whatsapp', 'send_payment_information', {}, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        session.createResponse()
+        break
       }
-      await runAction('whatsapp', 'send_payment_information', {}, call)
-    }
 
-    if (markers.saldoYaPagado) {
-      // verify_payment corre en nuestro backend, no dentro del modelo — le regresamos
-      // el resultado como nota de sistema para que reaccione de forma natural.
-      const result = await runAction('payments', 'verify_payment', {}, call)
-      const exists = Boolean(result?.payment_exists)
-      session.injectSystemNote(
-        exists
-          ? 'Se confirmó el pago en el sistema. Agradécele y cierra la llamada con cortesía, marca FIN_LLAMADA.'
-          : 'No se encontró ningún pago registrado en el sistema. Pídele que mande su comprobante por WhatsApp y cierra la llamada, marca FIN_LLAMADA.'
-      )
-      return
-    }
+      case 'verificar_rfc': {
+        // Comparación exacta hecha en el backend, no por criterio del modelo — a diferencia
+        // del nombre (donde toleramos variaciones), un RFC parcial sí debe coincidir exacto.
+        const clientForRfc = call.clientId ? await Client.findById(call.clientId).lean() : null
+        const expected = clientForRfc?.rfc ? normalizeRFC(clientForRfc.rfc as string).slice(-4) : null
+        const received = normalizeRFC(String(args.ultimos4 ?? ''))
+        const matches = Boolean(expected) && received === expected
+        session.sendFunctionCallOutput(callId, { matches })
+        session.createResponse()
+        return
+      }
 
-    if (markers.requiresHuman) {
-      call.requiresHuman = true
-      call.status = 'requires_human'
-      await call.save()
-      shouldHangup = true
-    } else if (markers.finLlamada) {
-      call.status = 'completed'
-      await call.save()
-      shouldHangup = true
+      case 'marcar_saldo_pagado': {
+        // Corre en nuestro backend, no dentro del modelo — le regresamos el resultado
+        // como salida de la función para que reaccione de forma natural en su siguiente turno.
+        const result = await runAction('payments', 'verify_payment', {}, call)
+        const exists = Boolean(result?.payment_exists)
+        session.sendFunctionCallOutput(callId, { payment_exists: exists })
+        session.createResponse()
+        return
+      }
+
+      case 'requerir_humano': {
+        call.requiresHuman = true
+        call.status = 'requires_human'
+        await call.save()
+        if (call.clientId) {
+          const motivo = typeof args.motivo === 'string' && args.motivo.trim() ? args.motivo.trim() : null
+          await Client.findByIdAndUpdate(call.clientId, { requiresHuman: true, requiresHumanReason: motivo })
+        }
+        shouldHangup = true
+        awaitingHangupResponseCreation = true
+        session.sendFunctionCallOutput(callId, { ok: true })
+        session.createResponse()
+        break
+      }
+
+      case 'finalizar_llamada': {
+        call.status = 'completed'
+        await call.save()
+        shouldHangup = true
+        awaitingHangupResponseCreation = true
+        session.sendFunctionCallOutput(callId, { ok: true })
+        session.createResponse()
+        break
+      }
+
+      case 'marcar_extension': {
+        // TODO: aún no se envían tonos DTMF al conmutador, solo se registra la intención.
+        session.sendFunctionCallOutput(callId, { ok: true })
+        session.createResponse()
+        break
+      }
+
+      default:
+        session.sendFunctionCallOutput(callId, { ok: false, error: 'unknown_function' })
+        session.createResponse()
+        break
     }
   }
 
@@ -144,6 +227,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
           debt: (client.debt as number) ?? 0,
           agingDays: (client.agingDays as number) ?? 0,
           status: client.status as string,
+          rfc: (client.rfc as string) ?? null,
         }
       : null
 

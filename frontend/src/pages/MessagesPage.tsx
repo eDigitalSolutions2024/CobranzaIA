@@ -154,7 +154,7 @@ export default function MessagesPage() {
       <button
         onClick={send}
         disabled={sending || !client}
-        className="mt-8 rounded-xl bg-blue-600 px-8 py-3 font-semibold hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="mt-8 rounded-xl bg-brand px-8 py-3 font-semibold hover:bg-brand-light disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {sending ? "Sending..." : "SEND MESSAGE"}
       </button>

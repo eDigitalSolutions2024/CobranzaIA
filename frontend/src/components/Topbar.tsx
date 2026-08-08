@@ -76,7 +76,7 @@ export default function Topbar() {
 
             <div className="
               flex h-10 w-10 items-center justify-center
-              rounded-full bg-blue-500 font-semibold
+              rounded-full bg-brand font-semibold
             ">
               {(user?.name || "?").charAt(0).toUpperCase()}
             </div>

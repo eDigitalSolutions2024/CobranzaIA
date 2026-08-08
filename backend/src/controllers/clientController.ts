@@ -3,6 +3,7 @@ import ExcelJS from "exceljs"
 import Client from "../models/Client"
 import PaymentPromise from "../models/PaymentPromise"
 import Call from "../models/Call"
+import { isValidRFC, normalizeRFC } from "../utils/rfc"
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pendiente",
@@ -50,6 +51,7 @@ const CHANNEL_ALIASES: Record<string, string> = {
 const HEADER_ALIASES: Record<string, string[]> = {
   name: ["nombre", "name", "cliente", "customername", "customer name"],
   phone: ["telefono", "phone", "celular", "numero"],
+  rfc: ["rfc", "tax id", "taxid"],
   debt: ["deuda", "debt", "monto"],
   channel: ["canal", "channel"],
   risk: ["riesgo", "risk", "riesgo ia"],
@@ -222,6 +224,7 @@ export async function importClients(req: Request, res: Response) {
       rowNumber: number
       name: string
       phone: string
+      rfc: string | null
       debt: number
       channel: string
       risk: string
@@ -261,6 +264,16 @@ export async function importClients(req: Request, res: Response) {
         return
       }
 
+      const rfcRaw = toStringOrNull(cellValue("rfc"))
+      let rfc: string | null = null
+      if (rfcRaw) {
+        if (isValidRFC(rfcRaw)) {
+          rfc = normalizeRFC(rfcRaw)
+        } else {
+          rowErrors.push({ row: rowNumber, message: `RFC "${rfcRaw}" con formato inválido, se importó el cliente sin RFC` })
+        }
+      }
+
       const debtRaw = cellValue("debt")
       const debt = debtRaw !== undefined && debtRaw !== null && debtRaw !== "" ? Number(debtRaw) : 0
 
@@ -281,6 +294,7 @@ export async function importClients(req: Request, res: Response) {
         rowNumber,
         name,
         phone,
+        rfc,
         debt: Number.isFinite(debt) ? debt : 0,
         channel,
         risk,
@@ -339,6 +353,7 @@ export async function importClients(req: Request, res: Response) {
         toInsert.map((r) => ({
           name: r.name,
           phone: r.phone,
+          rfc: r.rfc,
           debt: r.debt,
           channel: r.channel,
           risk: r.risk,
@@ -394,6 +409,7 @@ export async function exportClients(req: Request, res: Response) {
       { header: "CustomerID", key: "customerId", width: 12 },
       { header: "CustomerName", key: "name", width: 25 },
       { header: "Teléfono", key: "phone", width: 15 },
+      { header: "RFC", key: "rfc", width: 16 },
       { header: "CollectorID", key: "collectorId", width: 12 },
       { header: "Team", key: "team", width: 14 },
       { header: "TeamLeader", key: "teamLeader", width: 16 },
@@ -427,6 +443,7 @@ export async function exportClients(req: Request, res: Response) {
         customerId: c.customerId ?? "",
         name: c.name,
         phone: c.phone,
+        rfc: c.rfc || "",
         collectorId: c.collectorId ?? "",
         team: c.team || "",
         teamLeader: c.teamLeader || "",
@@ -538,6 +555,7 @@ export async function downloadImportTemplate(req: Request, res: Response) {
       { header: "CustomerID", key: "customerId", width: 12 },
       { header: "CustomerName", key: "name", width: 25 },
       { header: "Telefono", key: "phone", width: 15 },
+      { header: "RFC", key: "rfc", width: 16 },
       { header: "CollectorID", key: "collectorId", width: 12 },
       { header: "Team", key: "team", width: 14 },
       { header: "TeamLeader", key: "teamLeader", width: 16 },
@@ -563,6 +581,7 @@ export async function downloadImportTemplate(req: Request, res: Response) {
       customerId: 1001,
       name: "Carlos García",
       phone: "6561234567",
+      rfc: "GARC800101AB1",
       collectorId: 5,
       team: "Norte",
       teamLeader: "Ana Ruiz",

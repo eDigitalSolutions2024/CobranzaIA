@@ -45,7 +45,11 @@ function speakSegments(say: ReturnType<InstanceType<typeof VoiceResponse>['say']
 
 // Fallback: solo se usa si no se pudo ni siquiera arrancar el puente hacia OpenAI
 // Realtime (ej. falta OPENAI_API_KEY, o la llamada falla antes de conectar el stream).
-function sayAndHangup(message: string): string {
+// Número fijo del agente humano al que se avisa cuando un caso queda marcado
+// REQUIERE_HUMANO — configurable por .env sin necesitar redeploy.
+const HUMAN_AGENT_PHONE = process.env.HUMAN_AGENT_PHONE || '3319242792'
+
+export function sayAndHangup(message: string): string {
   const twiml = new VoiceResponse()
   speakSegments(twiml.say({ voice: VOICE, language: LANGUAGE }, ''), message)
   twiml.hangup()
@@ -109,6 +113,74 @@ export async function handleOutbound(req: Request, res: Response): Promise<void>
   } catch (err) {
     console.error('[Voice] handleOutbound error:', err)
     res.status(500).json({ error: 'Error al iniciar llamada' })
+  }
+}
+
+// Llamada informativa (no bridging en vivo) al agente humano fijo — se dispara solo con
+// el botón del dashboard, nunca automático. Lee los datos del caso con TTS y cuelga; el
+// agente humano marca al cliente por su cuenta después de escuchar el aviso.
+export async function handleNotifyHuman(req: Request, res: Response): Promise<void> {
+  const { clientId } = req.body as { clientId: string }
+
+  try {
+    const client = await Client.findById(clientId)
+    if (!client) {
+      res.status(404).json({ error: 'Cliente no encontrado' })
+      return
+    }
+
+    const reason = client.requiresHumanReason as string | null
+    const reasonText = reason ? ` Motivo: ${reason}.` : ''
+    const message = `Aviso del sistema de cobranza. El cliente ${client.name}, teléfono ${client.phone}, requiere atención de un agente humano.${reasonText}`
+
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
+    const toPhone = HUMAN_AGENT_PHONE.startsWith('+') ? HUMAN_AGENT_PHONE : `+52${HUMAN_AGENT_PHONE.replace(/\D/g, '')}`
+    const publicUrl = (process.env.PUBLIC_URL ?? getBaseUrl(req)).replace(/\/$/, '')
+
+    const call = await twilioClient.calls.create({
+      to: toPhone,
+      from: process.env.TWILIO_PHONE_NUMBER!,
+      twiml: sayAndHangup(message),
+      // Detecta si contestó una persona o un buzón de voz — no cambia lo que se dice,
+      // solo nos deja ver en logs si el aviso realmente llegó a alguien en vivo.
+      machineDetection: 'Enable',
+      statusCallback: `${publicUrl}/api/voice/notify-human-status`,
+      statusCallbackEvent: ['completed'],
+      statusCallbackMethod: 'POST',
+    })
+
+    client.requiresHuman = false
+    await client.save()
+
+    res.json({ callSid: call.sid, status: call.status })
+  } catch (err) {
+    console.error('[Voice] handleNotifyHuman error:', err)
+    res.status(500).json({ error: 'Error al notificar al agente' })
+  }
+}
+
+// Webhook público de Twilio (statusCallback de handleNotifyHuman) — deja rastro en logs.
+export async function handleNotifyHumanStatus(req: Request, res: Response): Promise<void> {
+  const { CallSid, CallStatus, CallDuration, AnsweredBy } = req.body as Record<string, string>
+  console.log(
+    `[Voice] Aviso a agente humano CallSid=${CallSid} status=${CallStatus} duración=${CallDuration}s contestó=${AnsweredBy ?? 'desconocido'}`
+  )
+  res.sendStatus(200)
+}
+
+// El dashboard hace polling de esto tras lanzar el aviso, para mostrar en vivo si contestó
+// el agente o cayó a buzón — se consulta directo a Twilio, no depende de que el webhook de
+// arriba ya haya llegado.
+export async function getNotifyHumanStatus(req: Request, res: Response): Promise<void> {
+  const callSid = String(req.params.callSid)
+
+  try {
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
+    const call = await twilioClient.calls(callSid).fetch()
+    res.json({ status: call.status, answeredBy: call.answeredBy, duration: call.duration })
+  } catch (err) {
+    console.error('[Voice] getNotifyHumanStatus error:', err)
+    res.status(500).json({ error: 'Error al consultar el estado de la llamada' })
   }
 }
 

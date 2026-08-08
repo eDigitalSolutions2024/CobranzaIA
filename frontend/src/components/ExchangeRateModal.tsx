@@ -82,7 +82,7 @@ export default function ExchangeRateModal({ isOpen, currentRate, onClose, onUpda
           <button
             onClick={handleSubmit}
             disabled={saving}
-            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="px-4 py-2 rounded-lg bg-brand hover:bg-brand-light disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? "Saving..." : "Update rate"}
           </button>

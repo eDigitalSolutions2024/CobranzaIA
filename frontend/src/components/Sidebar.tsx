@@ -3,9 +3,9 @@ import {
   Users,
   MessageSquare,
   MessageCircle,
-  BarChart3,
   Phone,
 } from "lucide-react"
+import logo from "../assets/logo-iqor 1.png"
 
 interface Props {
   page: string
@@ -18,7 +18,6 @@ const menu = [
   { id: "calls", name: "Calls", icon: Phone },
   { id: "conversations", name: "Conversations", icon: MessageCircle },
   { id: "messages", name: "Send WhatsApp", icon: MessageSquare },
-  { id: "analytics", name: "Analytics", icon: BarChart3 },
 ]
 
 export default function Sidebar({ page, setPage }: Props) {
@@ -26,6 +25,7 @@ export default function Sidebar({ page, setPage }: Props) {
     <aside className="w-72 border-r border-zinc-800 bg-zinc-900/50">
 
       <div className="border-b border-zinc-800 p-6">
+        <img src={logo} alt="Logo" className="mb-3 h-10 w-auto object-contain" />
         <h1 className="text-2xl font-bold">CobranzaAI</h1>
         <p className="mt-1 text-sm text-zinc-400">Smart Collection Platform</p>
       </div>
@@ -41,7 +41,7 @@ export default function Sidebar({ page, setPage }: Props) {
                 mb-2 flex w-full items-center gap-3
                 rounded-xl px-4 py-3 transition-all
                 ${isActive
-                  ? "bg-zinc-800 text-white"
+                  ? "bg-brand text-white"
                   : "text-zinc-300 hover:bg-zinc-800 hover:text-white"
                 }
               `}

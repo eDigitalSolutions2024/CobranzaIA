@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+@theme {
+  --color-brand: #0b1f4f;
+  --color-brand-light: #16316e;
+}
+
 :root {
   font-family: Inter, sans-serif;
 }

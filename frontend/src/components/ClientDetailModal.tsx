@@ -116,6 +116,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                   <h2 className="text-xl font-bold text-white truncate">{client.name}</h2>
                   <p className="text-sm text-zinc-400 mt-0.5 truncate">
                     {client.phone}
+                    {client.rfc && ` · RFC ${client.rfc}`}
                     {client.country && ` · ${client.country}`}
                     {client.customerId != null && ` · ID ${client.customerId}`}
                   </p>
