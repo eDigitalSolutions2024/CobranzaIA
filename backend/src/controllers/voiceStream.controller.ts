@@ -4,7 +4,7 @@ import mongoose from 'mongoose'
 import Call from '../models/Call'
 import Client from '../models/Client'
 import { runAction } from '../services/flowActions.service'
-import { OpenAIRealtimeSession, RealtimeFunctionCall } from '../services/openaiRealtime.service'
+import { OpenAIRealtimeSession, RealtimeFunctionCall, RealtimeUsage } from '../services/openaiRealtime.service'
 import { buildVoiceSystemPrompt, ClientInfo } from '../services/voiceConversation.service'
 import { normalizeRFC } from '../utils/rfc'
 
@@ -27,15 +27,48 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   // se corta la llamada antes de que alcance a decir la despedida.
   let awaitingHangupResponseCreation = false
   let hangupAfterResponseId: string | null = null
+  // Si la respuesta de despedida sale vacía (el modelo solo vuelve a llamar a una función
+  // sin decir nada), reintentamos pedirle que hable antes de colgar — máximo un par de
+  // veces, para no quedarnos esperando para siempre si el modelo simplemente no quiere
+  // hablar más.
+  let hangupFarewellSpoken = false
+  let hangupRetries = 0
+  const MAX_HANGUP_RETRIES = 2
   let ready = false
   let closed = false
   const pendingAudio: string[] = []
+  // Nombre del 'mark' que mandamos a Twilio después del último audio antes de colgar —
+  // Twilio lo regresa (evento 'mark') solo hasta que YA REPRODUJO todo el audio en cola,
+  // no cuando lo recibió. Cerrar con esto en vez de con responseDone evita cortar la
+  // despedida a media frase (responseDone solo dice que OpenAI terminó de GENERAR el
+  // audio, no que Twilio ya lo sacó por la bocina del teléfono).
+  let pendingHangupMark: string | null = null
+  let hangupMarkTimeout: NodeJS.Timeout | null = null
+  // Audio PCMU a 8kHz mono = 8000 muestras/seg, 1 byte/muestra = 8 bytes por milisegundo.
+  // Sumamos cuánto audio le hemos mandado a Twilio y comparamos contra el tiempo real
+  // transcurrido para saber cuánto le falta por REPRODUCIR (no por recibir) — necesario
+  // porque el 'mark' de confirmación de Twilio puede tardar (o no llegar, según el
+  // entorno) y un timeout fijo corto corta despedidas largas a media frase (visto en
+  // producción: 2 respuestas en cola necesitaban ~10s y el timeout de 4s las cortó).
+  const BYTES_PER_MS = 8
+  let totalAudioMsSent = 0
+  let firstAudioSentAt: number | null = null
 
   const session = new OpenAIRealtimeSession()
+
+  function audioBacklogMs(): number {
+    if (firstAudioSentAt === null) return 0
+    const elapsed = Date.now() - firstAudioSentAt
+    return Math.max(0, totalAudioMsSent - elapsed)
+  }
 
   function closeAll(): void {
     if (closed) return
     closed = true
+    if (hangupMarkTimeout) {
+      clearTimeout(hangupMarkTimeout)
+      hangupMarkTimeout = null
+    }
     session.close()
     try {
       twilioWs.close()
@@ -44,13 +77,50 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
     }
   }
 
+  function hangupAfterPlayback(): void {
+    if (!streamSid || twilioWs.readyState !== WebSocket.OPEN) {
+      closeAll()
+      return
+    }
+    const markName = `hangup-${Date.now()}`
+    pendingHangupMark = markName
+    twilioWs.send(JSON.stringify({ event: 'mark', streamSid, mark: { name: markName } }))
+    // El 'mark' de Twilio (ver case 'mark' abajo) cierra antes si llega — esto es solo
+    // la red de seguridad, dimensionada al audio real que falta por reproducir, con un
+    // margen y un tope máximo por si el conteo de bytes se desfasa por algún error.
+    const safetyDelay = Math.min(20000, Math.max(500, audioBacklogMs() + 500))
+    hangupMarkTimeout = setTimeout(() => {
+      if (pendingHangupMark === markName) closeAll()
+    }, safetyDelay)
+  }
+
   session.on('error', (err) => {
     console.error('[VoiceStream] Error de OpenAI Realtime:', err)
   })
 
+  // Se acumula con $inc (no overwrite) porque llegan varios response.done por llamada,
+  // uno por cada turno del agente — cada uno suma sus propios tokens al total de la Call.
+  function persistOpenAIUsage(usage: RealtimeUsage): void {
+    if (!callDocId) return
+    Call.findByIdAndUpdate(callDocId, {
+      $inc: {
+        'openaiUsage.totalTokens': usage.totalTokens,
+        'openaiUsage.inputTokens': usage.inputTokens,
+        'openaiUsage.outputTokens': usage.outputTokens,
+        'openaiUsage.inputTextTokens': usage.inputTextTokens,
+        'openaiUsage.inputAudioTokens': usage.inputAudioTokens,
+        'openaiUsage.outputTextTokens': usage.outputTextTokens,
+        'openaiUsage.outputAudioTokens': usage.outputAudioTokens,
+        'openaiUsage.responseCount': 1,
+      },
+    }).catch((err) => console.error('[VoiceStream] Error guardando uso de OpenAI:', err))
+  }
+
   session.on('audio', (payload) => {
     if (!streamSid || twilioWs.readyState !== WebSocket.OPEN) return
     isAgentSpeaking = true
+    if (firstAudioSentAt === null) firstAudioSentAt = Date.now()
+    totalAudioMsSent += Buffer.from(payload, 'base64').length / BYTES_PER_MS
     twilioWs.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }))
   })
 
@@ -69,22 +139,40 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
     }
   })
 
-  session.on('responseDone', (status, responseId) => {
+  session.on('responseDone', (status, responseId, usage) => {
     isAgentSpeaking = false
     if (status === 'cancelled' && streamSid && twilioWs.readyState === WebSocket.OPEN) {
       // Corta el audio ya en el buffer de Twilio para que no siga sonando la frase
       // que el servidor ya decidió cortar.
       twilioWs.send(JSON.stringify({ event: 'clear', streamSid }))
+      // Ese audio descartado ya no cuenta como "por reproducir" — si no reseteamos,
+      // audioBacklogMs() seguiría contándolo y alargaría de más el próximo colgado.
+      totalAudioMsSent = 0
+      firstAudioSentAt = null
     }
+    if (usage) persistOpenAIUsage(usage)
     if (!shouldHangup) return
-    if (hangupAfterResponseId) {
-      // Ya sabemos cuál es la respuesta de despedida — solo colgamos con SU responseDone,
-      // ignoramos el de la respuesta anterior (la que disparó la función) si llega después.
-      if (responseId === hangupAfterResponseId) closeAll()
-    } else if (!awaitingHangupResponseCreation) {
-      // No se disparó ninguna respuesta extra de despedida — comportamiento anterior.
-      closeAll()
+    if (awaitingHangupResponseCreation) return // aún no arrancó la respuesta que esperamos
+    if (hangupAfterResponseId && responseId !== hangupAfterResponseId) return // es de otra respuesta
+
+    if (!hangupAfterResponseId) {
+      // No se disparó ninguna respuesta extra de despedida — comportamiento base.
+      hangupAfterPlayback()
+      return
     }
+
+    if (!hangupFarewellSpoken && hangupRetries < MAX_HANGUP_RETRIES) {
+      // La respuesta que se suponía iba a traer la despedida salió vacía (el modelo solo
+      // volvió a llamar una función sin decir nada) — le damos otra oportunidad antes de
+      // colgar en silencio.
+      hangupRetries++
+      hangupAfterResponseId = null
+      awaitingHangupResponseCreation = true
+      session.createResponse()
+      return
+    }
+
+    hangupAfterPlayback()
   })
 
   session.on('userTranscript', (text) => {
@@ -96,6 +184,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
 
   session.on('agentTranscript', (text) => {
     if (!text || !callDocId) return
+    hangupFarewellSpoken = true
     console.log(`[VoiceStream] agente dijo: "${text}"`)
     Call.findByIdAndUpdate(callDocId, {
       $push: { transcript: { role: 'assistant', content: text, timestamp: new Date() } },
@@ -182,6 +271,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         }
         shouldHangup = true
         awaitingHangupResponseCreation = true
+        hangupFarewellSpoken = false
         session.sendFunctionCallOutput(callId, { ok: true })
         session.createResponse()
         break
@@ -192,6 +282,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         await call.save()
         shouldHangup = true
         awaitingHangupResponseCreation = true
+        hangupFarewellSpoken = false
         session.sendFunctionCallOutput(callId, { ok: true })
         session.createResponse()
         break
@@ -281,6 +372,15 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         if (event.media?.payload) {
           if (ready) session.appendAudio(event.media.payload)
           else pendingAudio.push(event.media.payload)
+        }
+        break
+
+      case 'mark':
+        // Twilio confirma que ya reprodujo todo el audio encolado antes de este mark —
+        // si es el mark de despedida que estábamos esperando, ahora sí es seguro colgar.
+        if (pendingHangupMark && event.mark?.name === pendingHangupMark) {
+          pendingHangupMark = null
+          closeAll()
         }
         break
 

@@ -1,6 +1,6 @@
 import { clearSession, getToken } from "./authStorage"
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3002/api"
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3003/api"
 
 function authHeaders(): Record<string, string> {
   const token = getToken()

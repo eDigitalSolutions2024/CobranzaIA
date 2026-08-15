@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getClientDetail } from "../services/clients"
+import { getClientDetail, createInvoice, updateInvoice, deleteInvoice } from "../services/clients"
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending", contacted: "Contacted", negotiating: "Negotiating",
@@ -46,9 +46,170 @@ const CALL_STATUS_LABEL: Record<string, string> = {
   failed: "Failed", requires_human: "Requires agent",
 }
 
+const INVOICE_STATUS_LABEL: Record<string, string> = {
+  pending: "Pending", paid: "Paid", overdue: "Overdue", cancelled: "Cancelled",
+}
+
+const INVOICE_STATUS_COLOR: Record<string, string> = {
+  pending: "bg-yellow-500/10 text-yellow-400",
+  paid: "bg-green-500/10 text-green-400",
+  overdue: "bg-red-500/10 text-red-400",
+  cancelled: "bg-zinc-500/10 text-zinc-400",
+}
+
 function formatDate(value: any): string {
   if (!value) return "—"
-  return new Date(value).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" })
+  // Las fechas de factura son "solo día" (sin hora) — se formatean en UTC para
+  // que no se corran un día al convertir a la zona horaria local del navegador.
+  return new Intl.DateTimeFormat("en-US", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(
+    new Date(value)
+  )
+}
+
+const MONTHS_EN = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+]
+
+function DateSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  // Estado propio: si solo derivara de `value`, en cuanto el padre recibe un
+  // string vacío (fecha aún incompleta) este componente "olvidaría" lo que el
+  // usuario ya había elegido y el select volvería al placeholder.
+  const initial = value ? value.split("-") : ["", "", ""]
+  const [y, setY] = useState(initial[0] ?? "")
+  const [m, setM] = useState(initial[1] ?? "")
+  const [d, setD] = useState(initial[2] ?? "")
+  const currentYear = new Date().getFullYear()
+  const years = Array.from({ length: 7 }, (_, i) => String(currentYear - 2 + i))
+
+  function update(part: "d" | "m" | "y", next: string) {
+    const nd = part === "d" ? next : d
+    const nm = part === "m" ? next : m
+    const ny = part === "y" ? next : y
+    if (part === "d") setD(next)
+    if (part === "m") setM(next)
+    if (part === "y") setY(next)
+    onChange(nd && nm && ny ? `${ny}-${nm}-${nd}` : "")
+  }
+
+  const selectClass = "rounded-lg bg-zinc-900 border border-zinc-700 px-2 py-2 text-sm text-white"
+
+  return (
+    <div className="flex gap-1.5">
+      <select value={d} onChange={(e) => update("d", e.target.value)} className={selectClass}>
+        <option value="">Día</option>
+        {Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, "0")).map((dd) => (
+          <option key={dd} value={dd}>{dd}</option>
+        ))}
+      </select>
+      <select value={m} onChange={(e) => update("m", e.target.value)} className={selectClass}>
+        <option value="">Mes</option>
+        {MONTHS_EN.map((label, i) => (
+          <option key={label} value={String(i + 1).padStart(2, "0")}>{label}</option>
+        ))}
+      </select>
+      <select value={y} onChange={(e) => update("y", e.target.value)} className={selectClass}>
+        <option value="">Año</option>
+        {years.map((yy) => (
+          <option key={yy} value={yy}>{yy}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+// Convierte una fecha ISO (guardada en UTC) al string "YYYY-MM-DD" que usa
+// DateSelect, sin pasar por la zona horaria local.
+function toDateInputValue(value: any): string {
+  if (!value) return ""
+  const d = new Date(value)
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0")
+  const day = String(d.getUTCDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+type InvoiceForm = {
+  invoiceNumber: string
+  amount: string
+  issueDate: string
+  dueDate: string
+  status: string
+  notes: string
+}
+
+function InvoiceFormFields({
+  form, onChange, onCancel, onSubmit, saving, submitLabel,
+}: {
+  form: InvoiceForm
+  onChange: (form: InvoiceForm) => void
+  onCancel: () => void
+  onSubmit: (e: React.FormEvent) => void
+  saving: boolean
+  submitLabel: string
+}) {
+  return (
+    <form onSubmit={onSubmit} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 grid grid-cols-2 gap-3">
+      <input
+        required
+        placeholder="Invoice #"
+        value={form.invoiceNumber}
+        onChange={(e) => onChange({ ...form, invoiceNumber: e.target.value })}
+        className="col-span-2 rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white"
+      />
+      <input
+        type="number"
+        placeholder="Amount"
+        value={form.amount}
+        onChange={(e) => onChange({ ...form, amount: e.target.value })}
+        className="rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white"
+      />
+      <select
+        value={form.status}
+        onChange={(e) => onChange({ ...form, status: e.target.value })}
+        className="rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white"
+      >
+        {Object.entries(INVOICE_STATUS_LABEL).map(([value, label]) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
+      </select>
+      <div>
+        <label className="text-xs text-zinc-500">Issue date</label>
+        <div className="mt-1">
+          <DateSelect value={form.issueDate} onChange={(v) => onChange({ ...form, issueDate: v })} />
+        </div>
+      </div>
+      <div>
+        <label className="text-xs text-zinc-500">Due date</label>
+        <div className="mt-1">
+          <DateSelect value={form.dueDate} onChange={(v) => onChange({ ...form, dueDate: v })} />
+        </div>
+      </div>
+      <textarea
+        placeholder="Notes (optional)"
+        value={form.notes}
+        onChange={(e) => onChange({ ...form, notes: e.target.value })}
+        className="col-span-2 rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white resize-none"
+        rows={2}
+      />
+      <div className="col-span-2 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-3 py-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 transition-colors disabled:opacity-50"
+        >
+          {saving ? "Saving..." : submitLabel}
+        </button>
+      </div>
+    </form>
+  )
 }
 
 function formatMoney(value: any): string {
@@ -81,18 +242,96 @@ interface Props {
   onClose: () => void
 }
 
+const EMPTY_INVOICE_FORM = { invoiceNumber: "", amount: "", issueDate: "", dueDate: "", status: "pending", notes: "" }
+
 export default function ClientDetailModal({ clientId, onClose }: Props) {
   const [data, setData] = useState<any>(null)
-  const [tab, setTab] = useState<"promises" | "calls">("promises")
+  const [tab, setTab] = useState<"promises" | "calls" | "invoices">("promises")
   const [expandedCall, setExpandedCall] = useState<string | null>(null)
+  const [invoiceForm, setInvoiceForm] = useState<InvoiceForm>(EMPTY_INVOICE_FORM)
+  const [showInvoiceForm, setShowInvoiceForm] = useState(false)
+  const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null)
+  const [savingInvoice, setSavingInvoice] = useState(false)
 
   useEffect(() => {
     if (!clientId) return
     setData(null)
     setTab("promises")
     setExpandedCall(null)
+    setShowInvoiceForm(false)
+    setEditingInvoiceId(null)
+    setInvoiceForm(EMPTY_INVOICE_FORM)
     getClientDetail(clientId).then(setData).catch(() => {})
   }, [clientId])
+
+  async function refresh() {
+    if (!clientId) return
+    getClientDetail(clientId).then(setData).catch(() => {})
+  }
+
+  async function handleAddInvoice(e: React.FormEvent) {
+    e.preventDefault()
+    if (!clientId || !invoiceForm.invoiceNumber.trim()) return
+    setSavingInvoice(true)
+    try {
+      await createInvoice(clientId, {
+        ...invoiceForm,
+        amount: invoiceForm.amount === "" ? 0 : Number(invoiceForm.amount),
+        issueDate: invoiceForm.issueDate || null,
+        dueDate: invoiceForm.dueDate || null,
+      })
+      setInvoiceForm(EMPTY_INVOICE_FORM)
+      setShowInvoiceForm(false)
+      await refresh()
+    } catch {
+      // noop — el usuario puede reintentar
+    } finally {
+      setSavingInvoice(false)
+    }
+  }
+
+  function startEditInvoice(inv: any) {
+    setShowInvoiceForm(false)
+    setEditingInvoiceId(inv._id)
+    setInvoiceForm({
+      invoiceNumber: inv.invoiceNumber ?? "",
+      amount: inv.amount != null ? String(inv.amount) : "",
+      issueDate: toDateInputValue(inv.issueDate),
+      dueDate: toDateInputValue(inv.dueDate),
+      status: inv.status ?? "pending",
+      notes: inv.notes ?? "",
+    })
+  }
+
+  function cancelEditInvoice() {
+    setEditingInvoiceId(null)
+    setInvoiceForm(EMPTY_INVOICE_FORM)
+  }
+
+  async function handleUpdateInvoice(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editingInvoiceId || !invoiceForm.invoiceNumber.trim()) return
+    setSavingInvoice(true)
+    try {
+      await updateInvoice(editingInvoiceId, {
+        ...invoiceForm,
+        amount: invoiceForm.amount === "" ? 0 : Number(invoiceForm.amount),
+        issueDate: invoiceForm.issueDate || null,
+        dueDate: invoiceForm.dueDate || null,
+      })
+      cancelEditInvoice()
+      await refresh()
+    } catch {
+      // noop — el usuario puede reintentar
+    } finally {
+      setSavingInvoice(false)
+    }
+  }
+
+  async function handleDeleteInvoice(invoiceId: string) {
+    await deleteInvoice(invoiceId)
+    await refresh()
+  }
 
   if (!clientId) return null
 
@@ -191,6 +430,14 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                 >
                   Calls ({data.calls?.length ?? 0})
                 </button>
+                <button
+                  onClick={() => setTab("invoices")}
+                  className={`px-4 py-3 text-sm font-medium transition-colors ${
+                    tab === "invoices" ? "border-b-2 border-blue-500 text-white" : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  Invoices ({data.invoices?.length ?? 0})
+                </button>
               </div>
 
               {/* Tab content */}
@@ -274,6 +521,77 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                         )}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {tab === "invoices" && (
+                  <div className="space-y-3">
+                    {!showInvoiceForm && !editingInvoiceId && (
+                      <button
+                        onClick={() => { setShowInvoiceForm(true); setInvoiceForm(EMPTY_INVOICE_FORM) }}
+                        className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 transition-colors"
+                      >
+                        + Add invoice
+                      </button>
+                    )}
+
+                    {showInvoiceForm && (
+                      <InvoiceFormFields
+                        form={invoiceForm}
+                        onChange={setInvoiceForm}
+                        onCancel={() => { setShowInvoiceForm(false); setInvoiceForm(EMPTY_INVOICE_FORM) }}
+                        onSubmit={handleAddInvoice}
+                        saving={savingInvoice}
+                        submitLabel="Save invoice"
+                      />
+                    )}
+
+                    {data.invoices.length === 0 && !showInvoiceForm && (
+                      <p className="text-zinc-500 text-sm text-center py-6">No invoices registered</p>
+                    )}
+
+                    {data.invoices.map((inv: any) =>
+                      editingInvoiceId === inv._id ? (
+                        <InvoiceFormFields
+                          key={inv._id}
+                          form={invoiceForm}
+                          onChange={setInvoiceForm}
+                          onCancel={cancelEditInvoice}
+                          onSubmit={handleUpdateInvoice}
+                          saving={savingInvoice}
+                          submitLabel="Update invoice"
+                        />
+                      ) : (
+                        <div key={inv._id} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-white">{inv.invoiceNumber}</p>
+                            <p className="text-sm text-zinc-400 mt-0.5">{formatMoney(inv.amount)} MXN</p>
+                            <p className="text-xs text-zinc-600 mt-1">
+                              {inv.issueDate ? `Issued ${formatDate(inv.issueDate)}` : ""}
+                              {inv.dueDate ? ` · Due ${formatDate(inv.dueDate)}` : ""}
+                            </p>
+                            {inv.notes && <p className="text-xs text-zinc-600 mt-1">{inv.notes}</p>}
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className={`rounded-full px-3 py-1 text-xs font-medium ${INVOICE_STATUS_COLOR[inv.status] || "bg-zinc-500/10 text-zinc-400"}`}>
+                              {INVOICE_STATUS_LABEL[inv.status] ?? inv.status}
+                            </span>
+                            <button
+                              onClick={() => startEditInvoice(inv)}
+                              className="text-xs text-zinc-500 hover:text-blue-400 transition-colors"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteInvoice(inv._id)}
+                              className="text-xs text-zinc-500 hover:text-red-400 transition-colors"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    )}
                   </div>
                 )}
               </div>

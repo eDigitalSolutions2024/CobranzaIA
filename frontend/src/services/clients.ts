@@ -32,3 +32,18 @@ export const updateClient = (id: string, data: any) =>
 
 export const deleteClient = (id: string) =>
   api(`/clients/${id}`, { method: "DELETE" })
+
+export const createInvoice = (clientId: string, data: any) =>
+  api(`/clients/${clientId}/invoices`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const updateInvoice = (invoiceId: string, data: any) =>
+  api(`/invoices/${invoiceId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  })
+
+export const deleteInvoice = (invoiceId: string) =>
+  api(`/invoices/${invoiceId}`, { method: "DELETE" })

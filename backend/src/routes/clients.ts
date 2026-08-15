@@ -11,6 +11,11 @@ import {
   downloadImportTemplate,
   deleteClient,
 } from "../controllers/clientController"
+import {
+  createInvoice,
+  updateInvoice,
+  deleteInvoice,
+} from "../controllers/invoiceController"
 import { requireAuth } from "../middleware/auth"
 
 const upload = multer({
@@ -49,5 +54,9 @@ router.post("/clients", requireAuth, createClient)
 router.patch("/clients/:id", requireAuth, updateClient)
 router.post("/clients/import", requireAuth, uploadClientsFile, importClients)
 router.delete("/clients/:id", requireAuth, deleteClient)
+
+router.post("/clients/:id/invoices", requireAuth, createInvoice)
+router.patch("/invoices/:invoiceId", requireAuth, updateInvoice)
+router.delete("/invoices/:invoiceId", requireAuth, deleteInvoice)
 
 export default router

@@ -12,6 +12,7 @@ import metricsRoutes from "./routes/metrics"
 import conversationRoutes from "./routes/conversations"
 import voiceRoutes from "./routes/voice.routes"
 import settingsRoutes from "./routes/settings"
+import usageRoutes from "./routes/usage"
 import { connectDB } from "./db"
 import { handleMediaStream } from "./controllers/voiceStream.controller"
 import { validateTwilioConfig } from "./config/twilio"
@@ -39,6 +40,7 @@ app.use("/api", metricsRoutes)
 app.use("/api", conversationRoutes)
 app.use("/api", voiceRoutes)
 app.use("/api", settingsRoutes)
+app.use("/api", usageRoutes)
 
 async function start() {
   if (!process.env.JWT_SECRET) {
@@ -51,7 +53,7 @@ async function start() {
   validateOpenAIConfig()
   startReminderScheduler()
 
-  const PORT = Number(process.env.PORT) || 3002
+  const PORT = Number(process.env.PORT) || 3003
   const server = http.createServer(app)
 
   // Puente de audio en tiempo real Twilio <-> OpenAI Realtime API

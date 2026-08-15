@@ -9,6 +9,19 @@ export interface RealtimeFunctionCall {
   arguments: string
 }
 
+// Desglose de tokens de una sola respuesta (evento response.done → response.usage) —
+// audio y texto se facturan a tarifas distintas, por eso se reportan separados y no
+// solo el total (ver config/pricing.ts).
+export interface RealtimeUsage {
+  totalTokens: number
+  inputTokens: number
+  outputTokens: number
+  inputTextTokens: number
+  inputAudioTokens: number
+  outputTextTokens: number
+  outputAudioTokens: number
+}
+
 export interface RealtimeSessionEvents {
   audio: (base64Payload: string) => void
   // Lo que transcribió el micrófono del cliente (solo para bitácora/CRM).
@@ -23,7 +36,9 @@ export interface RealtimeSessionEvents {
   // no colgar la llamada con el responseDone de una respuesta vieja cuando acabamos de
   // disparar una respuesta nueva (ej. la despedida tras requerir_humano/finalizar_llamada).
   responseCreated: (responseId: string) => void
-  responseDone: (status: string, responseId: string) => void
+  // usage viene null si esa respuesta no trajo bloque de uso (no debería pasar en la
+  // práctica, pero el evento no lo garantiza formalmente).
+  responseDone: (status: string, responseId: string, usage: RealtimeUsage | null) => void
   error: (err: Error) => void
   close: () => void
 }
@@ -67,19 +82,25 @@ export class OpenAIRealtimeSession extends EventEmitter {
                 // Reduce ruido de línea telefónica. "near_field": el micrófono
                 // (bocina del teléfono) está pegado a la boca del cliente.
                 noise_reduction: { type: 'near_field' },
-                // threshold más alto que el default (0.5): con create_response:true el
-                // propio servidor decide cuándo interrumpir al agente usando este mismo
-                // valor — en 0.5 se cortaba a media palabra con cualquier ruido/sonido
-                // de fondo del cliente, no solo cuando de verdad quería tomar la palabra.
-                // silence_duration_ms subido de 700ms a 5000ms: antes lanzaba una respuesta
-                // nueva con solo ~1s de silencio, sin darle al cliente tiempo de pensar antes
-                // de contestar — ahora espera hasta 5s de silencio real antes de asumir que
-                // terminó su turno.
+                // Historial: se probó server_vad con silence_duration_ms en 700ms (cortaba
+                // al cliente a media frase, sin darle tiempo de pensar), luego 5000ms
+                // (nunca se lograba ese silencio "perfecto" en una llamada real con ruido
+                // de línea/respiración, así que el turno no cerraba y la llamada se
+                // congelaba), luego 1500ms (funcional pero seguía siendo silencio puro —
+                // no distingue "terminé de hablar" de "hice una pausa para pensar").
+                //
+                // semantic_vad reemplaza esa medición ciega de silencio por un clasificador
+                // que entiende si la frase ya quedó completa semánticamente ("sí, el
+                // miércoles diecinueve" → responde casi de inmediato) o quedó a medias
+                // ("pues a mediados de..." → espera más aunque haya silencio) — más rápido
+                // en los casos claros SIN heredar el riesgo de cortar al cliente que tenía
+                // bajar silence_duration_ms a secas. eagerness:"medium" es el punto medio
+                // (ni "high", que corta más agresivo si el clasificador se equivoca; ni
+                // "low", que espera de más). Si tras probar en llamadas reales sigue
+                // sintiéndose lento, subir a "high"; si empieza a interrumpir, bajar a "low".
                 turn_detection: {
-                  type: 'server_vad',
-                  threshold: 0.65,
-                  prefix_padding_ms: 300,
-                  silence_duration_ms: 5000,
+                  type: 'semantic_vad',
+                  eagerness: 'medium',
                   create_response: true,
                 },
               },
@@ -160,7 +181,7 @@ export class OpenAIRealtimeSession extends EventEmitter {
             `[OpenAIRealtime] response.done status=${status} reason=${JSON.stringify(event.response?.status_details ?? null)}`
           )
         }
-        this.emit('responseDone', status, (event.response?.id as string) ?? '')
+        this.emit('responseDone', status, (event.response?.id as string) ?? '', parseUsage(event.response?.usage))
         break
       }
       default:
@@ -211,5 +232,23 @@ export class OpenAIRealtimeSession extends EventEmitter {
   close(): void {
     this.ws?.close()
     this.ws = null
+  }
+}
+
+// event.response.usage trae input_token_details/output_token_details con el desglose
+// texto vs. audio — si algún campo falta (respuesta cancelada, por ejemplo) se toma como 0
+// en vez de tronar.
+function parseUsage(raw: any): RealtimeUsage | null {
+  if (!raw) return null
+  const inputDetails = raw.input_token_details ?? {}
+  const outputDetails = raw.output_token_details ?? {}
+  return {
+    totalTokens: Number(raw.total_tokens) || 0,
+    inputTokens: Number(raw.input_tokens) || 0,
+    outputTokens: Number(raw.output_tokens) || 0,
+    inputTextTokens: Number(inputDetails.text_tokens) || 0,
+    inputAudioTokens: Number(inputDetails.audio_tokens) || 0,
+    outputTextTokens: Number(outputDetails.text_tokens) || 0,
+    outputAudioTokens: Number(outputDetails.audio_tokens) || 0,
   }
 }

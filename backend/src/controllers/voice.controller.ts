@@ -22,7 +22,7 @@ export function cleanText(text: string): string {
 }
 
 function getBaseUrl(req: Request): string {
-  const host = req.headers['x-forwarded-host'] ?? req.get('host') ?? 'localhost:3002'
+  const host = req.headers['x-forwarded-host'] ?? req.get('host') ?? 'localhost:3003'
   const proto = req.headers['x-forwarded-proto'] ?? req.protocol ?? 'https'
   return `${proto}://${host}`
 }
@@ -223,14 +223,26 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
 }
 
 export async function handleStatus(req: Request, res: Response): Promise<void> {
-  const { CallSid, CallStatus } = req.body as { CallSid: string; CallStatus: string }
+  const { CallSid, CallStatus, CallDuration } = req.body as { CallSid: string; CallStatus: string; CallDuration?: string }
+  // CallDuration solo viene poblado en el statusCallback final (Twilio lo calcula al
+  // colgar) — se guarda en cualquier status terminal, no solo 'completed'.
+  const durationSeconds = CallDuration !== undefined ? Number(CallDuration) : null
 
   try {
     if (['busy', 'failed', 'no-answer', 'canceled'].includes(CallStatus)) {
-      await Call.findOneAndUpdate({ callSid: CallSid, status: 'in_progress' }, { status: 'failed' })
+      await Call.findOneAndUpdate(
+        { callSid: CallSid, status: 'in_progress' },
+        { status: 'failed', ...(durationSeconds !== null ? { durationSeconds } : {}) }
+      )
     } else if (CallStatus === 'completed') {
       // Marca como completadas las llamadas que se cortaron a media conversación
-      await Call.findOneAndUpdate({ callSid: CallSid, status: 'in_progress' }, { status: 'completed' })
+      await Call.findOneAndUpdate(
+        { callSid: CallSid, status: 'in_progress' },
+        { status: 'completed', ...(durationSeconds !== null ? { durationSeconds } : {}) }
+      )
+      if (durationSeconds !== null) {
+        await Call.findOneAndUpdate({ callSid: CallSid, status: { $ne: 'in_progress' } }, { durationSeconds })
+      }
 
       // Resumen legible para el CRM. Ya no crea promesas de pago aquí: eso lo hace
       // voiceStream.controller.ts en vivo, en cuanto el agente marca PROMESA_PAGO.
@@ -259,6 +271,10 @@ export async function handleStatus(req: Request, res: Response): Promise<void> {
 
       const analysis = await analyzeCallTranscript(call.transcript, clientInfo)
       call.summary = analysis.summary
+      call.claudeUsage = {
+        inputTokens: analysis.usage.inputTokens,
+        outputTokens: analysis.usage.outputTokens,
+      }
       await call.save()
       console.log(`[Voice] Resumen post-llamada CallSid ${CallSid}: ${analysis.summary}`)
     }

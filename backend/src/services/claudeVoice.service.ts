@@ -227,6 +227,7 @@ export interface CallAnalysis {
   hasAgreement: boolean
   promises: PaymentInstallment[]
   summary: string
+  usage: { inputTokens: number; outputTokens: number }
 }
 
 export async function analyzeCallTranscript(
@@ -236,7 +237,7 @@ export async function analyzeCallTranscript(
   const relevant = transcript.filter(t => !t.content.startsWith('['))
 
   if (relevant.length < 2) {
-    return { hasAgreement: false, promises: [], summary: 'Llamada sin conversación útil' }
+    return { hasAgreement: false, promises: [], summary: 'Llamada sin conversación útil', usage: { inputTokens: 0, outputTokens: 0 } }
   }
 
   const transcriptText = relevant
@@ -272,6 +273,8 @@ Reglas:
     messages: [{ role: 'user', content: transcriptText }],
   })
 
+  const usage = { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens }
+
   try {
     const rawText = response.content[0].type === 'text' ? response.content[0].text.trim() : '{}'
     const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
@@ -280,10 +283,13 @@ Reglas:
       hasAgreement: Boolean(parsed.hasAgreement),
       promises: Array.isArray(parsed.promises) ? parsed.promises : [],
       summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      usage,
     }
   } catch {
     console.error('[Voice] Error al parsear análisis post-llamada')
-    return { hasAgreement: false, promises: [], summary: 'Error al analizar transcript' }
+    // La llamada a Claude sí se cobró aunque el parseo del JSON haya fallado — se
+    // reporta el uso real para que las métricas de consumo no queden por debajo.
+    return { hasAgreement: false, promises: [], summary: 'Error al analizar transcript', usage }
   }
 }
 

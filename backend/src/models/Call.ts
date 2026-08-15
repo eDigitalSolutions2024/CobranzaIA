@@ -6,6 +6,22 @@ export interface ICallTranscript {
   timestamp: Date
 }
 
+export interface IOpenAIUsage {
+  totalTokens: number
+  inputTokens: number
+  outputTokens: number
+  inputTextTokens: number
+  inputAudioTokens: number
+  outputTextTokens: number
+  outputAudioTokens: number
+  responseCount: number
+}
+
+export interface IClaudeUsage {
+  inputTokens: number
+  outputTokens: number
+}
+
 export interface ICall extends Document {
   phone: string
   clientId?: mongoose.Types.ObjectId
@@ -19,6 +35,14 @@ export interface ICall extends Document {
   flowStateId?: string | null
   flowContext?: Record<string, any>
   summary?: string | null
+  // Duración reportada por Twilio en el statusCallback final (CallDuration, en segundos) —
+  // null hasta que la llamada termina y Twilio manda el webhook 'completed'.
+  durationSeconds?: number | null
+  // Tokens consumidos en OpenAI Realtime API, acumulados de todas las respuestas de la
+  // llamada (ver openaiRealtime.service.ts / voiceStream.controller.ts).
+  openaiUsage: IOpenAIUsage
+  // Tokens de Claude Haiku usados en el resumen post-llamada (analyzeCallTranscript).
+  claudeUsage: IClaudeUsage
   createdAt: Date
   updatedAt: Date
 }
@@ -48,6 +72,21 @@ const CallSchema = new Schema<ICall>(
     flowStateId: { type: String, default: null },
     flowContext: { type: Schema.Types.Mixed, default: {} },
     summary: { type: String, default: null },
+    durationSeconds: { type: Number, default: null },
+    openaiUsage: {
+      totalTokens: { type: Number, default: 0 },
+      inputTokens: { type: Number, default: 0 },
+      outputTokens: { type: Number, default: 0 },
+      inputTextTokens: { type: Number, default: 0 },
+      inputAudioTokens: { type: Number, default: 0 },
+      outputTextTokens: { type: Number, default: 0 },
+      outputAudioTokens: { type: Number, default: 0 },
+      responseCount: { type: Number, default: 0 },
+    },
+    claudeUsage: {
+      inputTokens: { type: Number, default: 0 },
+      outputTokens: { type: Number, default: 0 },
+    },
   },
   { timestamps: true }
 )
