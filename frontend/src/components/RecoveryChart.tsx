@@ -11,7 +11,7 @@ import {
   Tooltip,
 } from "recharts"
 
-import { API_URL } from "../services/api"
+import { getClients } from "../services/clients"
 
 export default function RecoveryChart() {
 
@@ -30,15 +30,9 @@ export default function RecoveryChart() {
 
     try {
 
-      const response =
+      const clients =
 
-        await fetch(
-          `${API_URL}/clients`
-        )
-
-      const { clients } =
-
-        await response.json()
+        await getClients()
 
       const grouped =
         clients.reduce(
@@ -55,7 +49,7 @@ export default function RecoveryChart() {
               )
 
               .toLocaleDateString(
-                "es-MX",
+                "en-US",
                 {
 
                   weekday:
@@ -153,7 +147,7 @@ export default function RecoveryChart() {
           "
         >
 
-          Recuperación semanal
+          Weekly recovery
 
         </h2>
 
@@ -164,7 +158,7 @@ export default function RecoveryChart() {
           "
         >
 
-          Cobranza registrada
+          Collections recorded
 
         </p>
 
@@ -205,10 +199,10 @@ export default function RecoveryChart() {
                     `$${Number(
                       value
                     ).toLocaleString(
-                      "es-MX"
+                      "en-US"
                     )}`,
 
-                    "Cobranza",
+                    "Collections",
 
                   ]
 

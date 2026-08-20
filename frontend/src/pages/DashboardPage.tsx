@@ -23,12 +23,12 @@ export default function DashboardPage() {
 
       const formatted = clientsData.map((client: any) => ({
         nombre: client.name,
-        deuda: `$${Number(client.debt).toLocaleString("es-MX")}`,
+        deuda: `$${Number(client.debt).toLocaleString("en-US")}`,
         estado: client.status ?? "pending",
         riesgo: client.risk,
         canal: client.channel,
         ultimoContacto: client.lastContactAt
-          ? new Date(client.lastContactAt).toLocaleDateString("es-MX")
+          ? new Date(client.lastContactAt).toLocaleDateString("en-US")
           : "—",
       }))
 
@@ -57,56 +57,56 @@ export default function DashboardPage() {
     <>
       <div>
         <h1 className="text-4xl font-bold">Dashboard</h1>
-        <p className="mt-2 text-zinc-400">Bienvenido de nuevo.</p>
+        <p className="mt-2 text-zinc-400">Welcome back.</p>
       </div>
 
       <div className="mt-8 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard
-          title="Deuda total activa"
+          title="Total active debt"
           value={
             loading
               ? "..."
-              : `$${Number(metrics?.totalDebt || 0).toLocaleString("es-MX")}`
+              : `$${Number(metrics?.totalDebt || 0).toLocaleString("en-US")}`
           }
           change=""
         />
 
         <KpiCard
-          title="Clientes activos"
+          title="Active clients"
           value={loading ? "..." : String(metrics?.activeClients ?? 0)}
           change=""
         />
 
         <KpiCard
-          title="Promesas de pago"
+          title="Payment promises"
           value={loading ? "..." : String(metrics?.paymentPromises ?? 0)}
           change=""
         />
 
         <KpiCard
-          title="Tasa de respuesta"
+          title="Response rate"
           value={loading ? "..." : `${metrics?.responseRate ?? 0}%`}
           change=""
         />
       </div>
 
-      {/* Desglose de riesgo */}
+      {/* Risk breakdown */}
       {metrics && (
         <div className="mt-4 grid gap-4 grid-cols-3">
           <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center">
-            <p className="text-sm text-zinc-400">Riesgo Alto</p>
+            <p className="text-sm text-zinc-400">High Risk</p>
             <p className="text-2xl font-bold text-red-400 mt-1">
               {metrics.riskBreakdown?.high ?? 0}
             </p>
           </div>
           <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-center">
-            <p className="text-sm text-zinc-400">Riesgo Medio</p>
+            <p className="text-sm text-zinc-400">Medium Risk</p>
             <p className="text-2xl font-bold text-yellow-400 mt-1">
               {metrics.riskBreakdown?.medium ?? 0}
             </p>
           </div>
           <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-4 text-center">
-            <p className="text-sm text-zinc-400">Riesgo Bajo</p>
+            <p className="text-sm text-zinc-400">Low Risk</p>
             <p className="text-2xl font-bold text-green-400 mt-1">
               {metrics.riskBreakdown?.low ?? 0}
             </p>
@@ -114,25 +114,25 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Métricas de llamadas */}
+      {/* Voice call metrics */}
       {metrics?.callStats && (
         <div className="mt-4">
-          <h2 className="text-sm font-medium text-zinc-500 mb-3 uppercase tracking-wider">Llamadas de voz</h2>
+          <h2 className="text-sm font-medium text-zinc-500 mb-3 uppercase tracking-wider">Voice calls</h2>
           <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 text-center">
-              <p className="text-sm text-zinc-400">Total llamadas</p>
+              <p className="text-sm text-zinc-400">Total calls</p>
               <p className="text-2xl font-bold text-white mt-1">{metrics.callStats.total}</p>
             </div>
             <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-4 text-center">
-              <p className="text-sm text-zinc-400">Completadas</p>
+              <p className="text-sm text-zinc-400">Completed</p>
               <p className="text-2xl font-bold text-green-400 mt-1">{metrics.callStats.completed ?? 0}</p>
             </div>
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-center">
-              <p className="text-sm text-zinc-400">Con promesa</p>
+              <p className="text-sm text-zinc-400">With promise</p>
               <p className="text-2xl font-bold text-emerald-400 mt-1">{metrics.callStats.withPromise}</p>
             </div>
             <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center">
-              <p className="text-sm text-zinc-400">Requieren asesor</p>
+              <p className="text-sm text-zinc-400">Require agent</p>
               <p className="text-2xl font-bold text-orange-400 mt-1">{metrics.callStats.requires_human ?? 0}</p>
             </div>
           </div>
@@ -150,9 +150,9 @@ export default function DashboardPage() {
         <div className="flex justify-end mb-4">
           <button
             onClick={() => setOpenModal(true)}
-            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl"
+            className="bg-brand hover:bg-brand-light text-white px-4 py-2 rounded-xl"
           >
-            Nuevo cliente
+            New client
           </button>
         </div>
 

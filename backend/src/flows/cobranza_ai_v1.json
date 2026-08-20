@@ -1,0 +1,182 @@
+{
+  "flow_id": "cobranza_ai_v1",
+  "name": "Agente IA de Cobranza",
+  "version": "1.0.0",
+  "start_state": "start",
+
+  "states": [
+    {
+      "id": "start",
+      "type": "message",
+      "text": "Hola, soy el asistente virtual del departamento de cobranza. Me comunico respecto a su cuenta.",
+      "next": "verify_identity"
+    },
+    {
+      "id": "verify_identity",
+      "type": "collect",
+      "prompt": "Para proteger su información, ¿podría confirmar su nombre completo, tal como aparece en su cuenta?",
+
+      "validation": {
+        "type": "identity",
+        "max_attempts": 3,
+        "on_success": "load_account",
+        "on_failure": "identity_failed"
+      }
+    },
+    {
+      "id": "identity_failed",
+      "type": "decision",
+      "condition": "attempts >= 3",
+      "true": "transfer_agent",
+      "false": "verify_identity"
+    },
+    {
+      "id": "load_account",
+      "type": "api_call",
+      "service": "crm",
+      "action": "get_account",
+      "next": "present_debt"
+    },
+    {
+      "id": "present_debt",
+      "type": "message",
+      "dynamic": true,
+      "template": "Detectamos un saldo pendiente de {{balance}} correspondiente a {{invoice_count}} factura(s). ¿Reconoce este adeudo?",
+      "next": "debt_recognition"
+    },
+    {
+      "id": "debt_recognition",
+      "type": "intent",
+      "intents": {
+        "recognize_debt": "aging_strategy",
+        "deny_debt": "create_ticket",
+        "already_paid": "verify_payment",
+        "talk_human": "transfer_agent"
+      }
+    },
+    {
+      "id": "aging_strategy",
+      "type": "decision",
+      "field": "days_overdue",
+
+      "rules": [
+        {
+          "max": 0,
+          "next": "current"
+        },
+        {
+          "min": 1,
+          "max": 15,
+          "next": "early_overdue"
+        },
+        {
+          "min": 16,
+          "max": 30,
+          "next": "medium_overdue"
+        },
+        {
+          "min": 31,
+          "max": 60,
+          "next": "late_overdue"
+        }
+      ]
+    },
+    {
+      "id": "current",
+      "type": "message",
+      "text": "Su pago está próximo a vencer. Le recordamos realizarlo oportunamente.",
+      "next": "send_payment"
+    },
+    {
+      "id": "early_overdue",
+      "type": "collect",
+      "prompt": "¿Qué fecha estima para realizar su pago?",
+      "next": "save_commitment"
+    },
+    {
+      "id": "medium_overdue",
+      "type": "collect",
+      "prompt": "Podemos registrar una promesa de pago de hasta quince días naturales. ¿Qué fecha propone?",
+      "next": "save_commitment"
+    },
+    {
+      "id": "late_overdue",
+      "type": "collect",
+      "prompt": "Podemos ofrecer opciones de convenio o liquidación. ¿Desea conocerlas?",
+      "next": "save_commitment"
+    },
+    {
+      "id": "save_commitment",
+      "type": "api_call",
+      "service": "crm",
+      "action": "create_payment_commitment",
+      "next": "confirm_commitment"
+    },
+    {
+      "id": "confirm_commitment",
+      "type": "message",
+      "dynamic": true,
+      "template": "Confirmo que el compromiso quedó registrado por {{amount}} con fecha {{payment_date}}.",
+      "next": "schedule_reminder"
+    },
+    {
+      "id": "schedule_reminder",
+      "type": "api_call",
+      "service": "crm",
+      "action": "schedule_reminder",
+      "next": "send_payment"
+    },
+    {
+      "id": "send_payment",
+      "type": "api_call",
+      "service": "whatsapp",
+      "action": "send_payment_information",
+      "next": "finish"
+    },
+    {
+      "id": "verify_payment",
+      "type": "api_call",
+      "service": "payments",
+      "action": "verify_payment",
+      "next": "payment_result"
+    },
+    {
+      "id": "payment_result",
+      "type": "decision",
+      "condition": "payment_exists",
+      "true": "close_case",
+      "false": "request_receipt"
+    },
+    {
+      "id": "request_receipt",
+      "type": "message",
+      "text": "No encontramos el pago registrado. ¿Podría enviar su comprobante por WhatsApp?",
+      "next": "finish"
+    },
+    {
+      "id": "close_case",
+      "type": "api_call",
+      "service": "crm",
+      "action": "close_case",
+      "next": "finish"
+    },
+    {
+      "id": "create_ticket",
+      "type": "api_call",
+      "service": "crm",
+      "action": "create_clarification_ticket",
+      "next": "transfer_agent"
+    },
+    {
+      "id": "transfer_agent",
+      "type": "transfer",
+      "destination": "human_agent",
+      "reason": "customer_requires_human"
+    },
+    {
+      "id": "finish",
+      "type": "end",
+      "text": "Gracias por su tiempo. Que tenga un excelente día."
+    }
+  ]
+}

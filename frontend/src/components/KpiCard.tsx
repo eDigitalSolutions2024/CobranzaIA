@@ -28,7 +28,7 @@ export default function KpiCard({
     ) {
 
       return value.toLocaleString(
-        "es-MX"
+        "en-US"
       )
 
     }

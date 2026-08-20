@@ -1,31 +1,33 @@
 import { useEffect, useState } from "react"
-import { getClients } from "../services/clients"
+import { getClients, exportClientsExcel, deleteClient } from "../services/clients"
 import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
+import ImportClientsModal from "../components/ImportClientsModal"
+import { ChevronDown, ChevronUp } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
-  pending: "Pendiente",
-  contacted: "Contactado",
-  negotiating: "Negociando",
-  promised: "Promesa",
-  paid: "Pagado",
-  no_response: "Sin respuesta",
+  pending: "Pending",
+  contacted: "Contacted",
+  negotiating: "Negotiating",
+  promised: "Promise",
+  paid: "Paid",
+  no_response: "No response",
 }
 
-const STATUS_COLOR: Record<string, string> = {
+/*const STATUS_COLOR: Record<string, string> = {
   pending: "bg-blue-500/10 text-blue-400",
   contacted: "bg-purple-500/10 text-purple-400",
   negotiating: "bg-orange-500/10 text-orange-400",
   promised: "bg-yellow-500/10 text-yellow-400",
   paid: "bg-green-500/10 text-green-400",
   no_response: "bg-zinc-500/10 text-zinc-400",
-}
+}*/
 
 const RISK_LABEL: Record<string, string> = {
-  low: "Bajo",
-  medium: "Medio",
-  high: "Alto",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
 }
 
 const RISK_COLOR: Record<string, string> = {
@@ -37,8 +39,27 @@ const RISK_COLOR: Record<string, string> = {
 export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
   const [openModal, setOpenModal] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
+  const [notifyingId, setNotifyingId] = useState<string | null>(null)
+  const [notifyResult, setNotifyResult] = useState<Record<string, { label: string; tone: "success" | "warning" | "error" }>>({})
   const [detailId, setDetailId] = useState<string | null>(null)
+  const [expandedClientId, setExpandedClientId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [editingClient, setEditingClient] = useState<any | null>(null)
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      await exportClientsExcel()
+    } catch (error) {
+      console.log(error)
+      alert("Error exporting Excel file")
+    } finally {
+      setExporting(false)
+    }
+  }
 
   async function handleCall(clientId: string) {
     setCallingId(clientId)
@@ -48,9 +69,81 @@ export default function ClientsPage() {
         body: JSON.stringify({ clientId }),
       })
     } catch {
-      alert("Error al iniciar la llamada")
+      alert("Error starting the call")
     } finally {
       setCallingId(null)
+    }
+  }
+
+  function showNotifyResult(clientId: string, result: { label: string; tone: "success" | "warning" | "error" }) {
+    setNotifyResult((prev) => ({ ...prev, [clientId]: result }))
+    setTimeout(() => {
+      setNotifyResult((prev) => {
+        const next = { ...prev }
+        delete next[clientId]
+        return next
+      })
+    }, 8000)
+  }
+
+  function describeCallOutcome(data: { status: string; answeredBy: string | null }): { label: string; tone: "success" | "warning" | "error" } {
+    if (data.status === "no-answer") return { label: "No contestó", tone: "error" }
+    if (data.status === "busy") return { label: "Línea ocupada", tone: "error" }
+    if (data.status === "failed" || data.status === "canceled") return { label: "No se pudo conectar", tone: "error" }
+    if (data.answeredBy === "human") return { label: "Contestó el agente", tone: "success" }
+    if (data.answeredBy && data.answeredBy.startsWith("machine")) return { label: "Cayó a buzón de voz", tone: "warning" }
+    return { label: "Llamada completada", tone: "warning" }
+  }
+
+  async function pollNotifyStatus(clientId: string, callSid: string, attempt = 0) {
+    if (attempt > 12) {
+      showNotifyResult(clientId, { label: "No se pudo confirmar", tone: "warning" })
+      return
+    }
+    try {
+      const data = await api(`/voice/notify-human-status/${callSid}`)
+      const finished = ["completed", "busy", "no-answer", "failed", "canceled"].includes(data.status)
+      if (!finished) {
+        setTimeout(() => pollNotifyStatus(clientId, callSid, attempt + 1), 3000)
+        return
+      }
+      showNotifyResult(clientId, describeCallOutcome(data))
+    } catch {
+      setTimeout(() => pollNotifyStatus(clientId, callSid, attempt + 1), 3000)
+    }
+  }
+
+  async function handleNotifyHuman(clientId: string) {
+    setNotifyingId(clientId)
+    try {
+      const { callSid } = await api("/voice/notify-human", {
+        method: "POST",
+        body: JSON.stringify({ clientId }),
+      })
+      setClients((prev) => prev.map((c) => (c._id === clientId ? { ...c, requiresHuman: false } : c)))
+      setNotifyingId(null)
+      if (callSid) pollNotifyStatus(clientId, callSid)
+    } catch {
+      alert("Error notifying the human agent")
+      setNotifyingId(null)
+    }
+  }
+
+  async function onClickAccordion(id: string) {
+    setExpandedClientId((prev) => (prev === id ? null : id))
+  }
+
+  async function handleDelete(clientId: string, clientName: string) {
+    if (!confirm(`Delete client "${clientName}"? This cannot be undone.`)) return
+    setDeletingId(clientId)
+    try {
+      await deleteClient(clientId)
+      setClients((prev) => prev.filter((c) => c._id !== clientId))
+    } catch (error) {
+      console.log(error)
+      alert("Error deleting client")
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -73,15 +166,30 @@ export default function ClientsPage() {
 
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-4xl font-bold">Clientes</h1>
-            <p className="mt-2 text-zinc-400">Gestión inteligente de cobranza</p>
+            <h1 className="text-4xl font-bold">Clients</h1>
+            <p className="mt-2 text-zinc-400">Smart collection management</p>
           </div>
-          <button
-            onClick={() => setOpenModal(true)}
-            className="rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500"
-          >
-            Nuevo cliente
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setImportOpen(true)}
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
+            >
+              Import Excel
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+            >
+              {exporting ? "Exporting..." : "Export Excel"}
+            </button>
+            <button
+              onClick={() => { setEditingClient(null); setOpenModal(true) }}
+              className="rounded-xl bg-brand px-5 py-3 font-medium hover:bg-brand-light cursor-pointer"
+            >
+              New client
+            </button>
+          </div>
         </div>
 
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
@@ -89,43 +197,47 @@ export default function ClientsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-zinc-800 text-left">
-                  <th className="pb-4 text-sm text-zinc-500">Cliente</th>
-                  <th className="pb-4 text-sm text-zinc-500">Teléfono</th>
-                  <th className="pb-4 text-sm text-zinc-500">Deuda</th>
-                  <th className="pb-4 text-sm text-zinc-500">Estado</th>
-                  <th className="pb-4 text-sm text-zinc-500">Riesgo IA</th>
-                  <th className="pb-4 text-sm text-zinc-500">Canal</th>
-                  <th className="pb-4 text-sm text-zinc-500">Último contacto</th>
-                  <th className="pb-4 text-sm text-zinc-500">Intención</th>
-                  <th className="pb-4 text-sm text-zinc-500">Acciones</th>
+                  <th className="pb-4 text-sm text-zinc-500">Customer</th>
+                  <th className="pb-4 text-sm text-zinc-500">Phone</th>
+                  <th className="pb-4 text-sm text-zinc-500">USD Amount</th>
+                  <th className="pb-4 text-sm text-zinc-500">Risk</th>
+                  <th className="pb-4 text-sm text-zinc-500">Last contact</th>
+                  <th className="pb-4 text-sm text-zinc-500">Payment Promise</th>
+                  <th className="pb-4 text-sm text-zinc-500">Classification</th>
                 </tr>
               </thead>
               <tbody>
-                {clients.map((client) => (
+                {clients.map((client) => {
+                  const expanded = expandedClientId === client._id;
+                  return (
+                  <>
                   <tr
                     key={client._id}
-                    className="border-b border-zinc-800 cursor-pointer hover:bg-zinc-800/40 transition-colors"
-                    onClick={() => setDetailId(client._id)}
+                    className={`border-b transition-colors ${
+                      client.requiresHuman
+                        ? "border-red-900/60 bg-red-500/10 hover:bg-red-500/20"
+                        : "border-zinc-800 hover:bg-zinc-800/40"
+                    }`}
                   >
 
-                    <td className="py-4 font-medium">{client.name}</td>
-
+                    <td onClick={() => setDetailId(client._id)} className="py-4 font-medium cursor-pointer">
+                      <div className="flex items-center gap-2">
+                        {client.name}
+                        {client.requiresHuman && (
+                          <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-400">
+                            Needs agent
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="py-4 text-zinc-400">{client.phone}</td>
+                    <td className="py-4 text-zinc-300">{client.agingDays ?? "—"}</td>
+                    <td className="py-4 text-zinc-300">
 
-                    <td className="py-4">
-                      ${Number(client.debt).toLocaleString("es-MX")}
+                      {client.usdAmount != null
+                        ? `$${Number(client.usdAmount).toLocaleString("en-US")}`
+                        : "—"}
                     </td>
-
-                    <td className="py-4">
-                      <span
-                        className={`rounded-full px-3 py-1 text-sm ${
-                          STATUS_COLOR[client.status] || "bg-blue-500/10 text-blue-400"
-                        }`}
-                      >
-                        {STATUS_LABEL[client.status] || client.status}
-                      </span>
-                    </td>
-
                     <td className="py-4">
                       <span
                         className={`rounded-full px-3 py-1 text-sm ${
@@ -135,15 +247,11 @@ export default function ClientsPage() {
                         {RISK_LABEL[client.risk] || client.risk}
                       </span>
                     </td>
-
-                    <td className="py-4 text-zinc-300">{client.channel}</td>
-
                     <td className="py-4 text-zinc-500">
                       {client.lastContactAt
-                        ? new Date(client.lastContactAt).toLocaleDateString("es-MX")
+                        ? new Date(client.lastContactAt).toLocaleDateString("en-US")
                         : "—"}
                     </td>
-
                     <td className="py-4">
                       {client.lastIntent && client.lastIntent !== "general" && (
                         <span className="rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-300">
@@ -151,39 +259,261 @@ export default function ClientsPage() {
                         </span>
                       )}
                     </td>
-
-                    <td className="py-4">
+                       <td>
+                    </td>
+                    <td>
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleCall(client._id) }}
-                        disabled={callingId === client._id}
-                        className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-                      >
-                        {callingId === client._id ? (
-                          <>
+                      onClick={() => onClickAccordion(client._id)}
+                      className="text-blue-400 hover:text-blue-300 flex items center align-center justify-center gap-2 cursor-pointer"
+                    >
+                      {expanded ? (
+                      <>
+                        <p>Hide</p>
+                        <ChevronDown size={24} />
+                      </>
+                    ) : (
+                      <>
+                        <p>Show</p>
+                        <ChevronUp size={24} />
+                      </>
+                    )}
+                    </button>
+                    </td>
+                    <td className="py-4">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleCall(client._id) }}
+                          disabled={callingId === client._id}
+                          className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                        >
+                          {callingId === client._id ? (
+                            <>
+                              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                              </svg>
+                              Calling...
+                            </>
+                          ) : (
+                            <>
+                              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+                              </svg>
+                              Call
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleNotifyHuman(client._id) }}
+                          disabled={notifyingId === client._id}
+                          className="flex items-center gap-1.5 rounded-lg bg-red-600/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                        >
+                          {notifyingId === client._id ? (
+                            <>
+                              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                              </svg>
+                              Notifying...
+                            </>
+                          ) : (
+                            <>
+                              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-8.25 3h.008v.008h-.008V15z" />
+                              </svg>
+                              Notify agent
+                            </>
+                          )}
+                        </button>
+
+                        {notifyResult[client._id] && (
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium whitespace-nowrap ${
+                              notifyResult[client._id].tone === "success"
+                                ? "bg-emerald-500/15 text-emerald-400"
+                                : notifyResult[client._id].tone === "warning"
+                                  ? "bg-amber-500/15 text-amber-400"
+                                  : "bg-red-500/15 text-red-400"
+                            }`}
+                          >
+                            {notifyResult[client._id].label}
+                          </span>
+                        )}
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setEditingClient(client); setOpenModal(true) }}
+                          className="flex items-center gap-1.5 rounded-lg bg-blue-600/20 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-600/40 transition-colors cursor-pointer"
+                        >
+                          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                          </svg>
+                          Edit
+                        </button>
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDelete(client._id, client.name) }}
+                          disabled={deletingId === client._id}
+                          className="flex items-center gap-1.5 rounded-lg bg-red-600/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                        >
+                          {deletingId === client._id ? (
                             <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
                             </svg>
-                            Llamando...
-                          </>
-                        ) : (
-                          <>
-                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
-                              <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+                          ) : (
+                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m2 0-1 12a2 2 0 01-2 2H8a2 2 0 01-2-2L5 7h14z" />
                             </svg>
-                            Llamar
-                          </>
-                        )}
-                      </button>
+                          )}
+                          Delete
+                        </button>
+                      </div>
                     </td>
-
                   </tr>
-                ))}
+                 {expanded && (
+                  <tr className="bg-zinc-950/50">
+                    <td colSpan={9} className="p-5">
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="border-b border-zinc-800">
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Country
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Customer ID
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Team
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Team Leader
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Collector
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Invoice #
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Create Date
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Due Date
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Aging Bucket
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Loan / Lease
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Debt
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Status
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Channel
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Contact
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Next Action
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Payment Promise
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Date Promise
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Intent
+                              </th>
+                            </tr>
+                          </thead>
+
+                          <tbody>
+                            <tr className="border-b border-zinc-800">
+                              <td className="px-4 py-3">{client.country || "—"}</td>
+
+                              <td className="px-4 py-3">{client.customerId || "—"}</td>
+
+                              <td className="px-4 py-3">{client.team || "—"}</td>
+
+                              <td className="px-4 py-3">{client.teamLeader || "—"}</td>
+
+                              <td className="px-4 py-3">{client.collector || "—"}</td>
+
+                              <td className="px-4 py-3">{client.invoiceNumber || "—"}</td>
+
+                              <td className="px-4 py-3">
+                                {client.createDate
+                                  ? new Date(client.createDate).toLocaleDateString("en-US")
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {client.dueDate
+                                  ? new Date(client.dueDate).toLocaleDateString("en-US")
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">{client.agingDays ?? "—"}</td>
+
+                              <td className="px-4 py-3">{client.loanLease || "—"}</td>
+
+                              <td className="px-4 py-3">
+                                {client.debt != null
+                                  ? `$${Number(client.debt).toLocaleString("en-US")}`
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {STATUS_LABEL[client.status] || client.status || "—"}
+                              </td>
+
+                              <td className="px-4 py-3">{client.channel || "—"}</td>
+
+                              <td className="px-4 py-3">{client.contact || "—"}</td>
+
+                              <td className="px-4 py-3">{client.nextAction || "—"}</td>
+
+                              <td className="px-4 py-3">
+                                {client.paymentPromiseAmount != null
+                                  ? `$${Number(client.paymentPromiseAmount).toLocaleString(
+                                      "en-US"
+                                    )}`
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {client.datePromise
+                                  ? new Date(client.datePromise).toLocaleDateString("en-US")
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {client.lastIntent || "—"}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                  </>
+                  )
+                })}
 
                 {clients.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-zinc-500">
-                      Sin clientes registrados
+                    <td colSpan={24} className="py-8 text-center text-zinc-500">
+                      No clients registered
                     </td>
                   </tr>
                 )}
@@ -196,16 +526,24 @@ export default function ClientsPage() {
 
       <NewClientModal
         isOpen={openModal}
-        onClose={() => setOpenModal(false)}
+        client={editingClient}
+        onClose={() => { setOpenModal(false); setEditingClient(null) }}
         onSave={async () => {
           await loadClients()
           setOpenModal(false)
+          setEditingClient(null)
         }}
       />
 
       <ClientDetailModal
         clientId={detailId}
         onClose={() => setDetailId(null)}
+      />
+
+      <ImportClientsModal
+        isOpen={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={loadClients}
       />
     </>
   )

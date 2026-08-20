@@ -1,15 +1,25 @@
 import { Router } from 'express'
-import { handleIncoming, handleGather, handleStatus, handleOutbound, getCalls } from '../controllers/voice.controller'
-import { validateTwilioSignature } from '../middleware/twilioSignature'
+import {
+  handleIncoming,
+  handleStatus,
+  handleOutbound,
+  handleNotifyHuman,
+  handleNotifyHumanStatus,
+  getNotifyHumanStatus,
+  getCalls,
+} from '../controllers/voice.controller'
+import { requireAuth } from '../middleware/auth'
 
 const router = Router()
 
-router.get('/calls', getCalls)
-router.post('/voice/outbound', handleOutbound)
+router.get('/calls', requireAuth, getCalls)
+router.post('/voice/outbound', requireAuth, handleOutbound)
+router.post('/voice/notify-human', requireAuth, handleNotifyHuman)
+router.get('/voice/notify-human-status/:callSid', requireAuth, getNotifyHumanStatus)
 
-// Twilio webhooks — validate signature in production
-router.post('/voice/incoming', validateTwilioSignature, handleIncoming)
-router.post('/voice/gather', validateTwilioSignature, handleGather)
-router.post('/voice/status', validateTwilioSignature, handleStatus)
+// Twilio webhooks — Twilio no puede mandar un token de sesión, deben quedar públicos
+router.post('/voice/incoming', handleIncoming)
+router.post('/voice/status', handleStatus)
+router.post('/voice/notify-human-status', handleNotifyHumanStatus)
 
 export default router

@@ -1,3 +1,7 @@
 node_modules
 dist
 .env
+
+# Worktrees temporales que crea Claude Code para tareas en background — no son parte
+# del proyecto, cada uno es su propio repo git.
+.claude/worktrees/

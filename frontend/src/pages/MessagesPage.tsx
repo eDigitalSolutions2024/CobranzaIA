@@ -1,23 +1,23 @@
 import { useEffect, useState } from "react"
 import { getClients } from "../services/clients"
-import { API_URL } from "../services/api"
+import { sendWhatsapp } from "../services/messages"
 
 const templates = [
   {
     id: 1,
-    label: "Recordatorio de deuda",
+    label: "Debt reminder",
     value: "cobranza_recordatorio",
     preview: `Hola {{cliente}},\n\nDetectamos un saldo pendiente de \${{deuda}} MXN.\n\n¿Deseas regularizar tu cuenta?`,
   },
   {
     id: 2,
-    label: "Promesa de pago",
+    label: "Payment promise",
     value: "promesa_pago",
     preview: `Hola {{cliente}},\n\nEntendemos tu situación. ¿Podemos acordar una fecha de pago para tu deuda de \${{deuda}} MXN?`,
   },
   {
     id: 3,
-    label: "Último aviso",
+    label: "Final notice",
     value: "ultimo_aviso",
     preview: `Hola {{cliente}},\n\nEste es tu último aviso. Tienes un saldo pendiente de \${{deuda}} MXN.\n\nContáctanos hoy para evitar acciones legales.`,
   },
@@ -50,7 +50,7 @@ export default function MessagesPage() {
 
   async function send() {
     if (!client) {
-      alert("Selecciona un cliente")
+      alert("Select a client")
       return
     }
 
@@ -66,23 +66,11 @@ export default function MessagesPage() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/send-whatsapp`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        alert(`Mensaje enviado a ${client.name} (${client.phone})`)
-      } else {
-        console.log("Error Meta:", data.error)
-        alert(`Error al enviar: ${data.message}`)
-      }
-    } catch (error) {
+      await sendWhatsapp(body)
+      alert(`Message sent to ${client.name} (${client.phone})`)
+    } catch (error: any) {
       console.log(error)
-      alert("Error de conexión con el servidor")
+      alert(`Error sending message: ${error.message || "Error connecting to the server"}`)
     } finally {
       setSending(false)
     }
@@ -91,15 +79,15 @@ export default function MessagesPage() {
   return (
     <div>
 
-      <h1 className="text-4xl font-bold mb-2">Enviar WhatsApp</h1>
-      <p className="text-zinc-400 mb-8">Envía templates oficiales de Meta a tus clientes</p>
+      <h1 className="text-4xl font-bold mb-2">Send WhatsApp</h1>
+      <p className="text-zinc-400 mb-8">Send official Meta templates to your clients</p>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
 
-        {/* CLIENTE */}
+        {/* CLIENT */}
         <div>
           <label className="text-sm text-zinc-400 block mb-2">
-            1. Selecciona cliente
+            1. Select client
           </label>
           <select
             className="w-full rounded-xl bg-zinc-900 border border-zinc-700 p-3 text-white"
@@ -107,10 +95,10 @@ export default function MessagesPage() {
               setClient(clients.find((c) => c._id === e.target.value) || null)
             }
           >
-            <option value="">— Seleccionar cliente —</option>
+            <option value="">— Select client —</option>
             {clients.map((c) => (
               <option key={c._id} value={c._id}>
-                {c.name} — ${Number(c.debt).toLocaleString("es-MX")}
+                {c.name} — ${Number(c.debt).toLocaleString("en-US")}
               </option>
             ))}
           </select>
@@ -119,9 +107,9 @@ export default function MessagesPage() {
             <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 text-sm">
               <p className="text-zinc-300">📱 {client.phone}</p>
               <p className="text-zinc-400 mt-1">
-                Deuda: ${Number(client.debt).toLocaleString("es-MX")} MXN
+                Debt: ${Number(client.debt).toLocaleString("en-US")} MXN
               </p>
-              <p className="text-zinc-400">Estado: {client.status}</p>
+              <p className="text-zinc-400">Status: {client.status}</p>
             </div>
           )}
         </div>
@@ -129,7 +117,7 @@ export default function MessagesPage() {
         {/* TEMPLATE */}
         <div>
           <label className="text-sm text-zinc-400 block mb-2">
-            2. Elige template
+            2. Choose template
           </label>
           <div className="space-y-2">
             {templates.map((t) => (
@@ -154,7 +142,7 @@ export default function MessagesPage() {
         {/* PREVIEW */}
         <div>
           <label className="text-sm text-zinc-400 block mb-2">
-            3. Vista previa
+            3. Preview
           </label>
           <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-5 min-h-[200px] whitespace-pre-line text-sm text-zinc-200">
             {preview}
@@ -166,9 +154,9 @@ export default function MessagesPage() {
       <button
         onClick={send}
         disabled={sending || !client}
-        className="mt-8 rounded-xl bg-blue-600 px-8 py-3 font-semibold hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="mt-8 rounded-xl bg-brand px-8 py-3 font-semibold hover:bg-brand-light disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {sending ? "Enviando..." : "ENVIAR MENSAJE"}
+        {sending ? "Sending..." : "SEND MESSAGE"}
       </button>
 
     </div>
