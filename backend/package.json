@@ -7,7 +7,8 @@
     "dev": "ts-node src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test:twilio": "ts-node --transpile-only src/scripts/test-twilio.ts"
+    "test:twilio": "ts-node --transpile-only src/scripts/test-twilio.ts",
+    "test:whatsapp-flow": "ts-node --transpile-only src/scripts/test-whatsapp-flow.ts"
   },
   "keywords": [],
   "author": "",

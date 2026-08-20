@@ -44,6 +44,45 @@ const ConversationSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+
+    // Estado del guion automatizado de WhatsApp (ver whatsappFlow.service.ts)
+    flowState: {
+      type: String,
+      enum: ["identity", "invoice_check", "payment_date", "confirming", "closed"],
+      default: null,
+    },
+
+    flowContext: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+
+    flowOutcome: {
+      type: {
+        type: String,
+        enum: [
+          "payment_promise",
+          "reported_payment",
+          "domiciliado",
+          "dispute",
+          "wrong_contact",
+          "resend_invoice",
+          "callback_later",
+          "no_payment_capacity",
+          "pending_human",
+        ],
+        default: null,
+      },
+      amount: { type: Number, default: null },
+      date: { type: Date, default: null },
+      notes: { type: String, default: null },
+      updatedAt: { type: Date, default: null },
+    },
+
+    requiresFollowUp: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

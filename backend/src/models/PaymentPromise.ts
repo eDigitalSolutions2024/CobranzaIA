@@ -87,6 +87,9 @@ timestamps:true
 
 )
 
+PaymentPromiseSchema.index({ clientId: 1 })
+PaymentPromiseSchema.index({ status: 1, promisedDate: 1 })
+
 export default mongoose.model(
 "PaymentPromise",
 PaymentPromiseSchema

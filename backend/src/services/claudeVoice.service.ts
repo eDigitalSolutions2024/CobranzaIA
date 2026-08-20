@@ -1,9 +1,16 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { WebSocket } from 'ws'
+import mongoose from 'mongoose'
+import { ConversationState, ClientEmotion, getStateGuidance } from './conversationStateMachine'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-import mongoose from 'mongoose'
+// Sliding window: max turns kept verbatim before summary kicks in.
+const CONTEXT_WINDOW = 6
+// After this many total turns, compress earlier turns into a summary.
+export const SUMMARIZE_AFTER_TURNS = 8
+// When summary exists, keep only this many recent turns verbatim.
+const KEEP_RECENT_WITH_SUMMARY = 4
 
 export interface ClientInfo {
   _id: mongoose.Types.ObjectId
@@ -27,123 +34,220 @@ export interface AgentResponse {
   message: string
   intent: 'greeting' | 'collecting' | 'promise_of_payment' | 'requires_human' | 'goodbye' | 'general'
   promises?: PaymentInstallment[]
-  promiseDate?: string  // first installment (for Call record)
-  amount?: number       // first installment (for Call record)
+  promiseDate?: string
+  amount?: number
 }
 
-function buildSystemPrompt(clientInfo: ClientInfo | null, phone: string): string {
-  const fechaHoy = new Date().toLocaleDateString('es-MX', {
+// Tool definitions replace text markers — structured, reliable, no regex parsing.
+// Descriptions include examples so Claude knows WHEN to call them.
+const COLLECTION_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'promise_of_payment',
+    description:
+      'Call this ONLY when the client explicitly confirms a specific date AND amount they will pay. ' +
+      'Example triggers: "El viernes le pago 500 pesos", "Sí, el 15 deposito lo que debo". ' +
+      'DO NOT call if the client is vague ("voy a ver", "tal vez"). ' +
+      'Set message to your spoken confirmation of the agreement (max 2 sentences).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        promises: {
+          type: 'array',
+          description: 'One entry per payment. Most calls have exactly one.',
+          items: {
+            type: 'object',
+            properties: {
+              date: { type: 'string', description: 'ISO date YYYY-MM-DD — convert spoken dates like "el viernes" to absolute date' },
+              amount: { type: 'number', description: 'Amount in MXN pesos — if client says "lo que debo", use the full debt amount' },
+            },
+            required: ['date', 'amount'],
+          },
+          minItems: 1,
+          maxItems: 12,
+        },
+        message: {
+          type: 'string',
+          description: 'Your confirmation out loud. Example: "Perfecto, entonces el viernes deposita quinientos pesos, ¿correcto?"',
+        },
+      },
+      required: ['promises', 'message'],
+    },
+  },
+  {
+    name: 'end_call',
+    description:
+      'Call this to end the conversation. Use after: a farewell exchange, a transfer to human, ' +
+      'wrong number confirmation, or when client is too angry to continue. ' +
+      'Set message to your final spoken goodbye (1 sentence, warm and brief).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        reason: {
+          type: 'string',
+          enum: ['requires_human', 'agreement_reached', 'no_agreement', 'wrong_number', 'already_paid', 'client_angry'],
+          description: 'Pick the reason that best describes why the call is ending.',
+        },
+        message: {
+          type: 'string',
+          description: 'Final goodbye. Example: "Muchas gracias, que tenga buen día." or "En un momento le comunico con un asesor."',
+        },
+      },
+      required: ['reason', 'message'],
+    },
+  },
+]
+
+function buildSystemPrompt(
+  clientInfo: ClientInfo | null,
+  phone: string,
+  state: ConversationState = 'greeting',
+  emotion: ClientEmotion = 'neutral'
+): string {
+  const today = new Date().toLocaleDateString('es-MX', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })
 
-  const base = `Eres Guadalupe Martínez, agente del departamento de cobranza. Hablas por teléfono. Hoy: ${fechaHoy}.
+  // State-specific guidance replaces the monolithic instruction block.
+  // Each state carries only what Claude needs right now — nothing extraneous.
+  const stateGuidance = getStateGuidance(state, emotion)
 
-ESTILO:
-- Máximo 2 oraciones por respuesta
-- Reconoce lo que dijo el cliente antes de responder: "Entiendo.", "Claro.", "Muy bien.", "Por supuesto."
-- Montos en palabras: "cuatro mil quinientos pesos", no "$4,500"
-- Fechas en palabras: "el diecisiete de junio", no "17/06"
-- No repitas información ya mencionada. Adáptate si el cliente cambia de tema.
-- Solo texto plano, sin emojis ni negritas
-
-MARCADORES (siempre al final, nunca dentro del texto hablado):
-- Pago único confirmado → PROMESA_PAGO:FECHA=YYYY-MM-DD,MONTO=número
-- Plan de pagos (varios) → una línea PROMESA_PAGO por cuota con fecha exacta, máx 12. Luego FIN_LLAMADA.
-- Cliente pide hablar con persona → REQUIERE_HUMANO
-- Conversación termina (con o sin acuerdo) → FIN_LLAMADA`
+  const base = `Eres Guadalupe, cobradora. Hoy: ${today}.
+Por teléfono. Máximo 2 oraciones. Natural y humana.
+Confirma con "Entiendo.", "Claro.", "De acuerdo." antes de responder.
+Montos en palabras (cuatro mil quinientos pesos). Fechas en palabras (el diecisiete de junio).
+Sin emojis. Sin repetir lo ya dicho.
+${stateGuidance}`
 
   if (!clientInfo) {
     return `${base}
-
-Número ${phone} no registrado. Saluda, pide el nombre, informa que no encuentras el expediente y ofrece transferir a un asesor.`
+Número ${phone} no registrado. Saluda, pide nombre, transfiere con asesor (end_call, reason=requires_human).`
   }
 
+  const debtFormatted = clientInfo.debt.toLocaleString('es-MX')
   return `${base}
-
-CLIENTE: ${clientInfo.name} | Deuda: ${clientInfo.debt.toLocaleString('es-MX')} pesos | Estado: ${clientInfo.status}
-
-OBJETIVO: Preséntate, menciona el saldo, acuerda fecha y monto de pago, confirma, cierra con calidez.
-- Sin dinero → "¿Cuánto podría apartar esta semana?"
-- Ya pagó o número equivocado → disculpa breve + FIN_LLAMADA
-- Se enoja → empatiza, ofrece otro momento + FIN_LLAMADA
-- Pide WhatsApp → "Le escribimos también. Hasta luego." + FIN_LLAMADA`
+CLIENTE: ${clientInfo.name} | Deuda: ${debtFormatted} pesos | Estado: ${clientInfo.status}`
 }
 
-function normalizeText(text: string): string {
-  // Remove invisible Unicode characters (zero-width spaces, etc.) that Claude's API may insert
-  return text.replace(/[​-‍﻿­]/g, '').trim()
+// Generates a brief summary (≤80 tokens) of turns that would otherwise be dropped.
+// Called once per session at SUMMARIZE_AFTER_TURNS. Export so voice.controller can trigger it.
+export async function summarizeDroppedTurns(turns: ConversationTurn[]): Promise<string> {
+  if (turns.length === 0) return ''
+  const text = turns
+    .map((t) => `${t.role === 'assistant' ? 'Agente' : 'Cliente'}: ${t.content}`)
+    .join('\n')
+
+  const res = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 80,
+    messages: [{
+      role: 'user',
+      content: `Resume en máximo 2 oraciones lo acordado en esta llamada de cobranza:\n${text}`,
+    }],
+  })
+  return res.content[0].type === 'text' ? res.content[0].text.trim() : ''
 }
 
-function parseAgentResponse(raw: string): AgentResponse {
-  const text = normalizeText(raw)
-  const base: AgentResponse = { message: text, intent: 'general' }
+// Builds the message array for Claude.
+// With summary: injects compressed context + last KEEP_RECENT_WITH_SUMMARY turns.
+// Without summary: sliding window (first 2 + last 4) as before.
+function buildMessages(
+  history: ConversationTurn[],
+  summary: string | null = null
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  let turns: ConversationTurn[]
 
-  if (text.includes('REQUIERE_HUMANO')) {
-    return {
-      ...base,
-      intent: 'requires_human',
-      message: text.replace(/REQUIERE_HUMANO/g, '').trim(),
-    }
+  if (summary) {
+    // Summary mode: compressed prefix + last 4 turns verbatim
+    turns = history.length > KEEP_RECENT_WITH_SUMMARY
+      ? history.slice(-KEEP_RECENT_WITH_SUMMARY)
+      : history
+  } else if (history.length > CONTEXT_WINDOW) {
+    // Sliding window fallback (no summary yet)
+    turns = [
+      ...history.slice(0, 2),
+      ...history.slice(-(CONTEXT_WINDOW - 2)),
+    ]
+  } else {
+    turns = history
   }
 
-  const promiseMatches = [...text.matchAll(/PROMESA_PAGO:\s*FECHA\s*=\s*(\d{4}-\d{2}-\d{2})\s*,\s*MONTO\s*=\s*(\d+(?:\.\d+)?)/g)]
-  if (promiseMatches.length > 0) {
-    const promises: PaymentInstallment[] = promiseMatches.map(m => ({
-      promiseDate: m[1],
-      amount: parseFloat(m[2]),
-    }))
-    return {
-      ...base,
-      intent: 'promise_of_payment',
-      promises,
-      promiseDate: promises[0].promiseDate,
-      amount: promises[0].amount,
-      message: text.replace(/PROMESA_PAGO:[^\n]*/g, '').replace(/FIN_LLAMADA/g, '').trim(),
-    }
+  const base: Array<{ role: 'user' | 'assistant'; content: string }> = []
+
+  if (summary) {
+    // Synthetic context pair — Claude treats this as established fact
+    base.push({ role: 'user', content: `[Contexto previo de la llamada: ${summary}]` })
+    base.push({ role: 'assistant', content: 'Entendido.' })
   }
 
-  if (text.includes('FIN_LLAMADA')) {
-    return {
-      ...base,
-      intent: 'goodbye',
-      message: text.replace(/FIN_LLAMADA/g, '').trim(),
-    }
-  }
+  base.push(...turns.map((t) => ({ role: t.role, content: t.content })))
 
+  if (base.length === 0) return [{ role: 'user', content: '[INICIO_LLAMADA]' }]
+  if (base[0].role === 'assistant') {
+    return [{ role: 'user', content: '[INICIO_LLAMADA]' }, ...base]
+  }
   return base
+}
+
+function parseToolResponse(response: Anthropic.Message): AgentResponse {
+  // Check for tool use blocks first
+  for (const block of response.content) {
+    if (block.type === 'tool_use') {
+      if (block.name === 'promise_of_payment') {
+        const input = block.input as { promises: Array<{ date: string; amount: number }>; message: string }
+        const promises: PaymentInstallment[] = input.promises.map((p) => ({
+          promiseDate: p.date,
+          amount: p.amount,
+        }))
+        return {
+          message: input.message,
+          intent: 'promise_of_payment',
+          promises,
+          promiseDate: promises[0]?.promiseDate,
+          amount: promises[0]?.amount,
+        }
+      }
+
+      if (block.name === 'end_call') {
+        const input = block.input as { reason: string; message: string }
+        const intent = input.reason === 'requires_human' ? 'requires_human' : 'goodbye'
+        return { message: input.message, intent }
+      }
+    }
+  }
+
+  // Fallback: text response
+  const text = response.content
+    .filter((b) => b.type === 'text')
+    .map((b) => (b as Anthropic.TextBlock).text)
+    .join('')
+    .replace(/[​-‍﻿­]/g, '')
+    .trim()
+
+  return { message: text, intent: 'general' }
 }
 
 export async function generateVoiceResponse(
   history: ConversationTurn[],
   clientInfo: ClientInfo | null,
-  phone: string
+  phone: string,
+  summary: string | null = null,
+  state: ConversationState = 'greeting',
+  emotion: ClientEmotion = 'neutral'
 ): Promise<AgentResponse> {
-  const systemPrompt = buildSystemPrompt(clientInfo, phone)
-
-  // Anthropic requires messages to start with 'user' and alternate properly
-  let messages: Array<{ role: 'user' | 'assistant'; content: string }>
-
-  if (history.length === 0) {
-    messages = [{ role: 'user', content: '[INICIO_LLAMADA]' }]
-  } else if (history[0].role === 'assistant') {
-    // Prepend synthetic user trigger so the array starts with 'user'
-    messages = [
-      { role: 'user', content: '[INICIO_LLAMADA]' },
-      ...history.map((t) => ({ role: t.role, content: t.content })),
-    ]
-  } else {
-    messages = history.map((t) => ({ role: t.role, content: t.content }))
-  }
+  const systemPrompt = buildSystemPrompt(clientInfo, phone, state, emotion)
+  const messages = buildMessages(history, summary)
 
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 220,
+    max_tokens: 256,
     system: systemPrompt,
+    tools: COLLECTION_TOOLS,
+    // Guides Claude to use tools when appropriate but still speak naturally
+    tool_choice: { type: 'auto' },
     messages,
   })
 
-  const text = response.content[0].type === 'text' ? response.content[0].text : ''
-  return parseAgentResponse(text)
+  return parseToolResponse(response)
 }
 
 export interface CallAnalysis {
@@ -152,53 +256,41 @@ export interface CallAnalysis {
   summary: string
 }
 
+// Fire-and-forget analysis: does NOT block handleStatus response to Twilio.
+// Caller should use: analyzeCallTranscript(...).then(...).catch(...)
 export async function analyzeCallTranscript(
   transcript: Array<{ role: string; content: string }>,
   clientInfo: ClientInfo | null
 ): Promise<CallAnalysis> {
-  const relevant = transcript.filter(t => !t.content.startsWith('['))
+  const relevant = transcript.filter((t) => !t.content.startsWith('['))
 
   if (relevant.length < 2) {
     return { hasAgreement: false, promises: [], summary: 'Llamada sin conversación útil' }
   }
 
   const transcriptText = relevant
-    .map(t => `${t.role === 'assistant' ? 'Agente' : 'Cliente'}: ${t.content}`)
+    .map((t) => `${t.role === 'assistant' ? 'Agente' : 'Cliente'}: ${t.content}`)
     .join('\n')
 
   const today = new Date().toISOString().split('T')[0]
   const debtContext = clientInfo
-    ? `Deuda total del cliente: ${clientInfo.debt.toLocaleString('es-MX')} pesos MXN`
-    : 'Deuda del cliente: desconocida'
+    ? `Deuda: ${clientInfo.debt.toLocaleString('es-MX')} pesos`
+    : 'Deuda desconocida'
 
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 400,
-    system: `Eres un analizador de transcripciones de llamadas de cobranza.
-Fecha actual: ${today}. ${debtContext}
-
-Lee la transcripción completa y determina cuál fue el ACUERDO FINAL.
-Si hubo varias propuestas o renegociaciones, usa solo la ÚLTIMA que el cliente confirmó.
-
-Responde ÚNICAMENTE con JSON válido, sin markdown ni texto adicional:
-{
-  "hasAgreement": true,
-  "promises": [{"promiseDate": "YYYY-MM-DD", "amount": 1234}],
-  "summary": "descripción breve de lo acordado"
-}
-
-Reglas:
-- hasAgreement = true solo si el cliente confirmó explícitamente una fecha y monto
-- Para planes de pago recurrentes, incluye una entrada por cuota con su fecha exacta
-- Si no hubo compromiso concreto, devuelve: {"hasAgreement": false, "promises": [], "summary": "Sin acuerdo"}
-- Las fechas deben ser absolutas en formato YYYY-MM-DD`,
+    system: `Analiza transcripción de cobranza. Fecha: ${today}. ${debtContext}.
+Responde SOLO con JSON válido sin markdown:
+{"hasAgreement":bool,"promises":[{"promiseDate":"YYYY-MM-DD","amount":number}],"summary":"string"}
+Reglas: hasAgreement=true solo si cliente confirmó fecha+monto explícitos. Usa solo el ÚLTIMO acuerdo si hubo renegociación.`,
     messages: [{ role: 'user', content: transcriptText }],
   })
 
   try {
-    const rawText = response.content[0].type === 'text' ? response.content[0].text.trim() : '{}'
-    const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
-    const parsed = JSON.parse(raw)
+    const raw = response.content[0].type === 'text' ? response.content[0].text.trim() : '{}'
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+    const parsed = JSON.parse(cleaned)
     return {
       hasAgreement: Boolean(parsed.hasAgreement),
       promises: Array.isArray(parsed.promises) ? parsed.promises : [],
@@ -210,32 +302,33 @@ Reglas:
   }
 }
 
-// WebSocket handler for Twilio Media Streams (real-time audio - future upgrade)
-// To enable: point <Stream url="wss://YOUR_DOMAIN/api/voice/stream"/> in TwiML
-// Requires a Speech-to-Text service (Deepgram, Google STT, etc.) for full functionality
+// WebSocket handler for Twilio Media Streams (real-time audio pipeline).
+// Requires an STT service (Deepgram recommended) wired to this handler.
+// To enable: point <Stream url="wss://YOUR_DOMAIN/api/voice/stream"/> in TwiML.
 export function handleMediaStream(ws: WebSocket): void {
   let streamSid: string | null = null
 
   ws.on('message', (raw: Buffer | string) => {
     try {
-      const msg = JSON.parse(raw.toString()) as { event: string; start?: { streamSid: string }; media?: { payload: string } }
+      const msg = JSON.parse(raw.toString()) as {
+        event: string
+        start?: { streamSid: string }
+        media?: { payload: string }
+      }
 
       switch (msg.event) {
         case 'connected':
           console.log('[MediaStream] Twilio conectado')
           break
-
         case 'start':
           streamSid = msg.start?.streamSid ?? null
           console.log(`[MediaStream] Stream iniciado: ${streamSid}`)
           break
-
         case 'media':
-          // msg.media.payload = base64 mulaw 8kHz audio from Twilio
-          // TODO: pipe payload to Deepgram/Google STT for real-time transcription
-          // then call generateVoiceResponse() and stream TTS audio back
+          // Pipe msg.media.payload (base64 mulaw 8kHz) to Deepgram via WebSocket.
+          // On transcript → call generateVoiceResponse() → TTS → send audio back.
+          // See: https://developers.deepgram.com/docs/twilio-integration
           break
-
         case 'stop':
           console.log(`[MediaStream] Stream detenido: ${streamSid}`)
           ws.close()

@@ -11,6 +11,8 @@ import {
   Tooltip,
 } from "recharts"
 
+import { API_URL } from "../services/api"
+
 export default function RecoveryChart() {
 
   const [
@@ -31,10 +33,10 @@ export default function RecoveryChart() {
       const response =
 
         await fetch(
-          "http://localhost:3002/api/clients"
+          `${API_URL}/clients`
         )
 
-      const clients =
+      const { clients } =
 
         await response.json()
 

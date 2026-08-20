@@ -1,7 +1,7 @@
 import { api } from "./api"
 
 export const getClients = () =>
-  api("/clients")
+  api("/clients").then((data) => data.clients)
 
 export const getClientDetail = (id: string) =>
   api(`/clients/${id}/detail`)

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { getClients } from "../services/clients"
+import { API_URL } from "../services/api"
 
 const templates = [
   {
@@ -65,7 +66,7 @@ export default function MessagesPage() {
     }
 
     try {
-      const response = await fetch("http://localhost:3002/api/send-whatsapp", {
+      const response = await fetch(`${API_URL}/send-whatsapp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

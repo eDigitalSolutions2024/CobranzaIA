@@ -5,8 +5,16 @@ import Call from "../models/Call"
 
 export async function getClients(req: Request, res: Response) {
   try {
-    const clients = await Client.find().sort({ createdAt: -1 })
-    res.json(clients)
+    const page = Math.max(1, Number(req.query.page) || 1)
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100))
+    const skip = (page - 1) * limit
+
+    const [clients, total] = await Promise.all([
+      Client.find().sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Client.countDocuments(),
+    ])
+
+    res.json({ clients, total, page, pages: Math.ceil(total / limit) })
   } catch (error) {
     console.log("Error getClients:", error)
     res.status(500).json({ message: "Error obteniendo clientes" })

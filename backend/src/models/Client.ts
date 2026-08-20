@@ -117,6 +117,9 @@ timestamps:true
 
 )
 
+ClientSchema.index({ phone: 1 })
+ClientSchema.index({ status: 1 })
+
 export default model(
 "Client",
 ClientSchema

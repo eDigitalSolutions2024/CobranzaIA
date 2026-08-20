@@ -45,5 +45,7 @@ const CallSchema = new Schema<ICall>(
 
 CallSchema.index({ phone: 1 })
 CallSchema.index({ createdAt: -1 })
+CallSchema.index({ clientId: 1, createdAt: -1 })
+CallSchema.index({ status: 1 })
 
 export default mongoose.model<ICall>('Call', CallSchema)

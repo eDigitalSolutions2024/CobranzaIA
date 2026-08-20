@@ -20,8 +20,10 @@ export async function getConversationMessages(req: Request, res: Response) {
   try {
     const { id } = req.params
 
+    const limit = Math.min(200, Number(req.query.limit) || 50)
     const messages = await Message.find({ conversationId: id })
       .sort({ createdAt: 1 })
+      .limit(limit)
 
     res.json(messages)
   } catch (error) {
