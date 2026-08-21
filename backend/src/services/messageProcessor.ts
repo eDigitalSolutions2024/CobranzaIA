@@ -6,6 +6,7 @@ import { findOrCreateConversation, updateConversationLastMessage } from './conve
 import { classifyIntent } from './intentClassifier'
 import { advanceWhatsappFlow, FlowContext, FlowState } from './whatsappFlow.service'
 import { sendWhatsappText } from './whatsappService'
+import { bufferMessage } from './whatsappDebounce.cache'
 
 // Maps local intent → score
 const INTENT_TO_SCORE: Partial<Record<string, number>> = {
@@ -13,6 +14,74 @@ const INTENT_TO_SCORE: Partial<Record<string, number>> = {
   already_paid: 100,
   no_money: 20,
   insult: 10,
+}
+
+// Corre el guion automatizado sobre el texto YA combinado de un lote de
+// mensajes (ver whatsappDebounce.cache.ts) — se dispara tras una pausa en la
+// escritura del cliente, nunca inmediatamente al recibir cada mensaje suelto.
+// Vuelve a leer cliente/conversación desde la DB porque corre con retraso
+// respecto al webhook que lo programó.
+async function runWhatsappFlowTurn(
+  clientId: string,
+  conversationId: string,
+  phone: string,
+  combinedText: string
+): Promise<void> {
+  const [client, conversation] = await Promise.all([
+    Client.findById(clientId),
+    Conversation.findById(conversationId),
+  ])
+  if (!client || !conversation) return
+  if (conversation.flowState === 'closed') return
+
+  const flowClient = { _id: client._id, name: client.name, debt: client.debt, phone: client.phone }
+  const result = await advanceWhatsappFlow(
+    combinedText,
+    flowClient,
+    (conversation.flowState as FlowState | null) ?? null,
+    (conversation.flowContext as FlowContext) ?? {}
+  )
+
+  if (result.reply) {
+    await sendWhatsappText(phone, result.reply, clientId, conversationId)
+  }
+
+  // findByIdAndUpdate (not conversation.save()) — sendWhatsappText already wrote
+  // lastMessage/lastMessageAt via its own findByIdAndUpdate; saving this
+  // in-memory doc afterward would overwrite that with stale values.
+  const conversationUpdate: Record<string, unknown> = {
+    flowState: result.newState,
+    flowContext: result.newContext,
+  }
+
+  let newClientStatus: string | undefined
+  let newClientIntent: string | undefined
+
+  if (result.outcome) {
+    conversationUpdate.flowOutcome = { ...result.outcome, updatedAt: new Date() }
+    newClientIntent = result.outcome.type
+    if (result.outcome.type !== 'payment_promise') conversationUpdate.requiresFollowUp = true
+  }
+  await Conversation.findByIdAndUpdate(conversationId, conversationUpdate)
+
+  if (result.createPromise) {
+    await PaymentPromise.create({
+      clientId,
+      amount: result.createPromise.amount,
+      promisedDate: result.createPromise.date,
+      status: 'pending',
+      notes: 'Registrado vía flujo automatizado de WhatsApp (llamada preventiva)',
+      detectedByAI: true,
+    })
+    newClientStatus = 'promised'
+  }
+
+  if (newClientStatus || newClientIntent) {
+    await Client.findByIdAndUpdate(clientId, {
+      ...(newClientStatus ? { status: newClientStatus } : {}),
+      ...(newClientIntent ? { lastIntent: newClientIntent } : {}),
+    })
+  }
 }
 
 export async function processIncomingMessage(message: any) {
@@ -38,7 +107,7 @@ export async function processIncomingMessage(message: any) {
 
     const conversation = await findOrCreateConversation(phone, client?._id?.toString())
 
-    const savedMessage = await Message.create({
+    await Message.create({
       clientId: client?._id ?? null,
       conversationId: conversation._id,
       phone,
@@ -68,51 +137,21 @@ export async function processIncomingMessage(message: any) {
       const newScore = INTENT_TO_SCORE[localIntent]
       if (newScore !== undefined) client.score = newScore
 
+      await client.save()
+
       // Guion automatizado de WhatsApp ("llamada preventiva" — ver whatsappFlow.service.ts).
       // Reemplaza la actualización de estado/promesas que antes hacía el clasificador
       // general de arriba; ese clasificador se conserva solo para etiquetar Message.intent.
+      // No corre inline: si el cliente escribe varios mensajes seguidos (varios
+      // renglones), esperamos una pausa y los procesamos juntos como un solo turno
+      // — ver whatsappDebounce.cache.ts.
       if (conversation.flowState !== 'closed') {
-        const flowClient = { _id: client._id, name: client.name, debt: client.debt, phone: client.phone }
-        const result = await advanceWhatsappFlow(
-          text,
-          flowClient,
-          (conversation.flowState as FlowState | null) ?? null,
-          (conversation.flowContext as FlowContext) ?? {}
+        const clientId = client._id.toString()
+        const conversationId = conversation._id.toString()
+        bufferMessage(conversationId, text, (combinedText) =>
+          runWhatsappFlowTurn(clientId, conversationId, phone, combinedText)
         )
-
-        if (result.reply) {
-          await sendWhatsappText(phone, result.reply, client._id.toString(), conversation._id.toString())
-        }
-
-        // findByIdAndUpdate (not conversation.save()) — sendWhatsappText already wrote
-        // lastMessage/lastMessageAt via its own findByIdAndUpdate; saving this
-        // in-memory doc afterward would overwrite that with stale values.
-        const conversationUpdate: Record<string, unknown> = {
-          flowState: result.newState,
-          flowContext: result.newContext,
-        }
-        if (result.outcome) {
-          conversationUpdate.flowOutcome = { ...result.outcome, updatedAt: new Date() }
-          client.lastIntent = result.outcome.type
-          if (result.outcome.type !== 'payment_promise') conversationUpdate.requiresFollowUp = true
-        }
-        await Conversation.findByIdAndUpdate(conversation._id, conversationUpdate)
-
-        if (result.createPromise) {
-          await PaymentPromise.create({
-            clientId: client._id,
-            messageId: savedMessage._id,
-            amount: result.createPromise.amount,
-            promisedDate: result.createPromise.date,
-            status: 'pending',
-            notes: 'Registrado vía flujo automatizado de WhatsApp (llamada preventiva)',
-            detectedByAI: true,
-          })
-          client.status = 'promised'
-        }
       }
-
-      await client.save()
     }
   } catch (error) {
     console.error('[MessageProcessor] Error:', error)
