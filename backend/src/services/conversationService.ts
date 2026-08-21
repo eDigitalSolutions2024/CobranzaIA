@@ -5,14 +5,18 @@ export async function findOrCreateConversation(
   phone: string,
   clientId?: string | null
 ) {
-  let conversation = await Conversation.findOne({ phone })
+  // Los mensajes salientes guardan el teléfono como "+52..." y los webhooks
+  // entrantes de Meta lo mandan como "521..." (sin +, con el "1" móvil) — dos
+  // representaciones del mismo número. Buscamos por los últimos 10 dígitos
+  // para que ambos casos encuentren la misma conversación.
+  const last10 = phone.replace(/\D/g, "").slice(-10)
+  let conversation = await Conversation.findOne({ phone: { $regex: `${last10}$` } })
 
   if (!conversation) {
     let resolvedClientId = clientId || null
 
     if (!resolvedClientId) {
-      const normalizedPhone = phone.slice(-10)
-      const client = await Client.findOne({ phone: { $regex: normalizedPhone } })
+      const client = await Client.findOne({ phone: { $regex: `${last10}$` } })
       resolvedClientId = client?._id?.toString() || null
     }
 

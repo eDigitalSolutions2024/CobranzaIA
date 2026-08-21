@@ -1,8 +1,8 @@
 // WhatsApp "llamada preventiva" script — cliente al corriente / 0 días.
 // Sigue exactamente la secuencia del guion: identidad → factura recibida →
-// fecha de pago (10 ramas posibles) → confirmación → cierre.
-// Steps 1 y 2 son deterministas (sí/no); el paso 3 (las 10 ramas) y el paso
-// de confirmación usan Claude con tool-calling, igual que el flujo de voz.
+// fecha de pago (branching por objeción) → confirmación → confirmación final
+// → cierre. Los pasos 1-2 son deterministas donde la respuesta es clara; el
+// resto usa Claude con tool-calling, igual que el flujo de voz.
 
 import Anthropic from '@anthropic-ai/sdk'
 import mongoose from 'mongoose'
@@ -10,6 +10,7 @@ import { extractDaysOffset, addDays } from '../utils/dateParsing'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
+const AGENT_NAME = 'Guadalupe'
 const COMPANY_NAME = 'HP Financial Services'
 
 export interface FlowClient {
@@ -19,7 +20,13 @@ export interface FlowClient {
   phone: string
 }
 
-export type FlowState = 'identity' | 'invoice_check' | 'payment_date' | 'confirming' | 'closed'
+export type FlowState =
+  | 'identity'
+  | 'invoice_check'
+  | 'payment_date'
+  | 'confirming'
+  | 'final_confirming'
+  | 'closed'
 
 export interface FlowContext {
   pendingOutcomeType?: string
@@ -49,6 +56,14 @@ function money(n: number): string {
   return `$${Number(n).toLocaleString('es-MX')}`
 }
 
+// Formatea una fecha ISO (YYYY-MM-DD) en palabras para texto de cara al cliente —
+// nunca mostrar el ISO crudo en un mensaje.
+function formatDateWords(iso: string): string {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(`${iso}T12:00:00`) : new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
 // ── Step 1: identity — deterministic, no LLM ────────────────────────────────
 
 const WRONG_NUMBER_PATTERNS: RegExp[] = [
@@ -61,30 +76,23 @@ function isWrongNumber(text: string): boolean {
   return WRONG_NUMBER_PATTERNS.some((p) => p.test(text))
 }
 
-// ── Step 2: invoice_check — deterministic, no LLM ───────────────────────────
-
-const NEGATIVE_PATTERNS: RegExp[] = [
-  /^no\b/i, /a[uú]n no/i, /todav[íi]a no/i, /no la (he )?recib/i,
-  /no me ha(n)? llegado/i, /no las tengo/i, /no he recibido/i, /no me lleg[oó]/i,
-]
-
-function isNegative(text: string): boolean {
-  return NEGATIVE_PATTERNS.some((p) => p.test(text.trim()))
-}
-
-// ── Step 3: payment_date — Claude + tools ───────────────────────────────────
+// ── Outcomes shared by invoice_check and payment_date ───────────────────────
 
 const OUTCOME_TYPES = [
   'reported_payment', 'domiciliado', 'callback_later', 'no_payment_capacity',
-  'dispute', 'wrong_contact', 'resend_invoice', 'pending_human',
+  'dispute_amount', 'dispute_invoice', 'wrong_contact', 'resend_invoice', 'pending_human',
 ] as const
 
+// Todos requieren un segundo turno para capturar el detalle (fecha, nombre de
+// contacto, diferencia de monto, etc.) excepto pending_human, que es
+// escalamiento inmediato sin nada más que registrar.
 const NEEDS_FOLLOWUP: Record<string, boolean> = {
   reported_payment: true,
   domiciliado: true,
   callback_later: true,
   no_payment_capacity: true,
-  dispute: true,
+  dispute_amount: true,
+  dispute_invoice: true,
   wrong_contact: true,
   resend_invoice: true,
   pending_human: false,
@@ -94,11 +102,86 @@ const CLOSING_LINE: Record<string, string> = {
   reported_payment: 'Gracias, quedó registrado su pago para verificación. Cualquier ajuste se lo haremos saber.',
   domiciliado: 'Perfecto, quedó registrado el cargo domiciliado. Gracias por su tiempo.',
   callback_later: 'Quedó agendado. Le contactaremos en la fecha indicada. Gracias por su tiempo.',
-  no_payment_capacity: 'Entendido, quedó registrado. Un asesor podrá contactarle para revisar opciones. Gracias.',
-  dispute: 'Quedó registrada su aclaración. Un asesor revisará el monto y le contactará. Gracias por su tiempo.',
+  no_payment_capacity: 'Entendido, quedó registrado para seguimiento, sin considerarse un compromiso de pago. Gracias.',
+  dispute_amount: 'Quedó registrada su aclaración. Un asesor revisará el monto y le contactará. Gracias por su tiempo.',
+  dispute_invoice: 'Gracias, un asesor revisará la factura y se pondrá en contacto con usted en breve.',
   wrong_contact: 'Gracias, actualizaremos el contacto para futuras comunicaciones.',
   resend_invoice: 'Con gusto, en breve le reenviamos la factura por este medio. Gracias.',
 }
+
+const SHARED_OUTCOME_TOOL: Anthropic.Tool = {
+  name: 'register_outcome',
+  description:
+    'Call for client responses that are NOT a clean payment promise and not plain confirmation that the ' +
+    'invoice was received. Pick the type that matches, and phrase `message` as the exact follow-up question ' +
+    'for that branch (see system prompt for the script per type).',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      type: { type: 'string', enum: [...OUTCOME_TYPES] },
+      message: { type: 'string', description: 'Your reply — the follow-up question or closing line for this branch.' },
+    },
+    required: ['type', 'message'],
+  },
+}
+
+const SHARED_CLARIFICATION_TOOL: Anthropic.Tool = {
+  name: 'request_clarification',
+  description:
+    'Call when the client response is ambiguous ("creo que sí", "tal vez") or incomprehensible. ' +
+    'NEVER guess or register a commitment on an ambiguous answer — ask a clarifying question instead.',
+  input_schema: {
+    type: 'object' as const,
+    properties: { message: { type: 'string' } },
+    required: ['message'],
+  },
+}
+
+// ── Step 2: invoice_check — Claude + tools ──────────────────────────────────
+
+const INVOICE_CHECK_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'mark_invoice_received',
+    description: 'Call when the client confirms they already received their invoice(s) for the month.',
+    input_schema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'proceed_to_payment_date',
+    description:
+      'Call when the client does not know / is unsure whether they received the invoice ("no sé") but this ' +
+      'does not block asking about payment — pivot the conversation to the payment date instead.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        message: {
+          type: 'string',
+          description:
+            'Example: "No hay problema. ¿Sabe aproximadamente cuándo podría confirmar la fecha de pago?"',
+        },
+      },
+      required: ['message'],
+    },
+  },
+  SHARED_OUTCOME_TOOL,
+  SHARED_CLARIFICATION_TOOL,
+]
+
+function buildInvoiceCheckSystemPrompt(client: FlowClient): string {
+  return `Eres ${AGENT_NAME}, asistente virtual de ${COMPANY_NAME}, escribiendo por WhatsApp a ${client.name}.
+Acabas de preguntarle: "¿Ya recibió sus facturas del mes?". Clasifica su respuesta usando EXACTAMENTE una herramienta:
+
+- Confirma que SÍ la recibió ("sí", "ya la tengo", "claro") → mark_invoice_received.
+
+- Dice que NO la ha recibido ("no", "aún no", "no me ha llegado") → register_outcome tipo resend_invoice. Tu mensaje DEBE ser: "Entiendo. Permítame registrar que aún no cuenta con la factura. ¿Desea que sea reenviada?".
+
+- Dice "no sé" respecto a si la recibió (desconoce su estatus, pero no bloquea seguir) → proceed_to_payment_date. Tu mensaje debe ser: "No hay problema. ¿Sabe aproximadamente cuándo podría confirmar la fecha de pago?".
+
+- Respuesta AMBIGUA tipo "creo que sí" (no queda claro si se refiere a la factura o al pago) → request_clarification. Tu mensaje debe ser: "Solo para confirmar, ¿se refiere a que sí recibió la factura o a que ya tiene contemplado el pago?".
+
+Máximo 2 oraciones por mensaje. Sin emojis. Tono cálido y profesional, en español de México.`
+}
+
+// ── Step 3: payment_date — Claude + tools ───────────────────────────────────
 
 const PAYMENT_DATE_TOOLS: Anthropic.Tool[] = [
   {
@@ -117,69 +200,56 @@ const PAYMENT_DATE_TOOLS: Anthropic.Tool[] = [
           type: 'string',
           description:
             'Your reply: restate the intention and ask for explicit confirmation. Example: ' +
-            '"Perfecto, entonces registro una intención de pago por $4,500 pesos para el 15 de agosto. ¿Es correcta la información?"',
+            '"Para confirmar, registraré el pago por $4,500 pesos para el 15 de agosto. ¿Es correcta la información?"',
         },
       },
       required: ['date', 'amount', 'message'],
     },
   },
-  {
-    name: 'register_outcome',
-    description:
-      'Call for client responses that are NOT a clean payment promise. Pick the type that matches, and ' +
-      'phrase `message` as the exact follow-up question for that branch (see system prompt for the script per type).',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        type: { type: 'string', enum: [...OUTCOME_TYPES] },
-        message: { type: 'string', description: 'Your reply — the follow-up question or closing line for this branch.' },
-      },
-      required: ['type', 'message'],
-    },
-  },
-  {
-    name: 'request_clarification',
-    description:
-      'Call when the client response is ambiguous ("no sé", "creo que sí", "tal vez") or incomprehensible. ' +
-      'NEVER guess or register a commitment on an ambiguous answer — ask a clarifying question instead.',
-    input_schema: {
-      type: 'object' as const,
-      properties: { message: { type: 'string' } },
-      required: ['message'],
-    },
-  },
+  SHARED_OUTCOME_TOOL,
+  SHARED_CLARIFICATION_TOOL,
 ]
 
 function buildPaymentDateSystemPrompt(client: FlowClient): string {
   const today = new Date().toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-  return `Eres Guadalupe, asistente virtual de ${COMPANY_NAME}, escribiendo por WhatsApp a ${client.name}. Hoy: ${today}.
+  return `Eres ${AGENT_NAME}, asistente virtual de ${COMPANY_NAME}, escribiendo por WhatsApp a ${client.name}. Hoy: ${today}.
 Saldo del cliente: ${money(client.debt)} pesos.
 Acabas de preguntarle: "¿Tiene contemplada alguna fecha para realizar el pago?". Clasifica su respuesta usando EXACTAMENTE una herramienta:
 
 - FECHA y MONTO concretos y afirmativos ("el 15 de agosto por $4,500", "le pago el viernes lo que debo") → register_payment_promise.
 
-- "Ya pagué" / "ya pagamos" → register_outcome tipo reported_payment. Tu mensaje DEBE preguntar la fecha aproximada del pago: "Gracias, ¿me podría indicar la fecha aproximada en que se realizó el pago?". NUNCA lo registres como promesa de pago.
+- "Ya pagué" / "ya pagamos" (posible pago realizado) → register_outcome tipo reported_payment. Tu mensaje DEBE ser: "Gracias. ¿Me puede indicar la fecha aproximada en que se realizó el pago?". NUNCA lo registres como promesa de pago.
 
-- "Está domiciliado" / cargo automático → register_outcome tipo domiciliado. Tu mensaje DEBE preguntar: "Entendido, ¿el cargo tiene programada alguna fecha específica?". NUNCA lo registres como promesa normal.
+- "Está domiciliado" / cargo automático → register_outcome tipo domiciliado. Tu mensaje DEBE ser: "Entendido. ¿El cargo está programado para alguna fecha específica?". NUNCA lo registres como promesa normal.
 
-- Respuesta AMBIGUA ("no sé", "creo que sí", "tal vez", "no" sin más contexto) → request_clarification. Pregunta: "¿Se refiere a que ya tiene una fecha contemplada, o prefiere que le contactemos después para definirla?". NUNCA asumas ni registres un compromiso ante una respuesta ambigua.
+- "No sé" (desconoce estatus del pago) → register_outcome tipo callback_later. Tu mensaje DEBE ser: "No hay problema. ¿Sabe aproximadamente cuándo podría confirmar la fecha de pago?".
 
-- Pide tiempo para revisarlo ("déjame revisarlo", "lo voy a checar", "le hablo después") → register_outcome tipo callback_later. Pregunta: "¿Qué fecha y horario le convendría para volver a contactarle?".
+- Respuesta AMBIGUA tipo "creo que sí" (no queda claro si ya tiene fecha contemplada) → request_clarification. Tu mensaje DEBE ser: "Solo para confirmar, ¿se refiere a que sí recibió la factura o a que ya tiene contemplado el pago?". NUNCA asumas ni registres un compromiso ante una respuesta ambigua.
 
-- No puede pagar ahorita ("no tengo fecha", "no puedo pagar en este momento") → register_outcome tipo no_payment_capacity. Pregunta: "¿Tiene una fecha aproximada en la que considere posible realizarlo?".
+- Pide tiempo para revisarlo / prefiere que le contacten después ("déjame revisarlo", "háblame después") → register_outcome tipo callback_later. Tu mensaje DEBE ser: "Claro. ¿Qué fecha y horario le convendría para volver a contactarle?".
 
-- El monto es incorrecto ("el monto no es correcto", "la factura está mal") → register_outcome tipo dispute. Di: "Registraré su aclaración para revisión. ¿Me podría indicar cuál considera que es el monto correcto o la diferencia?".
+- "No tengo fecha" (sin compromiso, sin problema evidente) → register_outcome tipo no_payment_capacity. Tu mensaje DEBE ser: "Entiendo. ¿Desea que registremos una fecha tentativa para dar seguimiento?".
 
-- La cuenta la ve otra persona ("eso lo ve mi contador", "no me corresponde a mí") → register_outcome tipo wrong_contact. Pregunta: "¿Me podría indicar quién es la persona responsable de este pago para poder contactarla?".
+- "No puedo pagar en este momento" (posible problema de pago) → register_outcome tipo no_payment_capacity. Tu mensaje DEBE ser: "Entiendo. ¿Tiene una fecha aproximada en la que considere posible realizarlo?".
 
-- Pide que le manden la factura ("mándame la factura", "no la tengo") → register_outcome tipo resend_invoice. Di: "Con gusto, ¿confirmamos que se la reenviamos por este mismo medio?".
+- El MONTO/saldo no es correcto (disputa de saldo) → register_outcome tipo dispute_amount. Tu mensaje DEBE ser: "Entiendo. Registraré la diferencia para su revisión. ¿Me puede indicar cuál es el monto que usted tiene registrado?".
 
-- Pide hablar con una persona/asesor, o su respuesta sigue siendo incomprensible tras una aclaración → register_outcome tipo pending_human. Di: "Claro, un asesor se pondrá en contacto con usted en breve para apoyarle."
+- La FACTURA está incorrecta (disputa de factura, distinto de disputar el monto) → register_outcome tipo dispute_invoice. Tu mensaje DEBE ser: "Entiendo. ¿Podría indicarme brevemente cuál es la diferencia que detectó?".
+
+- La cuenta la ve/paga otra persona ("lo ve otra persona", "eso lo ve mi contador") → register_outcome tipo wrong_contact. Tu mensaje DEBE ser: "Entiendo. ¿Me podría indicar quién es la persona responsable de cuentas por pagar?".
+
+- Pide que le manden/reenvíen la factura ("mándame la factura", "no la tengo") → register_outcome tipo resend_invoice. Tu mensaje DEBE ser: "Claro. Confirmamos el medio al que desea recibirla.".
+
+- Pide hablar con una persona/asesor humano → register_outcome tipo pending_human. Tu mensaje DEBE ser: "Claro. Canalizaré su solicitud con un ejecutivo.".
+
+- Respuesta confusa/incomprensible, o no reconoce el saldo pese a la insistencia → request_clarification. Tu mensaje DEBE ser: "Disculpe, quiero asegurarme de registrar correctamente su respuesta. ¿Me podría indicar nuevamente la fecha estimada de pago?".
 
 Máximo 2 oraciones por mensaje. Sin emojis. Tono cálido y profesional, en español de México.`
 }
 
-const CONFIRMING_TOOLS: Anthropic.Tool[] = [
+// ── Steps 4 y 5: confirming / final_confirming — Claude + tool (compartido) ─
+
+const CONFIRM_TOOLS: Anthropic.Tool[] = [
   {
     name: 'confirm_agreement',
     description: 'Call once the client confirms or corrects the payment intention you just repeated back to them.',
@@ -192,8 +262,8 @@ const CONFIRMING_TOOLS: Anthropic.Tool[] = [
         message: {
           type: 'string',
           description:
-            'Your reply, in natural spoken Spanish. Closing line if correct=true. If correct=false, restate the ' +
-            'new amount/date IN WORDS (e.g. "el 20 de agosto", never "2026-08-20") and ask to confirm again.',
+            'Your reply, in natural spoken Spanish. If correct=false, restate the new amount/date IN WORDS ' +
+            '(e.g. "el 20 de agosto", never "2026-08-20") and ask to confirm again.',
         },
       },
       required: ['correct', 'message'],
@@ -201,18 +271,26 @@ const CONFIRMING_TOOLS: Anthropic.Tool[] = [
   },
 ]
 
-function buildConfirmingSystemPrompt(context: FlowContext): string {
+function buildConfirmSystemPrompt(context: FlowContext, tense: 'future' | 'past'): string {
   const amount = context.pendingAmount ?? 0
-  const date = context.pendingDate ?? ''
-  return `Eres Guadalupe, asistente virtual de ${COMPANY_NAME}, escribiendo por WhatsApp.
-Ya le dijiste al cliente: "Perfecto, entonces registro una intención de pago por ${money(amount)} pesos para el ${date}. ¿Es correcta la información?" y esperas su respuesta.
+  const date = context.pendingDate ? formatDateWords(context.pendingDate) : ''
+  const restated =
+    tense === 'future'
+      ? `Para confirmar, registraré el pago por ${money(amount)} pesos para el ${date}. ¿Es correcta la información?`
+      : `Para confirmar, he registrado el pago por ${money(amount)} pesos para el ${date}. ¿Es correcta esta información?`
 
-- Si confirma ("sí", "es correcto", "así es") → confirm_agreement con correct=true. Tu mensaje de cierre debe ser: "Queda registrada. Muchas gracias por su tiempo. Que tenga excelente día."
-- Si corrige el monto o la fecha → confirm_agreement con correct=false y los valores corregidos que haya dado (deja el otro campo vacío si no lo corrigió). Tu mensaje debe repetir la nueva intención y volver a pedir confirmación.
+  return `Eres ${AGENT_NAME}, asistente virtual de ${COMPANY_NAME}, escribiendo por WhatsApp.
+Ya le dijiste al cliente: "${restated}" y esperas su respuesta.
+
+- Si confirma ("sí", "es correcto", "así es") → confirm_agreement con correct=true. Tu mensaje debe ser simplemente una confirmación breve (ej. "Perfecto, gracias.") — el cierre final lo maneja el sistema, no lo repitas tú.
+- Si corrige el monto o la fecha → confirm_agreement con correct=false y los valores corregidos que haya dado (deja el otro campo vacío si no lo corrigió). Tu mensaje debe repetir la nueva intención en palabras y volver a pedir confirmación.
 - Si dice que no sin dar una corrección clara → confirm_agreement con correct=false, sin nuevos valores. Pregunta amablemente cuál es el monto o la fecha correctos.
 
 Máximo 2 oraciones. Sin emojis. Tono cálido y profesional, en español de México.`
 }
+
+const FINAL_CLOSING_MESSAGE =
+  `Queda registrado. Muchas gracias por su tiempo. Le atendió ${AGENT_NAME}, asistente virtual de ${COMPANY_NAME}. Que tenga excelente día.`
 
 // ── Main entry point ─────────────────────────────────────────────────────
 
@@ -226,6 +304,56 @@ function fallbackText(response: Anthropic.Message): string {
     .map((b) => b.text)
     .join('')
     .trim()
+}
+
+// Maneja una respuesta de register_outcome/request_clarification, compartido
+// entre invoice_check y payment_date.
+function handleOutcomeToolUse(
+  toolUse: Anthropic.ToolUseBlock,
+  context: FlowContext
+): FlowResult | null {
+  if (toolUse.name === 'request_clarification') {
+    const input = toolUse.input as { message: string }
+    const attempts = (context.clarificationAttempts ?? 0) + 1
+    if (attempts >= 2) {
+      return {
+        reply: 'Entiendo. Para atenderle mejor, un asesor se pondrá en contacto con usted en breve.',
+        newState: 'closed',
+        newContext: {},
+        closeConversation: true,
+        outcome: { type: 'pending_human', notes: 'Respuestas ambiguas repetidas — escalado automáticamente' },
+      }
+    }
+    return {
+      reply: input.message,
+      newState: 'payment_date',
+      newContext: { ...context, clarificationAttempts: attempts },
+      closeConversation: false,
+    }
+  }
+
+  if (toolUse.name === 'register_outcome') {
+    const input = toolUse.input as { type: string; message: string }
+
+    if (!NEEDS_FOLLOWUP[input.type]) {
+      return {
+        reply: input.message,
+        newState: 'closed',
+        newContext: {},
+        closeConversation: true,
+        outcome: { type: input.type },
+      }
+    }
+
+    return {
+      reply: input.message,
+      newState: 'payment_date',
+      newContext: { ...context, pendingOutcomeType: input.type },
+      closeConversation: false,
+    }
+  }
+
+  return null
 }
 
 export async function advanceWhatsappFlow(
@@ -257,16 +385,47 @@ export async function advanceWhatsappFlow(
 
   // --- STEP 2: invoice_check ---
   if (effectiveState === 'invoice_check') {
-    const askPaymentDate = `El saldo correspondiente es de ${money(client.debt)}. ¿Tiene contemplada alguna fecha para realizar el pago?`
-    if (isNegative(text)) {
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      system: buildInvoiceCheckSystemPrompt(client),
+      tools: INVOICE_CHECK_TOOLS,
+      tool_choice: { type: 'auto' },
+      messages: [{ role: 'user', content: text }],
+    })
+
+    const toolUse = firstToolUse(response)
+
+    if (!toolUse) {
       return {
-        reply: `Las facturas corresponden al saldo actual de su cuenta. ${askPaymentDate}`,
+        reply: fallbackText(response) || '¿Ya recibió sus facturas del mes?',
+        newState: 'invoice_check',
+        newContext: context,
+        closeConversation: false,
+      }
+    }
+
+    if (toolUse.name === 'mark_invoice_received') {
+      return {
+        reply: `Perfecto. El saldo correspondiente es de ${money(client.debt)} pesos. ¿Tiene contemplada alguna fecha para realizar el pago?`,
         newState: 'payment_date',
         newContext: context,
         closeConversation: false,
       }
     }
-    return { reply: askPaymentDate, newState: 'payment_date', newContext: context, closeConversation: false }
+
+    if (toolUse.name === 'proceed_to_payment_date') {
+      const input = toolUse.input as { message: string }
+      return {
+        reply: input.message,
+        newState: 'payment_date',
+        newContext: context,
+        closeConversation: false,
+      }
+    }
+
+    const outcomeResult = handleOutcomeToolUse(toolUse, context)
+    if (outcomeResult) return outcomeResult
   }
 
   // --- STEP 3 continuation: capturing the detail for a pending outcome ---
@@ -315,55 +474,17 @@ export async function advanceWhatsappFlow(
       }
     }
 
-    if (toolUse.name === 'request_clarification') {
-      const input = toolUse.input as { message: string }
-      const attempts = (context.clarificationAttempts ?? 0) + 1
-      if (attempts >= 2) {
-        return {
-          reply: 'Entiendo. Para atenderle mejor, un asesor se pondrá en contacto con usted en breve.',
-          newState: 'closed',
-          newContext: {},
-          closeConversation: true,
-          outcome: { type: 'pending_human', notes: 'Respuestas ambiguas repetidas — escalado automáticamente' },
-        }
-      }
-      return {
-        reply: input.message,
-        newState: 'payment_date',
-        newContext: { ...context, clarificationAttempts: attempts },
-        closeConversation: false,
-      }
-    }
-
-    if (toolUse.name === 'register_outcome') {
-      const input = toolUse.input as { type: string; message: string }
-
-      if (!NEEDS_FOLLOWUP[input.type]) {
-        return {
-          reply: input.message,
-          newState: 'closed',
-          newContext: {},
-          closeConversation: true,
-          outcome: { type: input.type },
-        }
-      }
-
-      return {
-        reply: input.message,
-        newState: 'payment_date',
-        newContext: { ...context, pendingOutcomeType: input.type },
-        closeConversation: false,
-      }
-    }
+    const outcomeResult = handleOutcomeToolUse(toolUse, context)
+    if (outcomeResult) return outcomeResult
   }
 
-  // --- STEP 4: confirming ---
+  // --- STEP 4: confirming (primera confirmación, tiempo futuro) ---
   if (effectiveState === 'confirming') {
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 200,
-      system: buildConfirmingSystemPrompt(context),
-      tools: CONFIRMING_TOOLS,
+      system: buildConfirmSystemPrompt(context, 'future'),
+      tools: CONFIRM_TOOLS,
       tool_choice: { type: 'auto' },
       messages: [{ role: 'user', content: text }],
     })
@@ -372,9 +493,59 @@ export async function advanceWhatsappFlow(
 
     if (!toolUse || toolUse.name !== 'confirm_agreement') {
       const amount = context.pendingAmount ?? 0
+      const date = context.pendingDate ? formatDateWords(context.pendingDate) : ''
       return {
-        reply: fallbackText(response) || `Para confirmar: ¿registro el pago de ${money(amount)} para el ${context.pendingDate}?`,
+        reply: fallbackText(response) || `Para confirmar: ¿registro el pago de ${money(amount)} para el ${date}?`,
         newState: 'confirming',
+        newContext: context,
+        closeConversation: false,
+      }
+    }
+
+    const input = toolUse.input as { correct: boolean; date?: string; amount?: number; message: string }
+
+    if (input.correct) {
+      const amount = context.pendingAmount ?? 0
+      const date = context.pendingDate ? formatDateWords(context.pendingDate) : ''
+      return {
+        reply: `Para confirmar, he registrado el pago por ${money(amount)} pesos para el ${date}. ¿Es correcta esta información?`,
+        newState: 'final_confirming',
+        newContext: context,
+        closeConversation: false,
+      }
+    }
+
+    return {
+      reply: input.message,
+      newState: 'confirming',
+      newContext: {
+        ...context,
+        pendingAmount: input.amount ?? context.pendingAmount,
+        pendingDate: input.date ?? context.pendingDate,
+      },
+      closeConversation: false,
+    }
+  }
+
+  // --- STEP 5: final_confirming (repetición y confirmación final, tiempo pasado) ---
+  if (effectiveState === 'final_confirming') {
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      system: buildConfirmSystemPrompt(context, 'past'),
+      tools: CONFIRM_TOOLS,
+      tool_choice: { type: 'auto' },
+      messages: [{ role: 'user', content: text }],
+    })
+
+    const toolUse = firstToolUse(response)
+
+    if (!toolUse || toolUse.name !== 'confirm_agreement') {
+      const amount = context.pendingAmount ?? 0
+      const date = context.pendingDate ? formatDateWords(context.pendingDate) : ''
+      return {
+        reply: fallbackText(response) || `Para confirmar: ¿es correcto el pago de ${money(amount)} para el ${date}?`,
+        newState: 'final_confirming',
         newContext: context,
         closeConversation: false,
       }
@@ -386,7 +557,7 @@ export async function advanceWhatsappFlow(
       const amount = context.pendingAmount ?? 0
       const date = context.pendingDate ? new Date(context.pendingDate) : new Date()
       return {
-        reply: input.message,
+        reply: FINAL_CLOSING_MESSAGE,
         newState: 'closed',
         newContext: {},
         closeConversation: true,
@@ -397,7 +568,7 @@ export async function advanceWhatsappFlow(
 
     return {
       reply: input.message,
-      newState: 'confirming',
+      newState: 'final_confirming',
       newContext: {
         ...context,
         pendingAmount: input.amount ?? context.pendingAmount,
