@@ -1,19 +1,9 @@
 import axios, { AxiosError } from 'axios'
 import Message from '../models/Message'
 import Conversation from '../models/Conversation'
+import Client from '../models/Client'
 import { findOrCreateConversation, updateConversationLastMessage } from './conversationService'
-
-// Normalize to E.164 Mexico format: strips everything, ensures +52 prefix
-function normalizeMexicanPhone(raw: string): string {
-  const digits = raw.replace(/\D/g, '')
-  // Already has country code
-  if (digits.startsWith('521') && digits.length === 13) return `+${digits}`
-  if (digits.startsWith('52') && digits.length === 12) return `+${digits}`
-  // 10-digit local number
-  if (digits.length === 10) return `+52${digits}`
-  // Fallback: return as-is with +
-  return `+${digits}`
-}
+import { normalizeMexicanPhone } from '../utils/phone'
 
 async function postWithRetry(url: string, data: unknown, headers: Record<string, string>, retries = 3): Promise<any> {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -96,6 +86,18 @@ export async function prepareWhatsappMessage(data: any) {
 
   await updateConversationLastMessage(conversation._id.toString(), messageText, 'outbound', false)
 
+  // Marca el intento de contacto para el fallback automático de números
+  // alternos (ver phoneFallback.service.ts) — si no manda outreachPhoneIndex
+  // explícito (envío manual o recordatorio normal), es un contacto nuevo al
+  // número principal y el fallback arranca desde cero.
+  if (data.clientId) {
+    await Client.findByIdAndUpdate(data.clientId, {
+      outreachPhoneIndex: data.outreachPhoneIndex ?? 0,
+      outreachSentAt: new Date(),
+      outreachExhausted: false,
+    })
+  }
+
   return { sent: true, messageId: metaMessageId, saved }
 }
 
@@ -138,4 +140,30 @@ export async function sendWhatsappText(
   await updateConversationLastMessage(conversationId, text, 'outbound', false)
 
   return { sent: true, messageId: metaMessageId }
+}
+
+// Marca el mensaje entrante como leído y muestra el indicador "escribiendo..."
+// del lado del cliente (dura hasta ~25s o hasta que llegue la respuesta real).
+// Se usa mientras esperamos el margen de silencio del debounce, para que no
+// parezca que el bot no vio el mensaje.
+export async function sendTypingIndicator(incomingMetaMessageId: string): Promise<void> {
+  const metaUrl = `https://graph.facebook.com/v25.0/${process.env.META_PHONE_NUMBER_ID}/messages`
+  const headers = {
+    Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
+    'Content-Type': 'application/json',
+  }
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    status: 'read',
+    message_id: incomingMetaMessageId,
+    typing_indicator: { type: 'text' },
+  }
+
+  try {
+    await axios.post(metaUrl, payload, { headers, timeout: 10_000 })
+  } catch (err) {
+    // No crítico — si falla, el cliente simplemente no ve "escribiendo...".
+    console.warn('[WhatsApp] No se pudo mostrar el indicador de escribiendo:', (err as AxiosError)?.message)
+  }
 }

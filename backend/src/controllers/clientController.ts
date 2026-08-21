@@ -5,6 +5,7 @@ import PaymentPromise from "../models/PaymentPromise"
 import Call from "../models/Call"
 import Invoice from "../models/Invoice"
 import { isValidRFC, normalizeRFC } from "../utils/rfc"
+import { normalizeMexicanPhone } from "../utils/phone"
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pendiente",
@@ -83,8 +84,11 @@ function normalizeHeader(value: unknown): string {
     .replace(/[̀-ͯ]/g, "")
 }
 
-function normalizePhone(value: unknown): string {
-  return String(value ?? "").replace(/\D/g, "")
+function normalizeAlternatePhones(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value
+    .map((p) => normalizeMexicanPhone(p))
+    .filter((p): p is string => Boolean(p))
 }
 
 function toNumberOrNull(value: unknown): number | null {
@@ -148,7 +152,12 @@ export async function getClientDetail(req: Request, res: Response) {
 export async function updateClient(req: Request, res: Response) {
   try {
     const { id } = req.params
-    const client = await Client.findByIdAndUpdate(id, req.body, {
+    const payload = { ...req.body }
+    if (payload.phone) payload.phone = normalizeMexicanPhone(payload.phone)
+    const normalizedAlternates = normalizeAlternatePhones(payload.alternatePhones)
+    if (normalizedAlternates) payload.alternatePhones = normalizedAlternates
+
+    const client = await Client.findByIdAndUpdate(id, payload, {
       new: true,
       runValidators: true,
     })
@@ -185,7 +194,12 @@ export async function deleteClient(req: Request, res: Response) {
 
 export async function createClient(req: Request, res: Response) {
   try {
-    const client = await Client.create(req.body)
+    const alternatePhones = normalizeAlternatePhones(req.body.alternatePhones)
+    const client = await Client.create({
+      ...req.body,
+      phone: normalizeMexicanPhone(req.body.phone),
+      ...(alternatePhones ? { alternatePhones } : {}),
+    })
     res.status(201).json(client)
   } catch (error: any) {
     console.log("Error createClient:", error)
@@ -267,7 +281,7 @@ export async function importClients(req: Request, res: Response) {
         colByField[field] ? row.getCell(colByField[field]).value : undefined
 
       const name = String(cellValue("name") ?? "").trim()
-      const phone = normalizePhone(cellValue("phone"))
+      const phone = normalizeMexicanPhone(cellValue("phone"))
 
       if (!name || !phone) {
         rowErrors.push({ row: rowNumber, message: "Falta nombre o teléfono" })

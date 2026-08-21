@@ -18,6 +18,7 @@ import { handleMediaStream } from "./controllers/voiceStream.controller"
 import { validateTwilioConfig } from "./config/twilio"
 import { validateOpenAIConfig } from "./config/openai"
 import { startReminderScheduler } from "./services/reminderScheduler.service"
+import { startPhoneFallbackScheduler } from "./services/phoneFallback.service"
 
 const app = express()
 
@@ -52,6 +53,7 @@ async function start() {
   validateTwilioConfig()
   validateOpenAIConfig()
   startReminderScheduler()
+  startPhoneFallbackScheduler()
 
   const PORT = Number(process.env.PORT) || 3003
   const server = http.createServer(app)

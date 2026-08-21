@@ -13,6 +13,7 @@ interface Props {
 const initialForm = {
   nombre: "",
   telefono: "",
+  alternatePhones: [] as string[],
   rfc: "",
   email: "",
   deuda: "",
@@ -49,10 +50,22 @@ function toDateInput(value: any): string {
   return String(value).slice(0, 10)
 }
 
+// El input solo muestra los 10 dígitos locales — el prefijo +52 ya está fijo
+// junto al campo, así que si el teléfono guardado ya lo trae, lo quitamos.
+function stripMexicoPrefix(phone: string): string {
+  const digits = String(phone ?? "").replace(/\D/g, "")
+  if (digits.startsWith("521") && digits.length === 13) return digits.slice(3)
+  if (digits.startsWith("52") && digits.length === 12) return digits.slice(2)
+  return digits
+}
+
 function clientToForm(client: any) {
   return {
     nombre: client.name ?? "",
-    telefono: client.phone ?? "",
+    telefono: stripMexicoPrefix(client.phone ?? ""),
+    alternatePhones: Array.isArray(client.alternatePhones)
+      ? client.alternatePhones.map((p: string) => stripMexicoPrefix(p))
+      : [],
     rfc: client.rfc ?? "",
     email: "",
     deuda: client.debt != null ? String(client.debt) : "",
@@ -128,6 +141,24 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
     setForm((f) => ({ ...f, [name]: value }))
   }
 
+  function addAlternatePhone() {
+    setForm((f) => ({ ...f, alternatePhones: [...f.alternatePhones, ""] }))
+  }
+
+  function updateAlternatePhone(index: number, value: string) {
+    setForm((f) => ({
+      ...f,
+      alternatePhones: f.alternatePhones.map((p, i) => (i === index ? value : p)),
+    }))
+  }
+
+  function removeAlternatePhone(index: number) {
+    setForm((f) => ({
+      ...f,
+      alternatePhones: f.alternatePhones.filter((_, i) => i !== index),
+    }))
+  }
+
   async function handleSubmit() {
     const newErrors: { nombre?: boolean; telefono?: boolean; deuda?: boolean } = {}
     if (!form.nombre.trim()) newErrors.nombre = true
@@ -144,6 +175,7 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
       const payload = {
         name: form.nombre,
         phone: form.telefono,
+        alternatePhones: form.alternatePhones.map((p) => p.trim()).filter(Boolean),
         rfc: form.rfc.trim() ? form.rfc.trim().toUpperCase() : null,
         debt: Number(form.deuda) || 0,
         channel: form.canal,
@@ -210,16 +242,65 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
             <label className="text-sm text-zinc-400">
               Phone (10 digits) <span className="text-red-500">*</span>
             </label>
-            <input
-              name="telefono"
-              value={form.telefono}
-              onChange={handleChange}
-              placeholder="6561234567"
-              className={`w-full mt-1 bg-zinc-950 border rounded-lg p-3 text-white ${
+            <div
+              className={`flex items-stretch mt-1 bg-zinc-950 border rounded-lg overflow-hidden ${
                 errors.telefono ? "border-red-500" : "border-zinc-700"
               }`}
-            />
+            >
+              <span className="flex items-center px-3 text-zinc-400 bg-zinc-900 border-r border-zinc-700 select-none">
+                +52
+              </span>
+              <input
+                name="telefono"
+                value={form.telefono}
+                onChange={handleChange}
+                placeholder="6561234567"
+                className="w-full p-3 text-white bg-transparent focus:outline-none"
+              />
+            </div>
             {errors.telefono && <p className="mt-1 text-xs text-red-500">This field is required</p>}
+          </div>
+
+          <div className="col-span-2 md:col-span-3">
+            <div className="flex items-center justify-between">
+              <label className="text-sm text-zinc-400">
+                Alternate phone numbers
+              </label>
+              <button
+                type="button"
+                onClick={addAlternatePhone}
+                className="text-xs text-blue-400 hover:text-blue-300"
+              >
+                + Add number
+              </button>
+            </div>
+            <p className="text-xs text-zinc-500 mt-1">
+              If the client doesn't reply to the main number within 3 minutes, we automatically try the next one.
+            </p>
+            <div className="mt-2 space-y-2">
+              {form.alternatePhones.map((p, i) => (
+                <div key={i} className="flex items-stretch gap-2">
+                  <div className="flex items-stretch bg-zinc-950 border border-zinc-700 rounded-lg overflow-hidden flex-1">
+                    <span className="flex items-center px-3 text-zinc-400 bg-zinc-900 border-r border-zinc-700 select-none">
+                      +52
+                    </span>
+                    <input
+                      value={p}
+                      onChange={(e) => updateAlternatePhone(i, e.target.value)}
+                      placeholder="6561234567"
+                      className="w-full p-3 text-white bg-transparent focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeAlternatePhone(i)}
+                    className="px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div>

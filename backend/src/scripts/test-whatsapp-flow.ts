@@ -26,6 +26,15 @@ async function run(label: string, turns: string[]) {
   }
 }
 
+// Simula un cliente que escribe DESPUÉS de que el guion ya había cerrado.
+async function runReentry(label: string, text: string) {
+  console.log(`\n=== ${label} ===`)
+  const result = await advanceWhatsappFlow(text, client, 'closed', { checkingReentry: true })
+  console.log(`> cliente: ${text}`)
+  console.log(`< bot (${result.newState}): ${result.reply || '(sin respuesta — se queda cerrado)'}`)
+  if (result.outcome) console.log(`  outcome:`, result.outcome)
+}
+
 async function main() {
   await run('Identidad — número equivocado', ['No, se equivocó de número'])
 
@@ -69,6 +78,17 @@ async function main() {
     'Sí, así es',
     'No, mejor $5,000',
     'Sí, correcto',
+  ])
+
+  await runReentry('Reentrada: solo agradecimiento → se queda cerrado', 'Gracias, de acuerdo')
+  await runReentry('Reentrada: ok simple → se queda cerrado', 'ok')
+  await runReentry('Reentrada: trae info nueva → reabre con promesa', 'Al final sí le puedo pagar el 20 de agosto $4,500')
+  await runReentry('Reentrada: pide la factura → reabre con resend_invoice', 'Oigan no me ha llegado la factura, me la pueden mandar?')
+
+  await run('Pregunta totalmente ajena al guion (debe redirigir, nunca contestarla)', [
+    'Sí',
+    'Sí',
+    'Ayúdame a resolver una ecuación 2x + 4 = 12',
   ])
 
   process.exit(0)

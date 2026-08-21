@@ -20,6 +20,33 @@ required:true,
 unique:true
 },
 
+// Números adicionales del cliente — si no contesta el número principal en
+// outreachTimeoutMinutes, se intenta automáticamente con el siguiente
+// (ver phoneFallback.service.ts).
+alternatePhones:{
+type:[String],
+default:[]
+},
+
+// Índice del número que se probó más recientemente (0 = phone, 1 = alternatePhones[0], ...)
+outreachPhoneIndex:{
+type:Number,
+default:0
+},
+
+// Cuándo se mandó el mensaje al número actual — se limpia (null) en cuanto
+// el cliente responde, lo que cancela el fallback automático.
+outreachSentAt:{
+type:Date,
+default:null
+},
+
+// true una vez que se agotaron todos los números sin respuesta.
+outreachExhausted:{
+type:Boolean,
+default:false
+},
+
 // RFC (identificador fiscal, opcional) — se usa como segundo factor de
 // verificación de identidad en la llamada de voz (últimos 4 caracteres).
 rfc:{

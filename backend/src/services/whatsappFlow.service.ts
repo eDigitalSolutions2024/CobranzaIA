@@ -33,6 +33,9 @@ export interface FlowContext {
   clarificationAttempts?: number
   pendingAmount?: number
   pendingDate?: string // ISO
+  // true solo en el primer turno tras reabrir una conversación cerrada —
+  // dispara la clasificación de reentrada en vez del no-op normal de 'closed'.
+  checkingReentry?: boolean
   [key: string]: unknown
 }
 
@@ -247,6 +250,57 @@ Acabas de preguntarle: "¿Tiene contemplada alguna fecha para realizar el pago?"
 Máximo 2 oraciones por mensaje. Sin emojis. Tono cálido y profesional, en español de México.`
 }
 
+// ── Reentrada: el cliente escribe después de que el guion ya había cerrado ──
+// Reutiliza las mismas herramientas/reglas de payment_date — la única
+// diferencia real es el encabezado del prompt (no asumimos que responde una
+// pregunta puntual) y que puede optar por no hacer nada.
+
+const STAY_CLOSED_TOOL: Anthropic.Tool = {
+  name: 'acknowledge_and_stay_closed',
+  description:
+    'Call when the client\'s message is just a closing acknowledgment or pleasantry ("gracias", "ok", ' +
+    '"de acuerdo", "👍", "perfecto", "está bien") with nothing new to address — the conversation had already ' +
+    'concluded and this does not require reopening it. Do not reply; nothing further is sent.',
+  input_schema: { type: 'object' as const, properties: {} },
+}
+
+const REENTRY_TOOLS: Anthropic.Tool[] = [...PAYMENT_DATE_TOOLS, STAY_CLOSED_TOOL]
+
+function buildReentrySystemPrompt(client: FlowClient): string {
+  const today = new Date().toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  return `Eres ${AGENT_NAME}, asistente virtual de ${COMPANY_NAME}, escribiendo por WhatsApp a ${client.name}. Hoy: ${today}.
+Saldo del cliente: ${money(client.debt)} pesos.
+La conversación ya se había cerrado (se agotó el guion) y el cliente acaba de volver a escribir. Lee su mensaje con atención y decide qué corresponde usando EXACTAMENTE una herramienta:
+
+- Si es solo un agradecimiento o cierre de cortesía, sin nada nuevo que atender ("gracias", "ok", "de acuerdo", "perfecto", "👍") → acknowledge_and_stay_closed. No reinicies el guion por esto.
+
+- Si su mensaje SÍ contiene algo que atender (una fecha y monto de pago, dice que ya pagó, pide la factura, disputa el saldo, pide hablar con alguien, etc.) → usa las mismas reglas que ya seguimos siempre:
+
+- FECHA y MONTO concretos y afirmativos ("el 15 de agosto por $4,500", "le pago el viernes lo que debo") → register_payment_promise.
+
+- "Ya pagué" / "ya pagamos" (posible pago realizado) → register_outcome tipo reported_payment. Tu mensaje DEBE ser: "Gracias. ¿Me puede indicar la fecha aproximada en que se realizó el pago?". NUNCA lo registres como promesa de pago.
+
+- "Está domiciliado" / cargo automático → register_outcome tipo domiciliado. Tu mensaje DEBE ser: "Entendido. ¿El cargo está programado para alguna fecha específica?". NUNCA lo registres como promesa normal.
+
+- Pide tiempo para revisarlo / prefiere que le contacten después → register_outcome tipo callback_later. Tu mensaje DEBE ser: "Claro. ¿Qué fecha y horario le convendría para volver a contactarle?".
+
+- No puede pagar en este momento o no tiene fecha → register_outcome tipo no_payment_capacity. Tu mensaje DEBE ser: "Entiendo. ¿Tiene una fecha aproximada en la que considere posible realizarlo?".
+
+- El MONTO/saldo no es correcto (disputa de saldo) → register_outcome tipo dispute_amount. Tu mensaje DEBE ser: "Entiendo. Registraré la diferencia para su revisión. ¿Me puede indicar cuál es el monto que usted tiene registrado?".
+
+- La FACTURA está incorrecta → register_outcome tipo dispute_invoice. Tu mensaje DEBE ser: "Entiendo. ¿Podría indicarme brevemente cuál es la diferencia que detectó?".
+
+- La cuenta la ve/paga otra persona → register_outcome tipo wrong_contact. Tu mensaje DEBE ser: "Entiendo. ¿Me podría indicar quién es la persona responsable de cuentas por pagar?".
+
+- Pide que le manden/reenvíen la factura, o dice que no la ha recibido → register_outcome tipo resend_invoice. Tu mensaje DEBE ser: "Claro. Confirmamos el medio al que desea recibirla.".
+
+- Pide hablar con una persona/asesor humano → register_outcome tipo pending_human. Tu mensaje DEBE ser: "Claro. Canalizaré su solicitud con un ejecutivo.".
+
+- Respuesta confusa/incomprensible → request_clarification, pidiendo que aclare qué necesita.
+
+Máximo 2 oraciones por mensaje. Sin emojis. Tono cálido y profesional, en español de México.`
+}
+
 // ── Steps 4 y 5: confirming / final_confirming — Claude + tool (compartido) ─
 
 const CONFIRM_TOOLS: Anthropic.Tool[] = [
@@ -292,18 +346,18 @@ Máximo 2 oraciones. Sin emojis. Tono cálido y profesional, en español de Méx
 const FINAL_CLOSING_MESSAGE =
   `Queda registrado. Muchas gracias por su tiempo. Le atendió ${AGENT_NAME}, asistente virtual de ${COMPANY_NAME}. Que tenga excelente día.`
 
+// Cuando Claude no llama ninguna herramienta, es porque el mensaje no encajó
+// en ninguna rama del guion (p.ej. algo totalmente ajeno a cobranza). NUNCA
+// usamos el texto libre que Claude haya generado en ese caso — por más
+// inocente que parezca, es la puerta de entrada para que el bot se salga de
+// personaje (contestar tareas, chistes, lo que sea). Siempre redirige igual.
+const OFF_TOPIC_REDIRECT =
+  'Solo puedo ayudarte con lo relacionado a tu cuenta o factura pendiente. ¿Hay algo de eso en lo que te pueda asistir?'
+
 // ── Main entry point ─────────────────────────────────────────────────────
 
 function firstToolUse(response: Anthropic.Message): Anthropic.ToolUseBlock | undefined {
   return response.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
-}
-
-function fallbackText(response: Anthropic.Message): string {
-  return response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('')
-    .trim()
 }
 
 // Maneja una respuesta de register_outcome/request_clarification, compartido
@@ -398,7 +452,7 @@ export async function advanceWhatsappFlow(
 
     if (!toolUse) {
       return {
-        reply: fallbackText(response) || '¿Ya recibió sus facturas del mes?',
+        reply: OFF_TOPIC_REDIRECT,
         newState: 'invoice_check',
         newContext: context,
         closeConversation: false,
@@ -457,7 +511,7 @@ export async function advanceWhatsappFlow(
 
     if (!toolUse) {
       return {
-        reply: fallbackText(response) || '¿Podría confirmarme si ya tiene una fecha contemplada para el pago?',
+        reply: OFF_TOPIC_REDIRECT,
         newState: 'payment_date',
         newContext: context,
         closeConversation: false,
@@ -492,10 +546,8 @@ export async function advanceWhatsappFlow(
     const toolUse = firstToolUse(response)
 
     if (!toolUse || toolUse.name !== 'confirm_agreement') {
-      const amount = context.pendingAmount ?? 0
-      const date = context.pendingDate ? formatDateWords(context.pendingDate) : ''
       return {
-        reply: fallbackText(response) || `Para confirmar: ¿registro el pago de ${money(amount)} para el ${date}?`,
+        reply: OFF_TOPIC_REDIRECT,
         newState: 'confirming',
         newContext: context,
         closeConversation: false,
@@ -541,10 +593,8 @@ export async function advanceWhatsappFlow(
     const toolUse = firstToolUse(response)
 
     if (!toolUse || toolUse.name !== 'confirm_agreement') {
-      const amount = context.pendingAmount ?? 0
-      const date = context.pendingDate ? formatDateWords(context.pendingDate) : ''
       return {
-        reply: fallbackText(response) || `Para confirmar: ¿es correcto el pago de ${money(amount)} para el ${date}?`,
+        reply: OFF_TOPIC_REDIRECT,
         newState: 'final_confirming',
         newContext: context,
         closeConversation: false,
@@ -576,6 +626,45 @@ export async function advanceWhatsappFlow(
       },
       closeConversation: false,
     }
+  }
+
+  // --- STEP reentrada: el cliente escribió después de que el guion había cerrado ---
+  if (effectiveState === 'closed' && context.checkingReentry) {
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      system: buildReentrySystemPrompt(client),
+      tools: REENTRY_TOOLS,
+      tool_choice: { type: 'auto' },
+      messages: [{ role: 'user', content: text }],
+    })
+
+    const toolUse = firstToolUse(response)
+
+    // Agradecimiento/cortesía genuina — se queda cerrado, sin contestar nada.
+    if (toolUse?.name === 'acknowledge_and_stay_closed') {
+      return { reply: '', newState: 'closed', newContext: {}, closeConversation: true }
+    }
+
+    // No encajó en nada (ni siquiera es una cortesía) — redirige, sigue cerrado.
+    if (!toolUse) {
+      return { reply: OFF_TOPIC_REDIRECT, newState: 'closed', newContext: {}, closeConversation: true }
+    }
+
+    if (toolUse.name === 'register_payment_promise') {
+      const input = toolUse.input as { date: string; amount: number; message: string }
+      return {
+        reply: input.message,
+        newState: 'confirming',
+        newContext: { pendingAmount: input.amount, pendingDate: input.date },
+        closeConversation: false,
+      }
+    }
+
+    const outcomeResult = handleOutcomeToolUse(toolUse, {})
+    if (outcomeResult) return outcomeResult
+
+    return { reply: '', newState: 'closed', newContext: {}, closeConversation: true }
   }
 
   // --- closed / unexpected state: no-op ---
