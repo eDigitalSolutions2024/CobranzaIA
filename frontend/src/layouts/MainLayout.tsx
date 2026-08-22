@@ -14,7 +14,7 @@ export default function MainLayout({
 }: Props) {
 
   return (
-    <div className="flex min-h-screen bg-zinc-950 text-white">
+    <div className="flex min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
 
       <Sidebar
         page={page}

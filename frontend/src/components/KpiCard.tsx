@@ -1,20 +1,23 @@
+import type { LucideIcon } from "lucide-react"
+
 type Props = {
-
   title: string
-
   value: string | number
-
   change?: string
+  icon?: LucideIcon 
+  colorIcon?: string
+  size?: number
 
 }
 
 export default function KpiCard({
 
   title,
-
   value,
-
   change,
+  colorIcon,
+  icon: Icon,
+  size
 
 }: Props) {
 
@@ -38,21 +41,20 @@ export default function KpiCard({
   }
 
   return (
-
+    
     <div
       className="
         rounded-2xl
         border
-        border-zinc-800
-        bg-zinc-900/50
+        border-[var(--border)]
+        bg-[var(--bg-main)]
         p-6
       "
     >
-
       <p
         className="
           text-sm
-          text-zinc-400
+          text-white
         "
       >
 
@@ -63,7 +65,8 @@ export default function KpiCard({
         }
 
       </p>
-
+      
+      
       <div
         className="
           mt-4
@@ -79,6 +82,7 @@ export default function KpiCard({
             font-bold
           "
         >
+          
 
           {
 
@@ -91,6 +95,7 @@ export default function KpiCard({
         {
 
           change && (
+            
 
             <span
               className="
@@ -112,8 +117,14 @@ export default function KpiCard({
             </span>
 
           )
+          
 
         }
+        <span>
+        {
+          Icon && <Icon color={colorIcon} size={size} />
+        }
+      </span>
 
       </div>
 

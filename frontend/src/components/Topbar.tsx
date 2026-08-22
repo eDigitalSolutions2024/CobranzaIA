@@ -26,16 +26,15 @@ export default function Topbar() {
 
       <div className="
         flex items-center gap-3
-        rounded-xl border border-zinc-800
-        bg-zinc-900 px-4 py-2
+        rounded-xl border border-[var(--border)]  bg-[var(--bg-main)]
+        px-4 py-2
       ">
 
-        <Search size={18} className="text-zinc-500" />
+        <Search size={18} className="text-white " />
 
         <input
           placeholder="Search clients..."
           className="
-            bg-transparent
             text-sm
             outline-none
             placeholder:text-zinc-500
@@ -51,8 +50,8 @@ export default function Topbar() {
         {/* NOTIFICATIONS */}
 
         <button className="
-          rounded-xl border border-zinc-800
-          bg-zinc-900 p-3
+          rounded-xl
+          bg-trasnparent p-3
           hover:bg-zinc-800
           transition
         ">

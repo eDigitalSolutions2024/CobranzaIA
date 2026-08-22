@@ -43,11 +43,11 @@ const RISK_COLOR: Record<string, string> = {
 
 export default function ClientsTable({ clients }: Props) {
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
 
       <div className="mb-6">
         <h2 className="text-xl font-semibold">Recent clients</h2>
-        <p className="text-sm text-zinc-400">Smart collection tracking</p>
+        <p className="text-sm text-white">Smart collection tracking</p>
       </div>
 
       <div className="overflow-x-auto">

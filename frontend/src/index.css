@@ -7,6 +7,85 @@
 
 :root {
   font-family: Inter, sans-serif;
+   /* =========================
+     COBRANZA AI - BRAND
+     ========================= */
+
+  --brand-navy: #07163F;
+  --brand-navy-dark: #030B24;
+
+  --brand-blue: #0A2A70;
+  --brand-blue-light: #146CFF;
+
+  --brand-cyan: #00C8FF;
+
+  --brand-purple: #6D28D9;
+
+  --brand-main: #e53855;
+  --brand-ai: #FF2457;
+  --brand-ai-light: #FF4B76;
+  --brand-magenta: #FF0080;
+
+
+  /* =========================
+     BACKGROUNDS
+     ========================= */
+
+  --bg-primary: #050A1C;
+  --bg-secondary: #09132F;
+
+  --bg-main: #011631;
+
+  --bg-card: #0A1737;
+  --bg-card-hover: #10224A;
+  --bg-elevated: #0D1B3F;
+
+
+  /* =========================
+     BORDERS
+     ========================= */
+
+  --border: #112448;
+  --border-soft: #15274C;
+  --border-active: #FF2457;
+
+
+  /* =========================
+     TEXT
+     ========================= */
+
+  --text-primary: #FFFFFF;
+  --text-secondary: #B7C5DF;
+  --text-muted: #7284A6;
+  --text-disabled: #52617D;
+
+
+  /* =========================
+     STATUS
+     ========================= */
+
+  --success: #00C96B;
+  --success-bg: #062B22;
+
+  --warning: #FF9900;
+  --warning-bg: #2B1C05;
+
+  --danger: #FF2457;
+  --danger-bg: #32101C;
+
+  --info: #1677FF;
+  --info-bg: #081F45;
+
+
+  /* =========================
+     ABSTRACT DESIGN
+     ========================= */
+
+  --wave-blue: #087CFF;
+  --wave-cyan: #00D9FF;
+  --wave-purple: #6325E8;
+  --wave-pink: #FF0A78;
+  --wave-red: #FF234F;
 }
 
 * {
@@ -16,6 +95,6 @@
 body {
   margin: 0;
   padding: 0;
-  background: #09090b;
+  background: #5c5cf8;
   color: white;
 }

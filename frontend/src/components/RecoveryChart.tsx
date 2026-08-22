@@ -128,8 +128,8 @@ export default function RecoveryChart() {
       className="
         rounded-2xl
         border
-        border-zinc-800
-        bg-zinc-900/50
+        border-[var(--border)]
+        bg-[var(--bg-main)]
         p-6
       "
     >
@@ -154,7 +154,7 @@ export default function RecoveryChart() {
         <p
           className="
             text-sm
-            text-zinc-400
+            text-white
           "
         >
 
@@ -183,7 +183,7 @@ export default function RecoveryChart() {
 
             <XAxis
               dataKey="day"
-              stroke="#71717a"
+              stroke="#ffffff"
             />
 
             <Tooltip

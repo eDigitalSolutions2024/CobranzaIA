@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { useAuth } from "../context/AuthContext"
 import loginBg from "../assets/image 39.png"
-import logo from "../assets/logo-iqor 1.png"
+import logo from "../assets/iqor-logo.svg"
 
 export default function LoginPage() {
   const { login } = useAuth()

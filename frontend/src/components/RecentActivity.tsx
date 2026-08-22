@@ -32,11 +32,11 @@ export default function RecentActivity() {
   }
 
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
 
       <div className="mb-6">
         <h2 className="text-lg font-semibold">Recent activity</h2>
-        <p className="text-sm text-zinc-400">Latest messages</p>
+        <p className="text-sm text-white">Latest messages</p>
       </div>
 
       <div className="space-y-3">

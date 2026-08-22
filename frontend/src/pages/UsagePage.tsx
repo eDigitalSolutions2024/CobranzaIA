@@ -73,21 +73,21 @@ export default function UsagePage() {
       {/* Totales */}
       <div className="mt-8 grid gap-6 md:grid-cols-3">
         <div className="rounded-2xl border border-brand/30 bg-brand/5 p-6">
-          <p className="text-sm text-zinc-400">Total calls</p>
+          <p className="text-sm text-white">Total calls</p>
           <h2 className="mt-4 text-3xl font-bold text-white">
             {loading ? "..." : data?.calls?.total ?? 0}
           </h2>
         </div>
 
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
-          <p className="text-sm text-zinc-400">Call minutes</p>
+          <p className="text-sm text-white">Call minutes</p>
           <h2 className="mt-4 text-3xl font-bold text-white">
             {loading ? "..." : minutes(data?.calls?.totalDurationSeconds ?? 0)}
           </h2>
         </div>
 
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
-          <p className="text-sm text-zinc-400">WhatsApp messages sent</p>
+          <p className="text-sm text-white">WhatsApp messages sent</p>
           <h2 className="mt-4 text-3xl font-bold text-white">
             {loading ? "..." : data?.whatsapp?.outboundCount ?? 0}
           </h2>
@@ -97,19 +97,19 @@ export default function UsagePage() {
       {/* Estado de llamadas */}
       <div className="mt-8 grid gap-4 grid-cols-2 md:grid-cols-4">
         <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-4 text-center">
-          <p className="text-sm text-zinc-400">Completed</p>
+          <p className="text-sm text-white">Completed</p>
           <p className="text-2xl font-bold text-green-400 mt-1">{loading ? "..." : data?.calls?.completed ?? 0}</p>
         </div>
         <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4 text-center">
-          <p className="text-sm text-zinc-400">Requires agent</p>
+          <p className="text-sm text-white">Requires agent</p>
           <p className="text-2xl font-bold text-orange-400 mt-1">{loading ? "..." : data?.calls?.requiresHuman ?? 0}</p>
         </div>
         <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center">
-          <p className="text-sm text-zinc-400">Failed</p>
+          <p className="text-sm text-white">Failed</p>
           <p className="text-2xl font-bold text-red-400 mt-1">{loading ? "..." : data?.calls?.failed ?? 0}</p>
         </div>
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 text-center">
-          <p className="text-sm text-zinc-400">In progress</p>
+          <p className="text-sm text-white">In progress</p>
           <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : data?.calls?.inProgress ?? 0}</p>
         </div>
       </div>
