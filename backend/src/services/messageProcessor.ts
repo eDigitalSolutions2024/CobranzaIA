@@ -16,10 +16,18 @@ const INTENT_TO_SCORE: Partial<Record<string, number>> = {
   insult: 10,
 }
 
-// Outcomes en los que un humano ya se hizo cargo (o el número no es del
-// cliente) — el bot NO debe reabrir el guion aunque el número vuelva a
-// escribir; se queda en el inbox para que lo atienda una persona.
-const HUMAN_OWNED_OUTCOMES = new Set(['wrong_contact', 'pending_human', 'dispute_invoice'])
+// Outcomes en los que el bot NO debe reabrir el guion aunque el número vuelva
+// a escribir: número equivocado (no es el cliente) o disputa de factura (un
+// humano tiene que revisar documentos). Se quedan en el inbox para que los
+// atienda una persona.
+//
+// pending_human queda fuera a propósito: el ticket/escalamiento para el
+// humano se mantiene igual (no se toca ni se resuelve solo), pero el bot sí
+// puede seguir atendiendo si el cliente escribe algo más — pasa por el mismo
+// razonamiento de reentrada que cualquier conversación cerrada (ver
+// whatsappFlow.service.ts, rama `checkingReentry`), que puede decidir no
+// hacer nada si es solo cortesía.
+const HUMAN_OWNED_OUTCOMES = new Set(['wrong_contact', 'dispute_invoice'])
 
 // Simula el tiempo que tardaría una persona en escribir la respuesta, para
 // que el bot no conteste de golpe. Basado en una velocidad de tecleo
