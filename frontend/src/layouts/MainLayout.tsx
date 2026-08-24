@@ -21,11 +21,11 @@ export default function MainLayout({
         setPage={setPage}
       />
 
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
 
         <Topbar />
 
-        <main className="flex-1 p-6">
+        <main className="min-w-0 flex-1 p-6">
           {children}
         </main>
 

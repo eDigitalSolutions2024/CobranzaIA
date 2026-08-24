@@ -49,6 +49,21 @@ export default function ConversationsPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
+  useEffect(() => {
+    if (!selected?._id) return
+
+    const interval = setInterval(async () => {
+      try {
+        const msgs = await getConversationMessages(selected._id)
+        setMessages(msgs)
+      } catch (error) {
+        console.log(error)
+      }
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [selected?._id])
+
   async function loadConversations() {
     try {
       setLoading(true)

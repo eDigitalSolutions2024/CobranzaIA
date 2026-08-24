@@ -32,7 +32,7 @@ export default function RecentActivity() {
   }
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
+    <div className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
 
       <div className="mb-6">
         <h2 className="text-lg font-semibold">Recent activity</h2>
@@ -47,7 +47,7 @@ export default function RecentActivity() {
         {activities.map((activity) => (
           <div
             key={activity._id}
-            className="rounded-xl border border-zinc-800 bg-zinc-950 p-4"
+            className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-950 p-4"
           >
             <div className="flex items-center justify-between mb-1">
               <p className="text-sm font-medium text-zinc-200">
