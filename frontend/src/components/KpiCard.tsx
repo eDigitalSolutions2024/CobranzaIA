@@ -51,10 +51,11 @@ export default function KpiCard({
         p-6
       "
     >
-      <p
+      <h2
         className="
-          text-sm
+          text-2xl
           text-white
+          font-bold
         "
       >
 
@@ -64,7 +65,7 @@ export default function KpiCard({
 
         }
 
-      </p>
+      </h2>
       
       
       <div
