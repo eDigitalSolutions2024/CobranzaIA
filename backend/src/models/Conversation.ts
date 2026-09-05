@@ -84,6 +84,19 @@ const ConversationSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+
+    // Clasificación de la conversación (catálogo fijo, ver config/disposition.ts),
+    // derivada del flowOutcome.type ya calculado por el guion — no es una llamada
+    // de IA aparte. Se copia también a Client.nextAction.
+    disposition: {
+      type: String,
+      default: null,
+    },
+
+    nextAction: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,

@@ -202,6 +202,15 @@ type:String,
 default:null
 },
 
+// BUCKET DE MORA (texto crudo, ej. "A. Current", "C. 31-60") — se sincroniza
+// desde la factura más reciente del cliente cada vez que sus facturas cambian
+// (ver invoiceController.ts, syncClientFromInvoices). Distinto de agingDays,
+// que es un conteo numérico de días.
+agingTarget:{
+type:String,
+default:null
+},
+
 // FECHA DE CREACION (DEL CREDITO/FACTURA)
 createDate:{
 type:Date,

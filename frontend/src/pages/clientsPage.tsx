@@ -4,6 +4,7 @@ import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
 import ImportClientsModal from "../components/ImportClientsModal"
+import ImportInvoicesModal from "../components/ImportInvoicesModal"
 import { ChevronDown, ChevronUp } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -40,6 +41,7 @@ export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
   const [openModal, setOpenModal] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [importInvoicesOpen, setImportInvoicesOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
   const [notifyingId, setNotifyingId] = useState<string | null>(null)
@@ -174,14 +176,20 @@ export default function ClientsPage() {
               onClick={() => setImportOpen(true)}
               className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
             >
-              Import Excel
+              Import Clients
+            </button>
+            <button
+              onClick={() => setImportInvoicesOpen(true)}
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
+            >
+              Import Invoices
             </button>
             <button
               onClick={handleExport}
               disabled={exporting}
               className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
             >
-              {exporting ? "Exporting..." : "Export Excel"}
+              {exporting ? "Exporting..." : "Export Clients"}
             </button>
             <button
               onClick={() => { setEditingClient(null); setOpenModal(true) }}
@@ -192,12 +200,12 @@ export default function ClientsPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-zinc-800 text-left">
-                  <th className="pb-4 text-sm text-zinc-500">Customer</th>
+                  <th className="pb-4 text-sm text-zinc-500">Customers</th>
                   <th className="pb-4 text-sm text-zinc-500">Phone</th>
                   <th className="pb-4 text-sm text-zinc-500">USD Amount</th>
                   <th className="pb-4 text-sm text-zinc-500">Risk</th>
@@ -231,11 +239,9 @@ export default function ClientsPage() {
                       </div>
                     </td>
                     <td className="py-4 text-zinc-400">{client.phone}</td>
-                    <td className="py-4 text-zinc-300">{client.agingDays ?? "—"}</td>
                     <td className="py-4 text-zinc-300">
-
-                      {client.usdAmount != null
-                        ? `$${Number(client.usdAmount).toLocaleString("en-US")}`
+                      {client.debt != null
+                        ? `$${Number(client.debt).toLocaleString("en-US")}`
                         : "—"}
                     </td>
                     <td className="py-4">
@@ -250,6 +256,11 @@ export default function ClientsPage() {
                     <td className="py-4 text-zinc-500">
                       {client.lastContactAt
                         ? new Date(client.lastContactAt).toLocaleDateString("en-US")
+                        : "—"}
+                    </td>
+                    <td className="py-4 text-zinc-300">
+                      {client.paymentPromiseAmount != null
+                        ? `$${Number(client.paymentPromiseAmount).toLocaleString("en-US")}`
                         : "—"}
                     </td>
                     <td className="py-4">
@@ -375,7 +386,7 @@ export default function ClientsPage() {
                  {expanded && (
                   <tr className="bg-zinc-950/50">
                     <td colSpan={9} className="p-5">
-                      <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+                      <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] overflow-hidden">
                         <table className="w-full">
                           <thead>
                             <tr className="border-b border-zinc-800">
@@ -462,7 +473,7 @@ export default function ClientsPage() {
                                   : "—"}
                               </td>
 
-                              <td className="px-4 py-3">{client.agingDays ?? "—"}</td>
+                              <td className="px-4 py-3">{client.agingTarget || "—"}</td>
 
                               <td className="px-4 py-3">{client.loanLease || "—"}</td>
 
@@ -543,6 +554,12 @@ export default function ClientsPage() {
       <ImportClientsModal
         isOpen={importOpen}
         onClose={() => setImportOpen(false)}
+        onImported={loadClients}
+      />
+
+      <ImportInvoicesModal
+        isOpen={importInvoicesOpen}
+        onClose={() => setImportInvoicesOpen(false)}
         onImported={loadClients}
       />
     </>

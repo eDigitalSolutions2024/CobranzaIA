@@ -39,7 +39,7 @@ export default function CallsPage() {
         <p className="mt-2 text-zinc-400">Collection call history</p>
       </div>
 
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
+      <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>

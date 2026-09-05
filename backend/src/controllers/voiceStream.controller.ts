@@ -27,6 +27,13 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   // se corta la llamada antes de que alcance a decir la despedida.
   let awaitingHangupResponseCreation = false
   let hangupAfterResponseId: string | null = null
+  // requerir_humano/finalizar_llamada NO piden la respuesta de despedida al momento —
+  // la Realtime API rechaza (o corta) response.create si la respuesta ACTUAL sigue activa
+  // ("Conversation already has an active response"), y esa respuesta actual puede seguir
+  // hablando (ej. el aviso de "un agente se pondrá en contacto") cuando el modelo llama a
+  // la función. Se marca esta bandera y se pide la despedida hasta el responseDone de esa
+  // respuesta en curso — antes cortaba la frase a medias por esta condición de carrera.
+  let pendingFarewellTrigger = false
   // Si la respuesta de despedida sale vacía (el modelo solo vuelve a llamar a una función
   // sin decir nada), reintentamos pedirle que hable antes de colgar — máximo un par de
   // veces, para no quedarnos esperando para siempre si el modelo simplemente no quiere
@@ -151,6 +158,16 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
       firstAudioSentAt = null
     }
     if (usage) persistOpenAIUsage(usage)
+
+    // La respuesta que contenía la llamada a requerir_humano/finalizar_llamada ya
+    // terminó de verdad (generación Y sin quedar cancelada) — es seguro pedir ahora
+    // la respuesta de despedida sin chocar con la API.
+    if (pendingFarewellTrigger) {
+      pendingFarewellTrigger = false
+      awaitingHangupResponseCreation = true
+      session.createResponse()
+    }
+
     if (!shouldHangup) return
     if (awaitingHangupResponseCreation) return // aún no arrancó la respuesta que esperamos
     if (hangupAfterResponseId && responseId !== hangupAfterResponseId) return // es de otra respuesta
@@ -213,6 +230,10 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
     const call = await Call.findById(callDocId)
     if (!call) return
 
+    // Registro de qué tool se llamó, independiente del resultado de cada case —
+    // se usa al terminar la llamada para derivar `disposition` (ver voice.controller.ts).
+    await Call.findByIdAndUpdate(callDocId, { $push: { calledFunctions: name } })
+
     switch (name) {
       case 'confirmar_identidad': {
         call.identityConfirmed = true
@@ -224,6 +245,13 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
 
       case 'marcar_ticket_aclaracion': {
         await runAction('crm', 'create_clarification_ticket', {}, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        session.createResponse()
+        break
+      }
+
+      case 'marcar_factura_no_recibida': {
+        await runAction('crm', 'mark_invoice_not_received', {}, call)
         session.sendFunctionCallOutput(callId, { ok: true })
         session.createResponse()
         break
@@ -270,10 +298,9 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
           await Client.findByIdAndUpdate(call.clientId, { requiresHuman: true, requiresHumanReason: motivo })
         }
         shouldHangup = true
-        awaitingHangupResponseCreation = true
         hangupFarewellSpoken = false
+        pendingFarewellTrigger = true
         session.sendFunctionCallOutput(callId, { ok: true })
-        session.createResponse()
         break
       }
 
@@ -281,10 +308,9 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         call.status = 'completed'
         await call.save()
         shouldHangup = true
-        awaitingHangupResponseCreation = true
         hangupFarewellSpoken = false
+        pendingFarewellTrigger = true
         session.sendFunctionCallOutput(callId, { ok: true })
-        session.createResponse()
         break
       }
 

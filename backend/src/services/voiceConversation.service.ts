@@ -57,6 +57,12 @@ export const VOICE_TOOLS = [
   },
   {
     type: 'function',
+    name: 'marcar_factura_no_recibida',
+    description: 'Llamar cuando el cliente dice que NO ha recibido su factura del mes.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    type: 'function',
     name: 'marcar_saldo_pagado',
     description:
       'Llamar cuando el cliente dice que YA pagó su adeudo. El sistema verificará el pago y te dará el resultado para que continúes la conversación.',
@@ -66,7 +72,7 @@ export const VOICE_TOOLS = [
     type: 'function',
     name: 'registrar_promesa_pago',
     description:
-      'Llamar una vez que el cliente confirme fecha y monto de un pago. Si acuerdan un plan de pagos en varias cuotas, llamar una vez por cada cuota (máximo 12).',
+      'Llamar SOLO después de la confirmación FINAL (la segunda vez que el cliente confirma, tras repetirle el acuerdo en tiempo pasado) — nunca en cuanto mencione fecha/monto por primera vez, ni tras la primera confirmación. Si acuerdan un plan de pagos en varias cuotas, llamar una vez por cada cuota (máximo 12).',
     parameters: {
       type: 'object',
       properties: {
@@ -154,9 +160,9 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
 
   const identityConfirmedStep = clientInfo.rfc
     ? `llama a la función confirmar_identidad. Como segundo factor de seguridad, en ese MISMO turno pídele que te diga los últimos 4 caracteres de su RFC. En cuanto te los diga, llama a la función verificar_rfc con exactamente lo que escuchaste (letras y/o números, sin espacios). El sistema te dirá si coinciden:
-     - Si coinciden → informa su saldo pendiente y pregúntale si reconoce el adeudo, en el mismo turno en que reacciones a la confirmación.
+     - Si coinciden → continúa al punto 3.
      - Si NO coinciden → pídele que te los repita una sola vez más. Si en ese segundo intento tampoco coinciden, despídete con cortesía y llama a requerir_humano.`
-    : `llama a la función confirmar_identidad y, en ese MISMO turno, infórmale su saldo pendiente y pregúntale si reconoce el adeudo. No lo dividas en varios turnos.`
+    : `llama a la función confirmar_identidad y continúa al punto 3.`
 
   return `${base}
 
@@ -168,14 +174,26 @@ FLUJO A SEGUIR:
    - Si confirma → ${identityConfirmedStep}
    - Si dice que no es él, o da un nombre claramente distinto → pregunta una sola vez más para descartar mala transcripción del audio. Si en ese segundo intento sigue sin coincidir, despídete con cortesía y llama a la función requerir_humano. Nunca hagas más de 2 intentos en total — repetir la pregunta varias veces es peor que escalar rápido.
    - Si pide hablar con una persona en cualquier momento → llama a requerir_humano.
-3. Según su respuesta sobre el adeudo:
+3. Pregúntale: "Gracias. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?".
+   - Si confirma que SÍ las recibió → continúa al punto 4.
+   - Si dice que NO las ha recibido → llama a la función marcar_factura_no_recibida, dile con calidez que en breve se la reenvían por este medio, despídete y llama a finalizar_llamada. No sigas con el saldo ni la fecha de pago en esta llamada.
+   - Si dice que sí las recibió pero luego no reconoce o no sabe identificar a cuáles facturas te refieres (ej. pregunta "¿cuáles facturas?" y no las ubica) → NO se las expliques ni las inventes; llama a marcar_ticket_aclaracion y requerir_humano, despídete con cortesía.
+   - Si no está segura o no sabe si las recibió (pero eso no le impide seguir) → no te detengas por esto, continúa al punto 4 igual.
+4. Infórmale su saldo pendiente y pregúntale si reconoce el adeudo. Según su respuesta:
    - Si dice que NO lo reconoce → llama a marcar_ticket_aclaracion y requerir_humano, despídete con cortesía.
    - Si dice que YA LO PAGÓ → llama a marcar_saldo_pagado y dile que estás verificando; el sistema te dará el resultado, espera a tenerlo antes de continuar.
-   - Si SÍ reconoce el adeudo → continúa al punto 4.
-4. ${agingGuidance}
-   Cuando el cliente confirme fecha y monto de pago, resume el acuerdo en voz alta y llama a la función registrar_promesa_pago (una llamada por cada cuota, si acuerdan un plan de pagos, máximo 12 cuotas).
-   - Si no tiene dinero → pregunta "¿Cuánto podría apartar esta semana?"
+   - Si SÍ reconoce el adeudo → continúa al punto 5.
+5. ${agingGuidance}
+   - Si no tiene dinero ahora → NUNCA ofrezcas ni aceptes un pago parcial (no existe esa opción). Pregunta para qué fecha podría tener el pago COMPLETO del saldo.
    - Si se enoja → empatiza, ofrece contactarlo en otro momento, cierra la llamada.
    - Si pide que le escriban por WhatsApp → confírmaselo y cierra la llamada.
-5. Cierra siempre con calidez. En cuanto la conversación termine (con o sin acuerdo), despídete y llama a la función finalizar_llamada.`
+   - Si propone pagar solo una parte del saldo → explícale con calidez que no se manejan pagos parciales, que necesitas una fecha en la que pueda cubrir el saldo COMPLETO (${clientInfo.debt.toLocaleString('es-MX')} pesos), y vuelve a preguntar la fecha.
+   - En cuanto el cliente dé una fecha para pagar el saldo completo → NO llames todavía a registrar_promesa_pago. Repite la intención en voz (tiempo futuro) y pide confirmación explícita: "Para confirmar, registraré el pago por [monto] pesos para el [fecha]. ¿Es correcta la información?". Continúa al punto 6.
+6. Según su respuesta a esa primera confirmación:
+   - Si corrige el monto o la fecha → repite la nueva intención y vuelve a preguntar "¿Es correcta la información?" (te puedes quedar en este punto varias veces hasta que confirme).
+   - Si confirma que es correcta → repite el acuerdo, esta vez en tiempo PASADO: "Para confirmar, he registrado el pago por [monto] pesos para el [fecha]. ¿Es correcta esta información?". Continúa al punto 7.
+7. Esta es la confirmación FINAL:
+   - Si corrige algo → vuelve a repetirlo en pasado y pregunta de nuevo, hasta que confirme sin cambios.
+   - Si confirma → AHORA SÍ llama a la función registrar_promesa_pago (una llamada por cada cuota, si acuerdan un plan de pagos, máximo 12 cuotas) y continúa al punto 8.
+8. Cierra siempre con calidez. En cuanto la conversación termine (con o sin acuerdo), despídete y llama a la función finalizar_llamada.`
 }

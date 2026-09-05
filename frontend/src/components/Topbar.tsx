@@ -111,8 +111,8 @@ export default function Topbar() {
               w-60
               overflow-hidden
               rounded-2xl
-              border border-zinc-800
-              bg-zinc-900
+              border border-[var(--border)]
+              bg-[var(--bg-main)]
               shadow-2xl
               z-50
             ">

@@ -5,6 +5,37 @@ import Call from '../models/Call'
 import Client from '../models/Client'
 import { findClientByPhone } from '../services/customerLookup.service'
 import { analyzeCallTranscript, ClientInfo } from '../services/claudeVoice.service'
+import { DispositionStatus, nextActionFor } from '../config/disposition'
+
+// Traduce lo que ya pasó en la llamada (qué function tool disparó el agente, o si
+// nunca hubo conversación real) a un Status del catálogo fijo — no se le pregunta
+// a una IA, se deriva de decisiones que la IA ya tomó en vivo durante la llamada
+// (ver voiceStream.controller.ts, calledFunctions). "Prefers CAS support" se usa
+// como el status más cercano a "se escaló a un humano" — el catálogo no tiene uno
+// literal para eso.
+function computeVoiceDisposition(calledFunctions: string[], relevantTurnCount: number): DispositionStatus {
+  if (calledFunctions.includes('marcar_extension')) return 'Extension required'
+  if (calledFunctions.includes('registrar_promesa_pago')) return 'Payment scheduled'
+  if (calledFunctions.includes('marcar_saldo_pagado')) return 'Payment received'
+  if (calledFunctions.includes('marcar_factura_no_recibida')) return 'Invoice, statement or contract required'
+  if (calledFunctions.includes('requerir_humano') || calledFunctions.includes('marcar_ticket_aclaracion')) {
+    return 'Prefers CAS support'
+  }
+  if (relevantTurnCount < 2) return 'Customer hung up'
+  return 'Contact made - No resolution'
+}
+
+async function applyDisposition(
+  callId: mongoose.Types.ObjectId,
+  clientId: mongoose.Types.ObjectId | undefined | null,
+  status: DispositionStatus
+): Promise<void> {
+  const nextAction = nextActionFor(status)
+  await Call.findByIdAndUpdate(callId, { disposition: status, nextAction })
+  if (clientId) {
+    await Client.findByIdAndUpdate(clientId, { nextAction })
+  }
+}
 
 const { VoiceResponse } = twilio.twiml
 const VOICE = 'Polly.Mia-Neural' as const
@@ -230,10 +261,13 @@ export async function handleStatus(req: Request, res: Response): Promise<void> {
 
   try {
     if (['busy', 'failed', 'no-answer', 'canceled'].includes(CallStatus)) {
-      await Call.findOneAndUpdate(
+      const call = await Call.findOneAndUpdate(
         { callSid: CallSid, status: 'in_progress' },
         { status: 'failed', ...(durationSeconds !== null ? { durationSeconds } : {}) }
       )
+      // El cliente nunca contestó — no hay conversación que analizar, el status se
+      // sabe directo del propio evento de Twilio, sin necesidad de IA.
+      if (call) await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'No answer')
     } else if (CallStatus === 'completed') {
       // Marca como completadas las llamadas que se cortaron a media conversación
       await Call.findOneAndUpdate(
@@ -253,6 +287,9 @@ export async function handleStatus(req: Request, res: Response): Promise<void> {
       }
 
       const relevantTurns = call.transcript.filter((t) => !t.content.startsWith('['))
+      const disposition = computeVoiceDisposition(call.calledFunctions ?? [], relevantTurns.length)
+      await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, disposition)
+
       if (relevantTurns.length < 2) {
         res.sendStatus(200)
         return

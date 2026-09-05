@@ -47,3 +47,9 @@ export const updateInvoice = (invoiceId: string, data: any) =>
 
 export const deleteInvoice = (invoiceId: string) =>
   api(`/invoices/${invoiceId}`, { method: "DELETE" })
+
+export const importInvoicesExcel = (file: File) => {
+  const formData = new FormData()
+  formData.append("file", file)
+  return apiUpload("/invoices/import", formData)
+}

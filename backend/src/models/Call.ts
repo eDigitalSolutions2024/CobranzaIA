@@ -35,6 +35,14 @@ export interface ICall extends Document {
   flowStateId?: string | null
   flowContext?: Record<string, any>
   summary?: string | null
+  // Nombres de las VOICE_TOOLS que el agente invocó durante la llamada, en orden —
+  // sirve para derivar `disposition` al terminar sin depender de una IA adicional
+  // (ver voiceStream.controller.ts y voice.controller.ts).
+  calledFunctions: string[]
+  // Clasificación final de la llamada (catálogo fijo, ver config/disposition.ts) y
+  // la acción sugerida que resulta de ella — se copia también a Client.nextAction.
+  disposition?: string | null
+  nextAction?: string | null
   // Duración reportada por Twilio en el statusCallback final (CallDuration, en segundos) —
   // null hasta que la llamada termina y Twilio manda el webhook 'completed'.
   durationSeconds?: number | null
@@ -72,6 +80,9 @@ const CallSchema = new Schema<ICall>(
     flowStateId: { type: String, default: null },
     flowContext: { type: Schema.Types.Mixed, default: {} },
     summary: { type: String, default: null },
+    calledFunctions: { type: [String], default: [] },
+    disposition: { type: String, default: null },
+    nextAction: { type: String, default: null },
     durationSeconds: { type: Number, default: null },
     openaiUsage: {
       totalTokens: { type: Number, default: 0 },

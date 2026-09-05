@@ -216,7 +216,7 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto">
+      <div className="bg-[var(--bg-main)] border border-[var(--border)] rounded-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto">
 
         <h2 className="text-2xl font-bold text-white mb-6">{isEditMode ? "Edit Client" : "New Client"}</h2>
 

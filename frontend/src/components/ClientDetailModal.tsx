@@ -219,7 +219,7 @@ function formatMoney(value: any): string {
 
 function StatTile({ label, value, sub }: { label: string; value: React.ReactNode; sub?: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4">
       <p className="text-xs text-zinc-500">{label}</p>
       <p className="text-lg font-semibold text-white mt-1">{value}</p>
       {sub && <p className="text-xs text-zinc-500 mt-0.5">{sub}</p>}
@@ -248,6 +248,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
   const [data, setData] = useState<any>(null)
   const [tab, setTab] = useState<"promises" | "calls" | "invoices">("promises")
   const [expandedCall, setExpandedCall] = useState<string | null>(null)
+  const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null)
   const [invoiceForm, setInvoiceForm] = useState<InvoiceForm>(EMPTY_INVOICE_FORM)
   const [showInvoiceForm, setShowInvoiceForm] = useState(false)
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null)
@@ -339,7 +340,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-3xl max-h-[90vh] overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 flex flex-col">
+      <div className="w-full max-w-3xl max-h-[90vh] overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex flex-col">
 
         {!data && <div className="p-16 text-center text-zinc-500">Loading...</div>}
 
@@ -562,33 +563,71 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                           submitLabel="Update invoice"
                         />
                       ) : (
-                        <div key={inv._id} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-semibold text-white">{inv.invoiceNumber}</p>
-                            <p className="text-sm text-zinc-400 mt-0.5">{formatMoney(inv.amount)} MXN</p>
-                            <p className="text-xs text-zinc-600 mt-1">
-                              {inv.issueDate ? `Issued ${formatDate(inv.issueDate)}` : ""}
-                              {inv.dueDate ? ` · Due ${formatDate(inv.dueDate)}` : ""}
-                            </p>
-                            {inv.notes && <p className="text-xs text-zinc-600 mt-1">{inv.notes}</p>}
+                        <div
+                          key={inv._id}
+                          onClick={() => setExpandedInvoiceId(expandedInvoiceId === inv._id ? null : inv._id)}
+                          className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-white">{inv.invoiceNumber}</p>
+                              <p className="text-sm text-zinc-400 mt-0.5">
+                                {formatMoney(inv.amount)} {inv.currencyCode || "MXN"}
+                                {inv.remainingAmount != null && ` · Remaining ${formatMoney(inv.remainingAmount)}`}
+                              </p>
+                              <p className="text-xs text-zinc-600 mt-1">
+                                {inv.issueDate ? `Issued ${formatDate(inv.issueDate)}` : ""}
+                                {inv.dueDate ? ` · Due ${formatDate(inv.dueDate)}` : ""}
+                              </p>
+                              {(inv.invoiceType || inv.contractNumber) && (
+                                <p className="text-xs text-zinc-600 mt-1">
+                                  {inv.invoiceType}
+                                  {inv.invoiceType && inv.contractNumber && " · "}
+                                  {inv.contractNumber && `Contract ${inv.contractNumber}`}
+                                </p>
+                              )}
+                              {inv.notes && <p className="text-xs text-zinc-600 mt-1">{inv.notes}</p>}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              {inv.agingTarget && (
+                                <span className="rounded-full px-3 py-1 text-xs font-medium bg-zinc-500/10 text-zinc-400">
+                                  {inv.agingTarget}
+                                </span>
+                              )}
+                              <span className={`rounded-full px-3 py-1 text-xs font-medium ${INVOICE_STATUS_COLOR[inv.status] || "bg-zinc-500/10 text-zinc-400"}`}>
+                                {INVOICE_STATUS_LABEL[inv.status] ?? inv.status}
+                              </span>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); startEditInvoice(inv) }}
+                                className="text-xs text-zinc-500 hover:text-blue-400 transition-colors"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleDeleteInvoice(inv._id) }}
+                                className="text-xs text-zinc-500 hover:text-red-400 transition-colors"
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <span className={`rounded-full px-3 py-1 text-xs font-medium ${INVOICE_STATUS_COLOR[inv.status] || "bg-zinc-500/10 text-zinc-400"}`}>
-                              {INVOICE_STATUS_LABEL[inv.status] ?? inv.status}
-                            </span>
-                            <button
-                              onClick={() => startEditInvoice(inv)}
-                              className="text-xs text-zinc-500 hover:text-blue-400 transition-colors"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDeleteInvoice(inv._id)}
-                              className="text-xs text-zinc-500 hover:text-red-400 transition-colors"
-                            >
-                              Delete
-                            </button>
-                          </div>
+
+                          {expandedInvoiceId === inv._id && (
+                            <div className="mt-4 pt-4 border-t border-zinc-800 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
+                              <Field label="Hptf Invoice #" value={inv.hptfInvoiceNumber} />
+                              <Field label="Contract Number" value={inv.contractNumber} />
+                              <Field label="Invoice Type" value={inv.invoiceType} />
+                              <Field label="Collector" value={inv.collector} />
+                              <Field label="Team Leader" value={inv.teamLeader} />
+                              <Field label="Currency" value={inv.currencyCode} />
+                              <Field label="Customer Country" value={inv.customerCountry} />
+                              <Field label="Aging Target" value={inv.agingTarget} />
+                              <Field
+                                label="Remaining Amount"
+                                value={inv.remainingAmount != null ? formatMoney(inv.remainingAmount) : null}
+                              />
+                            </div>
+                          )}
                         </div>
                       )
                     )}

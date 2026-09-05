@@ -79,14 +79,14 @@ export default function UsagePage() {
           </h2>
         </div>
 
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
           <p className="text-sm text-white">Call minutes</p>
           <h2 className="mt-4 text-3xl font-bold text-white">
             {loading ? "..." : minutes(data?.calls?.totalDurationSeconds ?? 0)}
           </h2>
         </div>
 
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
+        <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
           <p className="text-sm text-white">WhatsApp messages sent</p>
           <h2 className="mt-4 text-3xl font-bold text-white">
             {loading ? "..." : data?.whatsapp?.outboundCount ?? 0}
@@ -108,14 +108,14 @@ export default function UsagePage() {
           <p className="text-sm text-white">Failed</p>
           <p className="text-2xl font-bold text-red-400 mt-1">{loading ? "..." : data?.calls?.failed ?? 0}</p>
         </div>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 text-center">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
           <p className="text-sm text-white">In progress</p>
           <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : data?.calls?.inProgress ?? 0}</p>
         </div>
       </div>
 
       {/* Tendencia diaria de llamadas */}
-      <div className="mt-8 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6">
+      <div className="mt-8 rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
         <div className="mb-6">
           <h2 className="text-lg font-semibold">Calls per day</h2>
           <p className="text-sm text-zinc-400">Daily call volume</p>

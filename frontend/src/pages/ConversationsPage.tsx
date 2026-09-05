@@ -45,9 +45,14 @@ export default function ConversationsPage() {
     return () => clearInterval(interval)
   }, [])
 
+  // Autoscroll solo cuando de verdad llega un mensaje nuevo — no en cada poll
+  // de 3s, que vuelve a traer los mismos mensajes y antes forzaba el scroll
+  // hasta abajo aunque el usuario estuviera leyendo historial arriba.
+  const lastMessageId = messages[messages.length - 1]?._id
   useEffect(() => {
+    if (!lastMessageId) return
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+  }, [lastMessageId])
 
   useEffect(() => {
     if (!selected?._id) return
@@ -113,12 +118,12 @@ export default function ConversationsPage() {
   const totalUnread = conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0)
 
   return (
-    <div className="flex h-[calc(100vh-120px)] gap-0">
+    <div className="flex h-[calc(100vh-120px)] gap-0 rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] overflow-hidden">
 
       {/* PANEL IZQUIERDO — Lista de conversaciones */}
-      <div className="w-80 flex-shrink-0 flex flex-col border-r border-zinc-800">
+      <div className="w-80 flex-shrink-0 flex flex-col border-r border-[var(--border)]">
 
-        <div className="p-4 border-b border-zinc-800">
+        <div className="p-4 border-b border-[var(--border)]">
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold">Conversations</h1>
             {totalUnread > 0 && (
@@ -148,9 +153,9 @@ export default function ConversationsPage() {
               key={conv._id}
               onClick={() => selectConversation(conv)}
               className={`
-                w-full text-left p-4 border-b border-zinc-800/50
-                hover:bg-zinc-800/50 transition-colors
-                ${selected?._id === conv._id ? "bg-zinc-800" : ""}
+                w-full text-left p-4 border-b border-[var(--border)]
+                hover:bg-[var(--bg-card-hover)] transition-colors
+                ${selected?._id === conv._id ? "bg-[var(--bg-card)]" : ""}
               `}
             >
               <div className="flex items-start justify-between gap-2">
@@ -212,7 +217,7 @@ export default function ConversationsPage() {
         {selected && (
           <>
             {/* Header del chat */}
-            <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+            <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold">
                   {selected.clientId?.name || selected.phone}

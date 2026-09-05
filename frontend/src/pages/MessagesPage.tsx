@@ -90,7 +90,7 @@ export default function MessagesPage() {
             1. Select client
           </label>
           <select
-            className="w-full rounded-xl bg-zinc-900 border border-zinc-700 p-3 text-white"
+            className="w-full rounded-xl bg-[var(--bg-main)] border border-[var(--border)] p-3 text-white"
             onChange={(e) =>
               setClient(clients.find((c) => c._id === e.target.value) || null)
             }
@@ -104,7 +104,7 @@ export default function MessagesPage() {
           </select>
 
           {client && (
-            <div className="mt-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 text-sm">
+            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-3 text-sm">
               <p className="text-zinc-300">📱 {client.phone}</p>
               <p className="text-zinc-400 mt-1">
                 Debt: ${Number(client.debt).toLocaleString("en-US")} MXN
@@ -128,7 +128,7 @@ export default function MessagesPage() {
                   w-full text-left rounded-xl border p-3 transition-colors
                   ${template.id === t.id
                     ? "border-blue-500 bg-blue-500/10 text-white"
-                    : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-600"
+                    : "border-[var(--border)] bg-[var(--bg-main)] text-zinc-300 hover:border-[var(--border-soft)]"
                   }
                 `}
               >
@@ -144,7 +144,7 @@ export default function MessagesPage() {
           <label className="text-sm text-zinc-400 block mb-2">
             3. Preview
           </label>
-          <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-5 min-h-[200px] whitespace-pre-line text-sm text-zinc-200">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-5 min-h-[200px] whitespace-pre-line text-sm text-zinc-200">
             {preview}
           </div>
         </div>

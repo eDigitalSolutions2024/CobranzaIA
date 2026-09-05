@@ -1,4 +1,3 @@
-import { Pie, Cell, PieChart } from "recharts"
 type CallStats = {
   total?: number
   completed?: number

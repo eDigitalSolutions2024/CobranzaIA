@@ -92,6 +92,17 @@ const registry: Record<string, ActionFn> = {
       notes: `Cliente no reconoció el adeudo durante la llamada. CallSid: ${call.callSid}`,
     })
   },
+
+  'crm.mark_invoice_not_received': async (_ctx, call) => {
+    await Ticket.create({
+      clientId: call.clientId ?? null,
+      callId: call._id,
+      phone: call.phone,
+      reason: 'resend_invoice',
+      status: 'open',
+      notes: `Cliente indicó que no ha recibido su factura del mes durante la llamada. CallSid: ${call.callSid}`,
+    })
+  },
 }
 
 export async function runAction(

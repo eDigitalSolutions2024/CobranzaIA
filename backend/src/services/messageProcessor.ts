@@ -7,6 +7,25 @@ import { classifyIntent } from './intentClassifier'
 import { advanceWhatsappFlow, FlowContext, FlowState } from './whatsappFlow.service'
 import { sendWhatsappText, sendTypingIndicator } from './whatsappService'
 import { bufferMessage } from './whatsappDebounce.cache'
+import { DispositionStatus, nextActionFor } from '../config/disposition'
+
+// Traduce el outcome.type que ya calculó el guion (whatsappFlow.service.ts) al
+// Status del catálogo fijo — no es una clasificación de IA aparte, es una
+// traducción determinística de una decisión que el guion ya tomó. 'pending_human'
+// usa 'Prefers CAS support' como el status más cercano a "se escaló a un humano"
+// (mismo criterio que la llamada de voz, ver voice.controller.ts).
+const WHATSAPP_OUTCOME_TO_STATUS: Record<string, DispositionStatus> = {
+  payment_promise: 'Payment scheduled',
+  reported_payment: 'Payment received',
+  domiciliado: 'Payment scheduled',
+  callback_later: 'Follow up',
+  no_payment_capacity: 'Follow up',
+  dispute_amount: 'Invoice, statement or contract required',
+  dispute_invoice: 'Invoice, statement or contract required',
+  wrong_contact: 'Wrong number',
+  resend_invoice: 'Need invoice',
+  pending_human: 'Prefers CAS support',
+}
 
 // Maps local intent → score
 const INTENT_TO_SCORE: Partial<Record<string, number>> = {
@@ -95,11 +114,19 @@ async function runWhatsappFlowTurn(
 
   let newClientStatus: string | undefined
   let newClientIntent: string | undefined
+  let newClientNextAction: string | undefined
 
   if (result.outcome) {
     conversationUpdate.flowOutcome = { ...result.outcome, updatedAt: new Date() }
     newClientIntent = result.outcome.type
     if (result.outcome.type !== 'payment_promise') conversationUpdate.requiresFollowUp = true
+
+    const status = WHATSAPP_OUTCOME_TO_STATUS[result.outcome.type]
+    if (status) {
+      newClientNextAction = nextActionFor(status)
+      conversationUpdate.disposition = status
+      conversationUpdate.nextAction = newClientNextAction
+    }
   }
   await Conversation.findByIdAndUpdate(conversationId, conversationUpdate)
 
@@ -115,10 +142,11 @@ async function runWhatsappFlowTurn(
     newClientStatus = 'promised'
   }
 
-  if (newClientStatus || newClientIntent) {
+  if (newClientStatus || newClientIntent || newClientNextAction) {
     await Client.findByIdAndUpdate(clientId, {
       ...(newClientStatus ? { status: newClientStatus } : {}),
       ...(newClientIntent ? { lastIntent: newClientIntent } : {}),
+      ...(newClientNextAction ? { nextAction: newClientNextAction } : {}),
     })
   }
 }

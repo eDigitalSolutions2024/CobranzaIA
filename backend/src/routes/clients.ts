@@ -15,6 +15,7 @@ import {
   createInvoice,
   updateInvoice,
   deleteInvoice,
+  importInvoices,
 } from "../controllers/invoiceController"
 import { requireAuth } from "../middleware/auth"
 
@@ -56,6 +57,7 @@ router.post("/clients/import", requireAuth, uploadClientsFile, importClients)
 router.delete("/clients/:id", requireAuth, deleteClient)
 
 router.post("/clients/:id/invoices", requireAuth, createInvoice)
+router.post("/invoices/import", requireAuth, uploadClientsFile, importInvoices)
 router.patch("/invoices/:invoiceId", requireAuth, updateInvoice)
 router.delete("/invoices/:invoiceId", requireAuth, deleteInvoice)
 

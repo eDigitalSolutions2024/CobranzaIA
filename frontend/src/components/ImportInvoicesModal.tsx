@@ -1,10 +1,11 @@
 import { useRef, useState } from "react"
-import { downloadClientsTemplate, importClientsExcel } from "../services/clients"
+import { importInvoicesExcel } from "../services/clients"
 
 interface ImportResult {
   createdCount: number
+  updatedCount: number
   totalRows: number
-  skipped: { row: number; phone: string; reason: string }[]
+  skipped: { row: number; invoiceNumber: string; reason: string }[]
   errors: { row: number; message: string }[]
 }
 
@@ -14,7 +15,7 @@ interface Props {
   onImported: () => void
 }
 
-export default function ImportClientsModal({ isOpen, onClose, onImported }: Props) {
+export default function ImportInvoicesModal({ isOpen, onClose, onImported }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ImportResult | null>(null)
@@ -31,7 +32,7 @@ export default function ImportClientsModal({ isOpen, onClose, onImported }: Prop
     setResult(null)
 
     try {
-      const data = await importClientsExcel(file)
+      const data = await importInvoicesExcel(file)
       setResult(data)
       onImported()
     } catch (err: any) {
@@ -51,21 +52,14 @@ export default function ImportClientsModal({ isOpen, onClose, onImported }: Prop
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className="bg-[var(--bg-main)] border border-[var(--border)] rounded-2xl w-full max-w-lg p-6">
-        <h2 className="text-2xl font-bold text-white mb-2">Import clients from Excel</h2>
+        <h2 className="text-2xl font-bold text-white mb-2">Import invoices from Excel</h2>
         <p className="text-sm text-zinc-400 mb-4">
-          The file must have <strong>CustomerName</strong> and <strong>Phone</strong> columns.
-          Optional: RFC, Country, CustomerID, CollectorID, Team, TeamLeader, Collector, Invoice Number,
-          Create Date, Due Date, Aging Days, Loan/Lease, Debt, USD Amount, Channel, Risk, Contact,
-          Next Action, Payment Promise, Date Promise and Notes. Phone numbers that already exist are skipped;
-          rows with an invalid RFC format are imported without RFC.
+          The file must have <strong>Customer ID</strong> and <strong>Invoice Number</strong> columns —
+          each row is matched to an existing client by Customer ID. Optional: Hptf Invoice Number,
+          Contract Number, Invoice Type, Invoice Create Date, Payment Due Date, Invoice Amount,
+          USD Remaining Amount Due, Aging Target, Collector, TL, Currency Code and Customer Country.
+          Re-importing the same Invoice Number updates that invoice instead of duplicating it.
         </p>
-
-        <button
-          onClick={() => downloadClientsTemplate()}
-          className="text-sm text-blue-400 hover:text-blue-300 underline mb-4"
-        >
-          Download sample template
-        </button>
 
         <input
           ref={fileInputRef}
@@ -83,7 +77,7 @@ export default function ImportClientsModal({ isOpen, onClose, onImported }: Prop
         {result && (
           <div className="mt-4 space-y-3 max-h-72 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-4">
             <p className="text-sm font-medium text-emerald-400">
-              {result.createdCount} of {result.totalRows} clients created
+              {result.createdCount} created, {result.updatedCount} updated of {result.totalRows} rows
             </p>
 
             {result.skipped.length > 0 && (
@@ -92,7 +86,7 @@ export default function ImportClientsModal({ isOpen, onClose, onImported }: Prop
                 <ul className="text-xs text-zinc-500 space-y-0.5">
                   {result.skipped.map((s, i) => (
                     <li key={i}>
-                      Row {s.row} ({s.phone}): {s.reason}
+                      Row {s.row} ({s.invoiceNumber}): {s.reason}
                     </li>
                   ))}
                 </ul>

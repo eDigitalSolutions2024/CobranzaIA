@@ -51,7 +51,7 @@ export default function ExchangeRateModal({ isOpen, currentRate, onClose, onUpda
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60] p-4">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl w-full max-w-sm p-6">
+      <div className="bg-[var(--bg-main)] border border-[var(--border)] rounded-2xl w-full max-w-sm p-6">
         <h3 className="text-lg font-bold text-white mb-1">Change exchange rate</h3>
         <p className="text-sm text-zinc-400 mb-4">
           Confirm your password to update the MXN → USD rate used to auto-convert new clients' debt.

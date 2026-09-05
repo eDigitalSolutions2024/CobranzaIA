@@ -87,20 +87,27 @@ export class OpenAIRealtimeSession extends EventEmitter {
                 // (nunca se lograba ese silencio "perfecto" en una llamada real con ruido
                 // de línea/respiración, así que el turno no cerraba y la llamada se
                 // congelaba), luego 1500ms (funcional pero seguía siendo silencio puro —
-                // no distingue "terminé de hablar" de "hice una pausa para pensar").
+                // no distingue "terminé de hablar" de "hice una pausa para pensar"). Se
+                // cambió a semantic_vad para resolver eso — funcionó, pero semantic_vad
+                // solo tiene "eagerness" como parámetro: no distingue volumen, así que
+                // ruido de fondo o una segunda persona hablando cerca del cliente se
+                // interpretaba como su turno y el agente le respondía a eso (confirmado en
+                // llamadas reales — alucinaciones de gpt-4o-transcribe sobre esas señales
+                // de ruido, no del cliente).
                 //
-                // semantic_vad reemplaza esa medición ciega de silencio por un clasificador
-                // que entiende si la frase ya quedó completa semánticamente ("sí, el
-                // miércoles diecinueve" → responde casi de inmediato) o quedó a medias
-                // ("pues a mediados de..." → espera más aunque haya silencio) — más rápido
-                // en los casos claros SIN heredar el riesgo de cortar al cliente que tenía
-                // bajar silence_duration_ms a secas. eagerness:"medium" es el punto medio
-                // (ni "high", que corta más agresivo si el clasificador se equivoca; ni
-                // "low", que espera de más). Si tras probar en llamadas reales sigue
-                // sintiéndose lento, subir a "high"; si empieza a interrumpir, bajar a "low".
+                // Se vuelve a server_vad, esta vez con `threshold` alto — según la doc de
+                // OpenAI es justo el control para esto ("a higher threshold will require
+                // louder audio to activate the model, and thus might perform better in
+                // noisy environments"), algo que semantic_vad no expone. silence_duration_ms
+                // vuelve al valor ya probado como "funcional" (1500ms) para no reintroducir
+                // el corte a media frase. Si en llamadas reales el ruido se sigue colando,
+                // subir threshold un poco más (máx 1.0); si empieza a ignorar respuestas
+                // reales en voz baja, bajarlo.
                 turn_detection: {
-                  type: 'semantic_vad',
-                  eagerness: 'medium',
+                  type: 'server_vad',
+                  threshold: 0.7,
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: 1500,
                   create_response: true,
                 },
               },
