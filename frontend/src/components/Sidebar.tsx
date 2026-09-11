@@ -8,6 +8,7 @@ import {
   ShieldCheck,
 } from "lucide-react"
 import logo from "../assets/iqor-logo.svg"
+import sidebarBackground from "../assets/SideBar_C.svg"
 
 interface Props {
   page: string
@@ -26,7 +27,10 @@ const menu = [
 
 export default function Sidebar({ page, setPage }: Props) {
   return (
-    <aside className="w-72 border-r border-[var(--border)] bg-[var(--bg-main)]">
+    <aside
+      className="sticky top-0 h-auto w-72 shrink-0 overflow-y-auto border-r border-[var(--border)] 
+      bg-[var(--bg-main)] bg-[length:100%_auto] bg-top bg-no-repeat"
+    >
 
       <div className="border-b border-[var(--border)] p-6">
         <img src={logo} alt="Logo" className="mb-3 h-10 w-auto object-contain" />

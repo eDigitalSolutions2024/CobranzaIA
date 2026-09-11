@@ -35,6 +35,7 @@
   --bg-secondary: #09132F;
 
   --bg-main: #011631;
+  --bg-white: #ffffff;
 
   --bg-card: #0A1737;
   --bg-card-hover: #10224A;
@@ -86,6 +87,7 @@
   --wave-purple: #6325E8;
   --wave-pink: #FF0A78;
   --wave-red: #FF234F;
+  --el-blue: #51a2ff;
 }
 
 * {
