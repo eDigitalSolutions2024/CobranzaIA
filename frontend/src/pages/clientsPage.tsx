@@ -6,6 +6,7 @@ import ClientDetailModal from "../components/ClientDetailModal"
 import ImportClientsModal from "../components/ImportClientsModal"
 import ImportInvoicesModal from "../components/ImportInvoicesModal"
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { Switch } from "@mui/material"
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending",
@@ -50,6 +51,7 @@ export default function ClientsPage() {
   const [expandedClientId, setExpandedClientId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [editingClient, setEditingClient] = useState<any | null>(null)
+  const [checkedClientId, setCheckedClientId] = useState<string | null>(null);
 
   async function handleExport() {
     setExporting(true)
@@ -161,6 +163,9 @@ export default function ClientsPage() {
       console.log(error)
     }
   }
+  async function onHandleHideBtns(id: string) {
+    setCheckedClientId((prev) => prev === id ? null : id);
+  }
 
   return (
     <>
@@ -217,6 +222,7 @@ export default function ClientsPage() {
               <tbody>
                 {clients.map((client) => {
                   const expanded = expandedClientId === client._id;
+                  const checked = checkedClientId === client._id;
                   return (
                   <>
                   <tr
@@ -290,98 +296,6 @@ export default function ClientsPage() {
                     )}
                     </button>
                     </td>
-                    <td className="py-4">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleCall(client._id) }}
-                          disabled={callingId === client._id}
-                          className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
-                        >
-                          {callingId === client._id ? (
-                            <>
-                              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                              </svg>
-                              Calling...
-                            </>
-                          ) : (
-                            <>
-                              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
-                              </svg>
-                              Call
-                            </>
-                          )}
-                        </button>
-
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleNotifyHuman(client._id) }}
-                          disabled={notifyingId === client._id}
-                          className="flex items-center gap-1.5 rounded-lg bg-red-600/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
-                        >
-                          {notifyingId === client._id ? (
-                            <>
-                              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                              </svg>
-                              Notifying...
-                            </>
-                          ) : (
-                            <>
-                              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-8.25 3h.008v.008h-.008V15z" />
-                              </svg>
-                              Notify agent
-                            </>
-                          )}
-                        </button>
-
-                        {notifyResult[client._id] && (
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium whitespace-nowrap ${
-                              notifyResult[client._id].tone === "success"
-                                ? "bg-emerald-500/15 text-emerald-400"
-                                : notifyResult[client._id].tone === "warning"
-                                  ? "bg-amber-500/15 text-amber-400"
-                                  : "bg-red-500/15 text-red-400"
-                            }`}
-                          >
-                            {notifyResult[client._id].label}
-                          </span>
-                        )}
-
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setEditingClient(client); setOpenModal(true) }}
-                          className="flex items-center gap-1.5 rounded-lg bg-blue-600/20 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-600/40 transition-colors cursor-pointer"
-                        >
-                          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-                          </svg>
-                          Edit
-                        </button>
-
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDelete(client._id, client.name) }}
-                          disabled={deletingId === client._id}
-                          className="flex items-center gap-1.5 rounded-lg bg-red-600/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
-                        >
-                          {deletingId === client._id ? (
-                            <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-                            </svg>
-                          ) : (
-                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m2 0-1 12a2 2 0 01-2 2H8a2 2 0 01-2-2L5 7h14z" />
-                            </svg>
-                          )}
-                          Delete
-                        </button>
-                      </div>
-                    </td>
                   </tr>
                  {expanded && (
                   <tr className="bg-zinc-950/50">
@@ -405,7 +319,7 @@ export default function ClientsPage() {
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Collector
                               </th>
-                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                              {/*<th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Invoice #
                               </th>
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
@@ -416,10 +330,10 @@ export default function ClientsPage() {
                               </th>
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Aging Bucket
-                              </th>
+                              </th> 
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Loan / Lease
-                              </th>
+                              </th>*/}
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Debt
                               </th>
@@ -514,6 +428,122 @@ export default function ClientsPage() {
                           </tbody>
                         </table>
                       </div>
+                    </td>
+
+                    <td className="py-4">
+                      <div className="ml-4">
+                        <Switch checked={checked} onChange={() => onHandleHideBtns(client._id)}
+                                sx={{
+                                  "& .MuiSwitch-track": {
+                                  backgroundColor: "var(--bg-white)"
+                                  },
+                                  "& .MuiSwitch-switchBase.Mui-checked": {
+                                    color: "#e53855",
+                                  },
+                                  '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                                    backgroundColor: "var(--brand-main)"
+                                  },
+                                }} />
+                        {checked  ?
+                        (<h1 className="m-1">Close Actions</h1>) 
+                        :     
+                        (<h1 className="m-1">Open Actions</h1>)     
+                        }
+                      </div>        
+                          
+                      {checked && expanded && (
+                        <div className="flex items-center gap-2 mx-3 my-3">
+                           <h1>{expanded}</h1>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleCall(client._id) }}
+                            disabled={callingId === client._id}
+                            className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                          >
+                            {callingId === client._id ? (
+                              <>
+                                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                                </svg>
+                                Calling...
+                              </>
+                            ) : (
+                              <>
+                                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
+                                  <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+                                </svg>
+                                Call
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleNotifyHuman(client._id) }}
+                            disabled={notifyingId === client._id}
+                            className="flex items-center gap-1.5 rounded-lg bg-red-600/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                          >
+                            {notifyingId === client._id ? (
+                              <>
+                                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                                </svg>
+                                Notifying...
+                              </>
+                            ) : (
+                              <>
+                                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-8.25 3h.008v.008h-.008V15z" />
+                                </svg>
+                                Notify agent
+                              </>
+                            )}
+                          </button>
+
+                          {notifyResult[client._id] && (
+                            <span
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-medium whitespace-nowrap ${
+                                notifyResult[client._id].tone === "success"
+                                  ? "bg-emerald-500/15 text-emerald-400"
+                                  : notifyResult[client._id].tone === "warning"
+                                    ? "bg-amber-500/15 text-amber-400"
+                                    : "bg-red-500/15 text-red-400"
+                              }`}
+                            >
+                              {notifyResult[client._id].label}
+                            </span>
+                          )}
+
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setEditingClient(client); setOpenModal(true) }}
+                            className="flex items-center gap-1.5 rounded-lg bg-blue-600/20 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-600/40 transition-colors cursor-pointer"
+                          >
+                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                            Edit
+                          </button>
+
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDelete(client._id, client.name) }}
+                            disabled={deletingId === client._id}
+                            className="flex items-center gap-1.5 rounded-lg bg-red-600/20 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                          >
+                            {deletingId === client._id ? (
+                              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                              </svg>
+                            ) : (
+                              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m2 0-1 12a2 2 0 01-2 2H8a2 2 0 01-2-2L5 7h14z" />
+                              </svg>
+                            )}
+                            Delete
+                          </button>
+                        </div>
+                        )} 
                     </td>
                   </tr>
                 )}

@@ -9,6 +9,7 @@ import {
 
 import { useState } from "react"
 import { useAuth } from "../context/AuthContext"
+import headerBackgroundImage from "../assets/HeadBar_C.svg";
 
 export default function Topbar() {
 
@@ -16,11 +17,11 @@ export default function Topbar() {
   const [openMenu, setOpenMenu] = useState(false)
 
   return (
-    <header className="
-      flex items-center justify-between
-      border-b border-zinc-800
-      px-6 py-4
-    ">
+    <header
+      className="flex h-[100px] w-full shrink-0 items-center justify-between border-b border-zinc-900 
+      bg-[length:1600px_100px] bg-center bg-no-repeat px-6 py-4"
+      style={{ backgroundImage: `url(${headerBackgroundImage})` }}
+    >
 
       {/* SEARCH */}
 
@@ -36,8 +37,9 @@ export default function Topbar() {
           placeholder="Search clients..."
           className="
             text-sm
+            text-white
             outline-none
-            placeholder:text-zinc-500
+            placeholder:text-white
           "
         />
 
@@ -51,7 +53,7 @@ export default function Topbar() {
 
         <button className="
           rounded-xl
-          bg-trasnparent p-3
+       
           hover:bg-zinc-800
           transition
         ">
@@ -66,6 +68,7 @@ export default function Topbar() {
             onClick={() => setOpenMenu(!openMenu)}
             className="
               flex items-center gap-3
+              bg-[var(--bg-main)]
               rounded-xl
               px-2 py-1
               hover:bg-zinc-900
