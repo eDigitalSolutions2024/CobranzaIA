@@ -210,7 +210,7 @@ export default function ClientsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-zinc-800 text-left">
-                  <th className="pb-4 text-sm text-zinc-500">Customers</th>
+                  <th className="pb-4 text-sm text-zinc-500">Customer Name</th>
                   <th className="pb-4 text-sm text-zinc-500">Phone</th>
                   <th className="pb-4 text-sm text-zinc-500">USD Amount</th>
                   <th className="pb-4 text-sm text-zinc-500">Risk</th>
