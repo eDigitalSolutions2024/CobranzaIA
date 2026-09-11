@@ -5,6 +5,8 @@ interface ImportResult {
   createdCount: number
   updatedCount: number
   totalRows: number
+  clientsCreated: { customerId: number; name: string; phone: string }[]
+  clientsSkipped: { customerId: number; reason: string }[]
   skipped: { row: number; invoiceNumber: string; reason: string }[]
   errors: { row: number; message: string }[]
 }
@@ -54,8 +56,10 @@ export default function ImportInvoicesModal({ isOpen, onClose, onImported }: Pro
       <div className="bg-[var(--bg-main)] border border-[var(--border)] rounded-2xl w-full max-w-lg p-6">
         <h2 className="text-2xl font-bold text-white mb-2">Import invoices from Excel</h2>
         <p className="text-sm text-zinc-400 mb-4">
-          The file must have <strong>Customer ID</strong> and <strong>Invoice Number</strong> columns —
-          each row is matched to an existing client by Customer ID. Optional: Hptf Invoice Number,
+          The file must have <strong>Customer ID</strong> and <strong>Invoice Number</strong> columns.
+          If a Customer ID doesn't exist yet as a client, it's created automatically — but only if the
+          file also includes <strong>Customer Name</strong> and <strong>Phone</strong> columns for it;
+          otherwise its rows are skipped and reported below. Optional: Hptf Invoice Number,
           Contract Number, Invoice Type, Invoice Create Date, Payment Due Date, Invoice Amount,
           USD Remaining Amount Due, Aging Target, Collector, TL, Currency Code and Customer Country.
           Re-importing the same Invoice Number updates that invoice instead of duplicating it.
@@ -77,8 +81,34 @@ export default function ImportInvoicesModal({ isOpen, onClose, onImported }: Pro
         {result && (
           <div className="mt-4 space-y-3 max-h-72 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 p-4">
             <p className="text-sm font-medium text-emerald-400">
-              {result.createdCount} created, {result.updatedCount} updated of {result.totalRows} rows
+              {result.createdCount} invoices created, {result.updatedCount} updated of {result.totalRows} rows
             </p>
+
+            {result.clientsCreated?.length > 0 && (
+              <div>
+                <p className="text-sm text-emerald-400 mb-1">New clients created ({result.clientsCreated.length}):</p>
+                <ul className="text-xs text-zinc-400 space-y-0.5">
+                  {result.clientsCreated.map((c, i) => (
+                    <li key={i}>
+                      {c.name} — Customer ID {c.customerId} — {c.phone}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {result.clientsSkipped?.length > 0 && (
+              <div>
+                <p className="text-sm text-yellow-400 mb-1">New clients skipped ({result.clientsSkipped.length}):</p>
+                <ul className="text-xs text-zinc-500 space-y-0.5">
+                  {result.clientsSkipped.map((c, i) => (
+                    <li key={i}>
+                      Customer ID {c.customerId}: {c.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {result.skipped.length > 0 && (
               <div>

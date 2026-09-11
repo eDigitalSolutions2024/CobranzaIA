@@ -6,6 +6,7 @@ import MessagesPage from "./pages/MessagesPage"
 import ConversationsPage from "./pages/ConversationsPage"
 import CallsPage from "./pages/CallsPage"
 import UsagePage from "./pages/UsagePage"
+import SecurityPage from "./pages/SecurityPage"
 import LoginPage from "./pages/LoginPage"
 import { useAuth } from "./context/AuthContext"
 
@@ -39,6 +40,8 @@ export default function App() {
       {page === "messages" && <MessagesPage />}
 
       {page === "usage" && <UsagePage />}
+
+      {page === "security" && <SecurityPage />}
 
     </MainLayout>
   )

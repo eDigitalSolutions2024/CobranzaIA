@@ -3,6 +3,7 @@ import ExcelJS from "exceljs"
 import mongoose from "mongoose"
 import Invoice from "../models/Invoice"
 import Client from "../models/Client"
+import { normalizeMexicanPhone } from "../utils/phone"
 
 // El saldo del cliente (`Client.debt`) no se captura a mano — es la suma de sus
 // facturas. Collector/TeamLeader/Aging tampoco se editan a mano en el cliente:
@@ -87,6 +88,11 @@ export async function deleteInvoice(req: Request, res: Response) {
 
 const HEADER_ALIASES: Record<string, string[]> = {
   customerId: ["customer id", "customerid", "id cliente"],
+  // Solo hacen falta para dar de alta clientes NUEVOS que el archivo trae por
+  // primera vez — si el Customer ID ya existe, no se tocan estos campos del
+  // cliente (para no pisar correcciones manuales ya hechas).
+  name: ["customer name", "nombre", "cliente"],
+  phone: ["phone", "telefono", "teléfono", "celular"],
   invoiceNumber: ["invoice number", "invoice", "numero de factura"],
   hptfInvoiceNumber: ["hptf invoice number", "hptf invoice"],
   contractNumber: ["contract number", "numero de contrato"],
@@ -175,6 +181,8 @@ export async function importInvoices(req: Request, res: Response) {
     type ParsedRow = {
       rowNumber: number
       customerId: number
+      name: string | null
+      phone: string | null
       invoiceNumber: string
       hptfInvoiceNumber: string | null
       contractNumber: string | null
@@ -210,6 +218,8 @@ export async function importInvoices(req: Request, res: Response) {
       rows.push({
         rowNumber,
         customerId,
+        name: toStringOrNull(cellValue("name")),
+        phone: normalizeMexicanPhone(cellValue("phone")) || null,
         invoiceNumber,
         hptfInvoiceNumber: toStringOrNull(cellValue("hptfInvoiceNumber")),
         contractNumber: toStringOrNull(cellValue("contractNumber")),
@@ -238,6 +248,85 @@ export async function importInvoices(req: Request, res: Response) {
       .select("customerId")
       .lean()
     const clientIdByCustomerId = new Map(clients.map((c) => [c.customerId as number, c._id]))
+
+    // Customer ID que el archivo trae por primera vez (no hay cliente con ese
+    // customerId todavía) — si trae teléfono, se da de alta el cliente aquí
+    // mismo antes de importar sus facturas. Si un Customer ID ya existe, sus
+    // datos de cliente (nombre/teléfono) NO se tocan — solo se usan para altas
+    // nuevas, para no pisar correcciones manuales ya hechas.
+    const clientsCreated: { customerId: number; name: string; phone: string }[] = []
+    const clientsSkipped: { customerId: number; reason: string }[] = []
+
+    const missingCustomerIds = customerIds.filter((id) => !clientIdByCustomerId.has(id))
+    if (missingCustomerIds.length > 0) {
+      const missingSet = new Set(missingCustomerIds)
+      const representativeByCustomerId = new Map<number, ParsedRow>()
+      for (const row of rows) {
+        if (missingSet.has(row.customerId) && !representativeByCustomerId.has(row.customerId)) {
+          representativeByCustomerId.set(row.customerId, row)
+        }
+      }
+
+      const candidatePhones = [...representativeByCustomerId.values()]
+        .map((r) => r.phone)
+        .filter((p): p is string => Boolean(p))
+      const existingPhoneClients = candidatePhones.length
+        ? await Client.find({ phone: { $in: candidatePhones } }).select("phone").lean()
+        : []
+      const takenPhones = new Set(existingPhoneClients.map((c) => c.phone))
+
+      const toCreate: { customerId: number; name: string; phone: string; country: string | null }[] = []
+      for (const customerId of missingCustomerIds) {
+        const rep = representativeByCustomerId.get(customerId)!
+        if (!rep.phone) {
+          clientsSkipped.push({ customerId, reason: "Cliente nuevo sin columna Phone en el archivo" })
+          continue
+        }
+        if (takenPhones.has(rep.phone)) {
+          clientsSkipped.push({ customerId, reason: `El teléfono ${rep.phone} ya pertenece a otro cliente` })
+          continue
+        }
+        takenPhones.add(rep.phone) // evita crear dos clientes nuevos con el mismo teléfono en el mismo archivo
+        toCreate.push({
+          customerId,
+          name: rep.name || `Customer ${customerId}`,
+          phone: rep.phone,
+          country: rep.customerCountry,
+        })
+      }
+
+      if (toCreate.length > 0) {
+        // ordered:false para que un choque puntual (ej. customerId o phone que
+        // otro proceso insertó justo ahora) no tumbe las demás altas — pero eso
+        // hace que Mongo lance igual una excepción con los que SÍ se insertaron
+        // adentro, hay que rescatarlos del error en vez de dejar que se pierdan.
+        let created: any[] = []
+        try {
+          created = await Client.insertMany(
+            toCreate.map((c) => ({
+              name: c.name,
+              phone: c.phone,
+              customerId: c.customerId,
+              country: c.country,
+              status: "pending",
+            })),
+            { ordered: false }
+          )
+        } catch (err: any) {
+          created = err.insertedDocs ?? []
+          const createdIds = new Set(created.map((c: any) => c.customerId))
+          for (const c of toCreate) {
+            if (!createdIds.has(c.customerId)) {
+              clientsSkipped.push({ customerId: c.customerId, reason: "No se pudo crear el cliente (posible duplicado)" })
+            }
+          }
+        }
+        for (const c of created) {
+          clientIdByCustomerId.set(c.customerId as number, c._id)
+          clientsCreated.push({ customerId: c.customerId as number, name: c.name as string, phone: c.phone as string })
+        }
+      }
+    }
 
     const skipped: { row: number; invoiceNumber: string; reason: string }[] = []
     const ops: any[] = []
@@ -294,6 +383,8 @@ export async function importInvoices(req: Request, res: Response) {
       totalRows: rows.length,
       createdCount: upsertedCount,
       updatedCount: modifiedCount,
+      clientsCreated,
+      clientsSkipped,
       skipped,
       errors: rowErrors,
     })

@@ -417,10 +417,11 @@ export async function importClients(req: Request, res: Response) {
 
 export async function exportClients(req: Request, res: Response) {
   try {
-    const [clients, promises, calls] = await Promise.all([
+    const [clients, promises, calls, invoices] = await Promise.all([
       Client.find().sort({ createdAt: -1 }).lean(),
       PaymentPromise.find().sort({ promisedDate: 1 }).lean(),
       Call.find().sort({ createdAt: -1 }).lean(),
+      Invoice.find().sort({ issueDate: -1 }).lean(),
     ])
 
     const clientById = new Map(clients.map((c) => [String(c._id), c]))
@@ -442,6 +443,7 @@ export async function exportClients(req: Request, res: Response) {
       { header: "Create Date", key: "createDate", width: 16 },
       { header: "Due Date", key: "dueDate", width: 16 },
       { header: "Aging Days", key: "agingDays", width: 12 },
+      { header: "Aging Target", key: "agingTarget", width: 12 },
       { header: "Loan/Lease", key: "loanLease", width: 12 },
       { header: "Deuda", key: "debt", width: 12 },
       { header: "USD Amount", key: "usdAmount", width: 14 },
@@ -476,6 +478,7 @@ export async function exportClients(req: Request, res: Response) {
         createDate: c.createDate ? new Date(c.createDate as unknown as string) : null,
         dueDate: c.dueDate ? new Date(c.dueDate as unknown as string) : null,
         agingDays: c.agingDays ?? "",
+        agingTarget: c.agingTarget || "",
         loanLease: c.loanLease || "",
         debt: c.debt,
         usdAmount: c.usdAmount ?? "",
@@ -548,6 +551,51 @@ export async function exportClients(req: Request, res: Response) {
           promiseDate: call.promiseDate ? new Date(call.promiseDate as unknown as string) : "",
           requiresHuman: call.requiresHuman ? "Sí" : "No",
           transcript: transcriptText,
+        }
+      })
+    )
+
+    // Mismo layout que el import unificado (ver invoiceController.importInvoices)
+    // — permite exportar, editar, y reimportar sin tener que reacomodar columnas.
+    const invoiceSheet = workbook.addWorksheet("Facturas")
+    invoiceSheet.columns = [
+      { header: "Customer Country", key: "customerCountry", width: 14 },
+      { header: "Currency Code", key: "currencyCode", width: 12 },
+      { header: "Customer Id", key: "customerId", width: 14 },
+      { header: "Customer Name", key: "name", width: 30 },
+      { header: "Phone", key: "phone", width: 16 },
+      { header: "Contract Number", key: "contractNumber", width: 16 },
+      { header: "Collector", key: "collector", width: 18 },
+      { header: "TL", key: "teamLeader", width: 18 },
+      { header: "Invoice Type", key: "invoiceType", width: 12 },
+      { header: "Invoice Number", key: "invoiceNumber", width: 16 },
+      { header: "Hptf Invoice Number", key: "hptfInvoiceNumber", width: 18 },
+      { header: "Invoice Create Date", key: "issueDate", width: 16 },
+      { header: "Payment Due Date", key: "dueDate", width: 16 },
+      { header: "Aging Target", key: "agingTarget", width: 12 },
+      { header: "Invoice Amount Due", key: "amount", width: 16 },
+      { header: "USD Remaining Amount Due", key: "remainingAmount", width: 18 },
+    ]
+    invoiceSheet.addRows(
+      invoices.map((inv) => {
+        const client = inv.clientId ? clientById.get(String(inv.clientId)) : undefined
+        return {
+          customerCountry: inv.customerCountry || client?.country || "",
+          currencyCode: inv.currencyCode || "",
+          customerId: client?.customerId ?? "",
+          name: client?.name || "—",
+          phone: client?.phone || "—",
+          contractNumber: inv.contractNumber || "",
+          collector: inv.collector || "",
+          teamLeader: inv.teamLeader || "",
+          invoiceType: inv.invoiceType || "",
+          invoiceNumber: inv.invoiceNumber,
+          hptfInvoiceNumber: inv.hptfInvoiceNumber || "",
+          issueDate: inv.issueDate ? new Date(inv.issueDate as unknown as string) : null,
+          dueDate: inv.dueDate ? new Date(inv.dueDate as unknown as string) : null,
+          agingTarget: inv.agingTarget || "",
+          amount: inv.amount ?? 0,
+          remainingAmount: inv.remainingAmount ?? "",
         }
       })
     )

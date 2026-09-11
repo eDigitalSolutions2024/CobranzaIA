@@ -280,8 +280,12 @@ timestamps:true
 
 )
 
-ClientSchema.index({ phone: 1 })
 ClientSchema.index({ status: 1 })
+// sparse: permite muchos clientes con customerId null (los dados de alta a
+// mano, sin sistema externo), pero exige que sea único entre los que sí lo
+// tienen — sin esto, dos clientes con el mismo Customer ID hacen que el
+// import de facturas no sepa a cuál asignárselas (ver invoiceController.ts).
+ClientSchema.index({ customerId: 1 }, { unique: true, sparse: true })
 
 export default model(
 "Client",

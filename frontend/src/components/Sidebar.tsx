@@ -5,6 +5,7 @@ import {
   MessageCircle,
   Phone,
   Gauge,
+  ShieldCheck,
 } from "lucide-react"
 import logo from "../assets/iqor-logo.svg"
 
@@ -20,6 +21,7 @@ const menu = [
   { id: "conversations", name: "Conversations", icon: MessageCircle },
   { id: "messages", name: "Send WhatsApp", icon: MessageSquare },
   { id: "usage", name: "Resources", icon: Gauge },
+  { id: "security", name: "Security", icon: ShieldCheck },
 ]
 
 export default function Sidebar({ page, setPage }: Props) {

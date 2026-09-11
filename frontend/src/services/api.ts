@@ -12,9 +12,14 @@ function handleUnauthorized() {
   window.location.reload()
 }
 
-export async function api(path: string, options: RequestInit = {}) {
+// skipAuthRedirect: para peticiones donde un 401 NO significa "tu sesión expiró"
+// (ej. login con credenciales incorrectas en un intento nuevo, sin sesión previa) —
+// sin esto, cualquier 401 recargaba la página entera y borraba lo que el usuario
+// ya había escrito en el formulario.
+export async function api(path: string, options: RequestInit & { skipAuthRedirect?: boolean } = {}) {
+  const { skipAuthRedirect, ...fetchOptions } = options
   const res = await fetch(`${API_URL}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers: {
       "Content-Type": "application/json",
       ...authHeaders(),
@@ -22,7 +27,7 @@ export async function api(path: string, options: RequestInit = {}) {
     },
   })
 
-  if (res.status === 401) {
+  if (res.status === 401 && !skipAuthRedirect) {
     handleUnauthorized()
     throw new Error("Session expired")
   }

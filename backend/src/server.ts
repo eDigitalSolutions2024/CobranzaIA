@@ -1,6 +1,7 @@
 import "dotenv/config"
 import express from "express"
 import cors from "cors"
+import helmet from "helmet"
 import http from "http"
 import { WebSocketServer } from "ws"
 
@@ -21,6 +22,18 @@ import { startReminderScheduler } from "./services/reminderScheduler.service"
 import { startPhoneFallbackScheduler } from "./services/phoneFallback.service"
 
 const app = express()
+
+// En producción corre detrás de nginx (ver deploy) — sin esto, Express ve la IP
+// del proxy para TODAS las peticiones en vez de la del cliente real, y cualquier
+// rate limiting por IP (ver routes/auth.ts) terminaría bloqueando a todos los
+// usuarios por igual en cuanto UNO fallara varias veces el login. "1" = confía
+// solo en el primer hop (nginx), no en cualquier X-Forwarded-For que mande el
+// cliente directamente.
+app.set("trust proxy", 1)
+
+// Cabeceras de seguridad HTTP estándar (X-Content-Type-Options, evita
+// que el navegador exponga qué servidor corre, HSTS, etc.)
+app.use(helmet())
 
 app.use(
   cors({
