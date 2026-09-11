@@ -28,8 +28,9 @@ const menu = [
 export default function Sidebar({ page, setPage }: Props) {
   return (
     <aside
-      className="sticky top-0 h-auto w-72 shrink-0 overflow-y-auto border-r border-[var(--border)] 
+      className="sticky top-0 h-auto w-72 shrink-0 overflow-y-auto border-r border-[var(--border)]
       bg-[var(--bg-main)] bg-[length:100%_auto] bg-top bg-no-repeat"
+      style={{ backgroundImage: `url(${sidebarBackground})` }}
     >
 
       <div className="border-b border-[var(--border)] p-6">
