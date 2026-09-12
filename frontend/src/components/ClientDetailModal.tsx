@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { getClientDetail, createInvoice, updateInvoice, deleteInvoice } from "../services/clients"
+import { apiBlobUrl } from "../services/api"
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending", contacted: "Contacted", negotiating: "Negotiating",
@@ -63,6 +64,140 @@ function formatDate(value: any): string {
   // que no se corran un día al convertir a la zona horaria local del navegador.
   return new Intl.DateTimeFormat("en-US", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(
     new Date(value)
+  )
+}
+
+function formatMs(ms?: number | null): string {
+  if (ms == null) return ""
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+function formatElapsed(ms?: number | null): string {
+  if (ms == null) return "--:--"
+  const totalSeconds = Math.floor(ms / 1000)
+  const m = Math.floor(totalSeconds / 60)
+  const s = totalSeconds % 60
+  return `${m}:${String(s).padStart(2, "0")}`
+}
+
+// Intercala mensajes del transcript con las funciones que la IA disparó durante la
+// llamada, ordenados por elapsedMs — así se ve TODO el flujo en el orden real en que
+// ocurrió, no dos listas separadas.
+type CallTimelineItem =
+  | { type: "message"; role: "assistant" | "user"; content: string; elapsedMs?: number | null; latencyMs?: number | null; durationMs?: number | null; key: string }
+  | { type: "function"; name: string; elapsedMs: number; key: string }
+
+function buildCallTimeline(call: any): CallTimelineItem[] {
+  const items: CallTimelineItem[] = []
+  ;(call.transcript ?? []).forEach((turn: any, i: number) => {
+    items.push({
+      type: "message",
+      role: turn.role,
+      content: turn.content,
+      elapsedMs: turn.elapsedMs,
+      latencyMs: turn.latencyMs,
+      durationMs: turn.durationMs,
+      key: `m-${i}`,
+    })
+  })
+  ;(call.functionCallLog ?? []).forEach((fn: any, i: number) => {
+    items.push({ type: "function", name: fn.name, elapsedMs: fn.elapsedMs, key: `f-${i}` })
+  })
+  items.sort((a, b) => (a.elapsedMs ?? 0) - (b.elapsedMs ?? 0))
+  return items
+}
+
+// Solo aparece si la llamada tiene recordingSid (grabación activada vía
+// VOICE_CALL_RECORDING_ENABLED en el backend — apagado por defecto por el costo extra
+// de Twilio). El audio se pide autenticado (nunca se expone la URL/credenciales de
+// Twilio al navegador) y se guarda como blob URL local mientras el modal está abierto.
+function CallRecordingPlayer({ callId }: { callId: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    let objectUrl: string | null = null
+    let cancelled = false
+    setUrl(null)
+    setError(false)
+
+    apiBlobUrl(`/voice/${callId}/recording`)
+      .then((blobUrl) => {
+        if (cancelled) {
+          window.URL.revokeObjectURL(blobUrl)
+          return
+        }
+        objectUrl = blobUrl
+        setUrl(blobUrl)
+      })
+      .catch(() => !cancelled && setError(true))
+
+    return () => {
+      cancelled = true
+      if (objectUrl) window.URL.revokeObjectURL(objectUrl)
+    }
+  }, [callId])
+
+  if (error) return null
+  return (
+    <div className="border-t border-zinc-800 px-6 py-3">
+      {url ? (
+        <audio controls src={url} className="w-full h-10" />
+      ) : (
+        <p className="text-xs text-zinc-500">Loading recording…</p>
+      )}
+    </div>
+  )
+}
+
+// Se usa tanto en la caja compacta (dentro de la fila de la llamada) como en el modal
+// grande — mismo cálculo de tiempos, solo cambia el tamaño/estilo de las burbujas.
+function CallTimelineView({ call, compact = false }: { call: any; compact?: boolean }) {
+  const items = buildCallTimeline(call)
+  if (items.length === 0) {
+    return <p className={`text-center text-zinc-500 ${compact ? "text-xs py-2" : "text-sm"}`}>No transcript yet</p>
+  }
+  return (
+    <>
+      {items.map((item) => {
+        if (item.type === "function") {
+          return (
+            <div key={item.key} className="flex justify-center">
+              <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-[10px] text-amber-400">
+                ⚙ {item.name} · {formatElapsed(item.elapsedMs)}
+              </span>
+            </div>
+          )
+        }
+        const isAssistant = item.role === "assistant"
+        const timingBits: string[] = []
+        if (item.latencyMs != null) {
+          timingBits.push(isAssistant ? `respondió en ${formatMs(item.latencyMs)}` : `tardó ${formatMs(item.latencyMs)}`)
+        }
+        if (isAssistant && item.durationMs != null) {
+          timingBits.push(`duró ${formatMs(item.durationMs)}`)
+        }
+        return (
+          <div key={item.key} className={`flex ${isAssistant ? "justify-start" : "justify-end"}`}>
+            <div
+              className={`${compact ? "max-w-sm text-xs rounded-xl" : "max-w-md text-sm"} px-4 py-3 ${
+                isAssistant
+                  ? `bg-zinc-800 text-zinc-100 ${compact ? "" : "rounded-2xl rounded-bl-none"}`
+                  : `${compact ? "bg-blue-600/20 text-blue-300" : "bg-blue-600 text-white rounded-2xl rounded-br-none"}`
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3 mb-1 opacity-60 text-[10px]">
+                <span>{isAssistant ? "AI" : "Client"}</span>
+                {item.elapsedMs != null && <span>{formatElapsed(item.elapsedMs)}</span>}
+              </div>
+              <p className={compact ? "" : "leading-relaxed"}>{item.content}</p>
+              {timingBits.length > 0 && <p className="mt-1 text-[10px] opacity-50">{timingBits.join(" · ")}</p>}
+            </div>
+          </div>
+        )
+      })}
+    </>
   )
 }
 
@@ -248,6 +383,8 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
   const [data, setData] = useState<any>(null)
   const [tab, setTab] = useState<"promises" | "calls" | "invoices">("promises")
   const [expandedCall, setExpandedCall] = useState<string | null>(null)
+  const [transcriptModalCallId, setTranscriptModalCallId] = useState<string | null>(null)
+  const transcriptEndRef = useRef<HTMLDivElement>(null)
   const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null)
   const [invoiceForm, setInvoiceForm] = useState<InvoiceForm>(EMPTY_INVOICE_FORM)
   const [showInvoiceForm, setShowInvoiceForm] = useState(false)
@@ -259,6 +396,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
     setData(null)
     setTab("promises")
     setExpandedCall(null)
+    setTranscriptModalCallId(null)
     setShowInvoiceForm(false)
     setEditingInvoiceId(null)
     setInvoiceForm(EMPTY_INVOICE_FORM)
@@ -269,6 +407,23 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
     if (!clientId) return
     getClientDetail(clientId).then(setData).catch(() => {})
   }
+
+  // Mientras una llamada sigue en curso, su transcript va creciendo del lado
+  // del backend en vivo — sin esto había que cerrar y volver a abrir el modal
+  // (o recargar la página) para ver los turnos nuevos.
+  const hasCallInProgress = data?.calls?.some((c: any) => c.status === "in_progress")
+  useEffect(() => {
+    if (!hasCallInProgress) return
+    const interval = setInterval(refresh, 3000)
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasCallInProgress, clientId])
+
+  const transcriptModalTurnCount = data?.calls?.find((c: any) => c._id === transcriptModalCallId)?.transcript?.length
+  useEffect(() => {
+    if (!transcriptModalCallId) return
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [transcriptModalCallId, transcriptModalTurnCount])
 
   async function handleAddInvoice(e: React.FormEvent) {
     e.preventDefault()
@@ -337,8 +492,10 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
   if (!clientId) return null
 
   const client = data?.client
+  const transcriptModalCall = data?.calls?.find((c: any) => c._id === transcriptModalCallId)
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="w-full max-w-3xl max-h-[90vh] overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex flex-col">
 
@@ -505,19 +662,12 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                         </div>
 
                         {expandedCall === call._id && (
-                          <div className="border-t border-zinc-800 p-4 space-y-3 max-h-64 overflow-y-auto">
-                            {call.transcript?.map((turn: any, i: number) => (
-                              <div key={i} className={`flex gap-2 ${turn.role === "assistant" ? "" : "flex-row-reverse"}`}>
-                                <div className={`text-xs px-3 py-2 rounded-xl max-w-sm ${
-                                  turn.role === "assistant" ? "bg-zinc-800 text-zinc-200" : "bg-blue-600/20 text-blue-300"
-                                }`}>
-                                  <span className="block text-[10px] mb-1 opacity-50">
-                                    {turn.role === "assistant" ? "AI" : "Client"}
-                                  </span>
-                                  {turn.content}
-                                </div>
-                              </div>
-                            ))}
+                          <div
+                            onClick={() => setTranscriptModalCallId(call._id)}
+                            title="Click to view full conversation"
+                            className="border-t border-zinc-800 p-4 space-y-3 max-h-64 overflow-y-auto cursor-pointer hover:bg-zinc-900/50 transition-colors"
+                          >
+                            <CallTimelineView call={call} compact />
                           </div>
                         )}
                       </div>
@@ -641,5 +791,47 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
 
       </div>
     </div>
+
+    {transcriptModalCall && (
+      <div
+        onClick={() => setTranscriptModalCallId(null)}
+        className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-2xl max-h-[85vh] rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex flex-col overflow-hidden"
+        >
+          <div className="flex items-center justify-between gap-4 border-b border-zinc-800 p-5">
+            <div>
+              <h2 className="text-lg font-semibold text-white">
+                Call — {new Date(transcriptModalCall.createdAt).toLocaleString("en-US")}
+              </h2>
+              <div className="mt-1 flex items-center gap-2">
+                <span className={`rounded-full px-3 py-1 text-xs ${CALL_STATUS_COLOR[transcriptModalCall.status]}`}>
+                  {CALL_STATUS_LABEL[transcriptModalCall.status] ?? transcriptModalCall.status}
+                </span>
+                {transcriptModalCall.status === "in_progress" && (
+                  <span className="text-xs text-emerald-400 animate-pulse">● Live</span>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setTranscriptModalCallId(null)}
+              className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors"
+            >
+              Close
+            </button>
+          </div>
+
+          {transcriptModalCall.recordingSid && <CallRecordingPlayer callId={transcriptModalCall._id} />}
+
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            <CallTimelineView call={transcriptModalCall} />
+            <div ref={transcriptEndRef} />
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   )
 }

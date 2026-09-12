@@ -4,6 +4,24 @@ export interface ICallTranscript {
   role: 'assistant' | 'user'
   content: string
   timestamp: Date
+  // Milisegundos desde que arrancó la llamada hasta este mensaje — para ubicarlo en la
+  // línea de tiempo del flujo (ver voiceStream.controller.ts).
+  elapsedMs?: number
+  // Milisegundos que tardó en EMPEZAR este turno desde que terminó el turno anterior —
+  // para 'assistant' es cuánto tardó la IA en contestar; para 'user' es cuánto tardó el
+  // cliente en responder.
+  latencyMs?: number
+  // Solo 'assistant': milisegundos que duró el audio de este mensaje (cuánto tardó la
+  // IA en decir/enviar el mensaje completo).
+  durationMs?: number
+}
+
+export interface ICallFunctionLog {
+  name: string
+  timestamp: Date
+  // Milisegundos desde que arrancó la llamada — en qué momento exacto del flujo se
+  // disparó esta función.
+  elapsedMs: number
 }
 
 export interface IOpenAIUsage {
@@ -39,10 +57,21 @@ export interface ICall extends Document {
   // sirve para derivar `disposition` al terminar sin depender de una IA adicional
   // (ver voiceStream.controller.ts y voice.controller.ts).
   calledFunctions: string[]
+  // Detalle con timestamp/elapsedMs de cada llamada a función, para mostrar en el modal
+  // de la llamada en qué momento exacto del flujo ocurrió cada una (ver calledFunctions
+  // de arriba, que se mantiene igual — solo strings — porque computeVoiceDisposition en
+  // voice.controller.ts depende de ese formato).
+  functionCallLog: ICallFunctionLog[]
   // Clasificación final de la llamada (catálogo fijo, ver config/disposition.ts) y
   // la acción sugerida que resulta de ella — se copia también a Client.nextAction.
   disposition?: string | null
   nextAction?: string | null
+  // Grabación de la llamada en Twilio — se pide al crearla (outbound) o justo al
+  // contestar (inbound, ver handleIncoming) y se guarda cuando llega el statusCallback
+  // de la grabación (RecordingStatus:completed). El audio real se sirve a través de
+  // GET /api/voice/:id/recording (requireAuth) — nunca se expone la URL de Twilio ni las
+  // credenciales directo al frontend.
+  recordingSid?: string | null
   // Duración reportada por Twilio en el statusCallback final (CallDuration, en segundos) —
   // null hasta que la llamada termina y Twilio manda el webhook 'completed'.
   durationSeconds?: number | null
@@ -64,6 +93,9 @@ const CallSchema = new Schema<ICall>(
         role: { type: String, enum: ['assistant', 'user'], required: true },
         content: { type: String, required: true },
         timestamp: { type: Date, default: Date.now },
+        elapsedMs: { type: Number, default: null },
+        latencyMs: { type: Number, default: null },
+        durationMs: { type: Number, default: null },
       },
     ],
     status: {
@@ -81,7 +113,15 @@ const CallSchema = new Schema<ICall>(
     flowContext: { type: Schema.Types.Mixed, default: {} },
     summary: { type: String, default: null },
     calledFunctions: { type: [String], default: [] },
+    functionCallLog: [
+      {
+        name: { type: String, required: true },
+        timestamp: { type: Date, default: Date.now },
+        elapsedMs: { type: Number, required: true },
+      },
+    ],
     disposition: { type: String, default: null },
+    recordingSid: { type: String, default: null },
     nextAction: { type: String, default: null },
     durationSeconds: { type: Number, default: null },
     openaiUsage: {

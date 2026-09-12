@@ -7,6 +7,8 @@ import {
   handleNotifyHumanStatus,
   getNotifyHumanStatus,
   getCalls,
+  handleRecordingStatus,
+  getCallRecording,
 } from '../controllers/voice.controller'
 import { requireAuth } from '../middleware/auth'
 
@@ -16,10 +18,12 @@ router.get('/calls', requireAuth, getCalls)
 router.post('/voice/outbound', requireAuth, handleOutbound)
 router.post('/voice/notify-human', requireAuth, handleNotifyHuman)
 router.get('/voice/notify-human-status/:callSid', requireAuth, getNotifyHumanStatus)
+router.get('/voice/:id/recording', requireAuth, getCallRecording)
 
 // Twilio webhooks — Twilio no puede mandar un token de sesión, deben quedar públicos
 router.post('/voice/incoming', handleIncoming)
 router.post('/voice/status', handleStatus)
 router.post('/voice/notify-human-status', handleNotifyHumanStatus)
+router.post('/voice/recording-status', handleRecordingStatus)
 
 export default router

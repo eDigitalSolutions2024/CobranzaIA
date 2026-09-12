@@ -70,6 +70,13 @@ export const VOICE_TOOLS = [
   },
   {
     type: 'function',
+    name: 'marcar_pago_domiciliado',
+    description:
+      'Llamar cuando el cliente dice que su pago está domiciliado o tiene cargo automático programado. NO es lo mismo que una promesa de pago — nunca llames a registrar_promesa_pago en este caso.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    type: 'function',
     name: 'registrar_promesa_pago',
     description:
       'Llamar SOLO después de la confirmación FINAL (la segunda vez que el cliente confirma, tras repetirle el acuerdo en tiempo pasado) — nunca en cuanto mencione fecha/monto por primera vez, ni tras la primera confirmación. Si acuerdan un plan de pagos en varias cuotas, llamar una vez por cada cuota (máximo 12).',
@@ -135,6 +142,8 @@ ESTILO DE VOZ (esto es una llamada real, no un mensaje de texto leído en voz al
 - Montos en palabras: "cuatro mil quinientos pesos", no "$4,500". Fechas en palabras: "el diecisiete de junio", no "17/06".
 - No repitas información ya mencionada. Adáptate si el cliente cambia de tema.
 - Solo texto plano, sin emojis ni negritas.
+
+RESPUESTAS AMBIGUAS: si el cliente responde con algo tipo "no sé", "creo que sí", "probablemente", "supongo" — NUNCA lo tomes como confirmación de nada (ni de una fecha, ni de un monto, ni de que reconoce el adeudo). Pídele que aclare con una pregunta directa antes de registrar cualquier compromiso o de avanzar al siguiente paso del guion.
 - Si no entendiste bien lo que dijo (audio poco claro), simplemente pídele que repita con naturalidad — nunca sigas adelante adivinando.
 
 IMPORTANTE SOBRE LAS FUNCIONES: cuando digas en voz alta que vas a "marcar", "registrar" o "confirmar" algo, llama también a la función correspondiente en ese mismo turno — el sistema no guarda ni registra nada si solo lo dices, tiene que ser la llamada a función real.
@@ -151,7 +160,7 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
 
   const agingGuidance =
     clientInfo.agingDays <= 0
-      ? `Su pago está próximo a vencer, no ha vencido todavía. Coméntaselo con amabilidad y recuérdale pagar a tiempo — NO le pidas fecha de pago, esta cuenta no está vencida. Cierra la llamada.`
+      ? `Su pago está próximo a vencer, no ha vencido todavía. Coméntaselo con amabilidad, pero esto es cobranza — igual pregúntale si tiene contemplada una fecha para realizar el pago. No te conformes con solo recordarle: siempre busca obtener un compromiso de fecha, así la cuenta no esté vencida todavía.`
       : clientInfo.agingDays <= 15
         ? `Tiene entre 1 y 15 días de atraso. Pregúntale qué fecha estima para pagar.`
         : clientInfo.agingDays <= 30
@@ -184,6 +193,7 @@ FLUJO A SEGUIR:
    - Si dice que YA LO PAGÓ → llama a marcar_saldo_pagado y dile que estás verificando; el sistema te dará el resultado, espera a tenerlo antes de continuar.
    - Si SÍ reconoce el adeudo → continúa al punto 5.
 5. ${agingGuidance}
+   - Si dice que su pago está domiciliado o tiene cargo automático → llama a marcar_pago_domiciliado, confírmale que quedó registrado con calidez, y cierra la llamada. NO le pidas fecha de pago ni llames a registrar_promesa_pago — no es una promesa, es un cargo automático.
    - Si no tiene dinero ahora → NUNCA ofrezcas ni aceptes un pago parcial (no existe esa opción). Pregunta para qué fecha podría tener el pago COMPLETO del saldo.
    - Si se enoja → empatiza, ofrece contactarlo en otro momento, cierra la llamada.
    - Si pide que le escriban por WhatsApp → confírmaselo y cierra la llamada.

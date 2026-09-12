@@ -62,6 +62,28 @@ export async function apiUpload(path: string, formData: FormData) {
   return data
 }
 
+// Para reproducir un archivo protegido (ej. audio de una grabación de llamada) en un
+// <audio>/<video> — a diferencia de apiDownload, no dispara una descarga, solo regresa
+// una URL de blob que se puede usar como src. Quien la llama es responsable de hacer
+// URL.revokeObjectURL cuando ya no la necesite (ej. al desmontar o cambiar de llamada).
+export async function apiBlobUrl(path: string): Promise<string> {
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: authHeaders(),
+  })
+
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error("Session expired")
+  }
+
+  if (!res.ok) {
+    throw new Error("Error loading the file")
+  }
+
+  const blob = await res.blob()
+  return window.URL.createObjectURL(blob)
+}
+
 export async function apiDownload(path: string, fallbackFilename: string) {
   const res = await fetch(`${API_URL}${path}`, {
     headers: authHeaders(),

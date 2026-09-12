@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import mongoose from 'mongoose'
 import twilio from 'twilio'
+import axios from 'axios'
 import Call from '../models/Call'
 import Client from '../models/Client'
 import { findClientByPhone } from '../services/customerLookup.service'
@@ -56,6 +57,28 @@ function getBaseUrl(req: Request): string {
   const host = req.headers['x-forwarded-host'] ?? req.get('host') ?? 'localhost:3003'
   const proto = req.headers['x-forwarded-proto'] ?? req.protocol ?? 'https'
   return `${proto}://${host}`
+}
+
+// Grabar tiene un costo recurrente de Twilio (grabación + almacenamiento, aparte del
+// minuto de voz normal) — apagado por defecto para no pagarlo en todas las llamadas.
+// Prender solo puntualmente (ej. para diagnosticar un caso de transcripción rara) con
+// VOICE_CALL_RECORDING_ENABLED=true en .env, sin necesidad de tocar código.
+function isRecordingEnabled(): boolean {
+  return process.env.VOICE_CALL_RECORDING_ENABLED === 'true'
+}
+
+// 'dual' guarda al cliente y al agente en canales separados del mismo archivo, para
+// poder aislar la voz real del cliente y compararla contra lo que transcribió
+// gpt-4o-transcribe (ver getCallRecording más abajo).
+function recordingParams(publicUrl: string): Record<string, unknown> {
+  if (!isRecordingEnabled()) return {}
+  return {
+    record: true,
+    recordingChannels: 'dual',
+    recordingStatusCallback: `${publicUrl}/api/voice/recording-status`,
+    recordingStatusCallbackEvent: ['completed'],
+    recordingStatusCallbackMethod: 'POST',
+  }
 }
 
 function speakSegments(say: ReturnType<InstanceType<typeof VoiceResponse>['say']>, message: string): void {
@@ -138,6 +161,7 @@ export async function handleOutbound(req: Request, res: Response): Promise<void>
       url: `${publicUrl}/api/voice/incoming?clientId=${clientId}`,
       statusCallback: `${publicUrl}/api/voice/status`,
       statusCallbackMethod: 'POST',
+      ...recordingParams(publicUrl),
     })
 
     res.json({ callSid: call.sid, status: call.status })
@@ -187,6 +211,51 @@ export async function handleNotifyHuman(req: Request, res: Response): Promise<vo
   } catch (err) {
     console.error('[Voice] handleNotifyHuman error:', err)
     res.status(500).json({ error: 'Error al notificar al agente' })
+  }
+}
+
+// Webhook público de Twilio: la grabación (si VOICE_CALL_RECORDING_ENABLED=true) ya
+// terminó y quedó lista para descargar — se guarda solo el SID, el audio se sirve bajo
+// demanda vía getCallRecording (nunca se guarda la URL/credenciales de Twilio en el
+// frontend).
+export async function handleRecordingStatus(req: Request, res: Response): Promise<void> {
+  const { CallSid, RecordingSid, RecordingStatus } = req.body as Record<string, string>
+  try {
+    if (RecordingStatus === 'completed' && CallSid && RecordingSid) {
+      await Call.findOneAndUpdate({ callSid: CallSid }, { recordingSid: RecordingSid })
+    }
+    res.sendStatus(200)
+  } catch (err) {
+    console.error('[Voice] handleRecordingStatus error:', err)
+    res.sendStatus(500)
+  }
+}
+
+// Sirve el audio de la grabación de una llamada al frontend (requireAuth) — hace de
+// proxy autenticado hacia la API de Twilio, que exige Basic Auth con el Account SID y
+// Auth Token; esas credenciales nunca deben llegar al navegador.
+export async function getCallRecording(req: Request, res: Response): Promise<void> {
+  try {
+    const call = await Call.findById(req.params.id).lean()
+    if (!call?.recordingSid) {
+      res.status(404).json({ error: 'Esta llamada no tiene grabación' })
+      return
+    }
+
+    const accountSid = process.env.TWILIO_ACCOUNT_SID!
+    const authToken = process.env.TWILIO_AUTH_TOKEN!
+    const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Recordings/${call.recordingSid}.mp3`
+
+    const upstream = await axios.get(twilioUrl, {
+      auth: { username: accountSid, password: authToken },
+      responseType: 'stream',
+    })
+
+    res.setHeader('Content-Type', 'audio/mpeg')
+    upstream.data.pipe(res)
+  } catch (err) {
+    console.error('[Voice] getCallRecording error:', err)
+    res.status(500).json({ error: 'Error al obtener la grabación' })
   }
 }
 
@@ -244,6 +313,23 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
       status: 'in_progress',
       requiresHuman: false,
     })
+
+    // Las llamadas OUTBOUND ya piden grabación al crearse (handleOutbound, record:true) —
+    // aquí solo hace falta pedirla por REST para llamadas INBOUND reales (clientIdParam
+    // ausente), que nunca pasaron por calls.create() de nuestro lado.
+    if (!clientIdParam && isRecordingEnabled()) {
+      const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
+      const publicUrl = (process.env.PUBLIC_URL ?? getBaseUrl(req)).replace(/\/$/, '')
+      twilioClient
+        .calls(CallSid)
+        .recordings.create({
+          recordingChannels: 'dual',
+          recordingStatusCallback: `${publicUrl}/api/voice/recording-status`,
+          recordingStatusCallbackEvent: ['completed'],
+          recordingStatusCallbackMethod: 'POST',
+        })
+        .catch((err) => console.error('[Voice] Error iniciando grabación inbound:', err))
+    }
 
     console.log(`[Voice][latency] callSid=${CallSid} turn=start totalMs=${Date.now() - receivedAt}`)
     res.type('text/xml').send(connectStream(getBaseUrl(req)))

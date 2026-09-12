@@ -8,6 +8,15 @@ import { OpenAIRealtimeSession, RealtimeFunctionCall, RealtimeUsage } from '../s
 import { buildVoiceSystemPrompt, ClientInfo } from '../services/voiceConversation.service'
 import { normalizeRFC } from '../utils/rfc'
 
+// Red de seguridad para cuando el modelo DICE que va a colgar sin llamar a la
+// función real (ver uso en 'agentTranscript' más abajo) — frases que el propio
+// prompt le sugiere usar como cierre, así que son una señal confiable de que
+// la llamada ya debería terminar aunque no haya llegado la tool call.
+function looksLikeHangupIntent(text: string): boolean {
+  const t = text.toLowerCase()
+  return t.includes('finalizar la llamada') || t.includes('terminar la llamada') || t.includes('voy a colgar')
+}
+
 // Puente de audio Twilio <-> OpenAI Realtime. El modelo conversa libre (guiado por el
 // prompt de voiceConversation.service.ts) y dispara las acciones de negocio
 // (flowActions.service.ts) llamando a las funciones (tools) definidas en VOICE_TOOLS —
@@ -34,6 +43,27 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   // la función. Se marca esta bandera y se pide la despedida hasta el responseDone de esa
   // respuesta en curso — antes cortaba la frase a medias por esta condición de carrera.
   let pendingFarewellTrigger = false
+  // Mismo problema que pendingFarewellTrigger de arriba, pero genérico: CUALQUIER
+  // function call que pida un turno de seguimiento (confirmar_identidad, registrar
+  // promesa, marcar domiciliado, etc.) puede llegar mientras la respuesta ACTUAL —
+  // la que contiene esa misma llamada a función — todavía está generando/enviando
+  // su propio audio (ej. "Entiendo, voy a registrar que está domiciliado..."). Llamar
+  // session.createResponse() ahí mismo, dentro de handleFunctionCall, choca con esa
+  // respuesta activa y la corta a media frase (visto en producción con
+  // marcar_pago_domiciliado — se cortó justo al decir "Entiendo"). Se difiere al
+  // responseDone de esa misma respuesta, igual que la despedida.
+  let pendingResponseCreate = false
+  // true entre responseCreated y responseDone de la respuesta EN CURSO. handleFunctionCall
+  // es async y espera operaciones reales de Mongo (Call.findById, Ticket.create, etc.)
+  // antes de decidir si pide un turno de seguimiento — el response.done de ESA MISMA
+  // respuesta puede llegar por el WebSocket y procesarse ANTES de que esos awaits
+  // terminen (visto en producción con marcar_pago_domiciliado: la función sí se
+  // ejecutó, pero el agente se quedó callado hasta que el cliente volvió a hablar,
+  // porque responseDone ya había pasado sin ver pendingResponseCreate en true todavía).
+  // Por eso no basta con "marcar la bandera y esperar responseDone" — hay que revisar
+  // este flag al momento de pedir el turno de seguimiento: si la respuesta ya terminó,
+  // es seguro pedirlo de inmediato; si sigue activa, ahí sí se difiere a responseDone.
+  let responseActive = false
   // Si la respuesta de despedida sale vacía (el modelo solo vuelve a llamar a una función
   // sin decir nada), reintentamos pedirle que hable antes de colgar — máximo un par de
   // veces, para no quedarnos esperando para siempre si el modelo simplemente no quiere
@@ -41,6 +71,9 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   let hangupFarewellSpoken = false
   let hangupRetries = 0
   const MAX_HANGUP_RETRIES = 2
+  // Último transcript del agente, para la red de seguridad de looksLikeHangupIntent() —
+  // se evalúa recién en responseDone (ver ahí el porqué), no en el momento en que llega.
+  let lastAgentTranscript: string | null = null
   let ready = false
   let closed = false
   const pendingAudio: string[] = []
@@ -52,21 +85,48 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   let pendingHangupMark: string | null = null
   let hangupMarkTimeout: NodeJS.Timeout | null = null
   // Audio PCMU a 8kHz mono = 8000 muestras/seg, 1 byte/muestra = 8 bytes por milisegundo.
-  // Sumamos cuánto audio le hemos mandado a Twilio y comparamos contra el tiempo real
-  // transcurrido para saber cuánto le falta por REPRODUCIR (no por recibir) — necesario
-  // porque el 'mark' de confirmación de Twilio puede tardar (o no llegar, según el
-  // entorno) y un timeout fijo corto corta despedidas largas a media frase (visto en
-  // producción: 2 respuestas en cola necesitaban ~10s y el timeout de 4s las cortó).
+  // Modela la cola de reproducción REAL de Twilio: cada chunk de audio que mandamos se
+  // "encola" después de lo que ya estaba pendiente (si la cola seguía llena) o a partir
+  // de ahora mismo (si ya se había vaciado — ej. tras el silencio mientras hablaba el
+  // cliente). queueDrainCompleteAt = el momento (Date.now()-style) en que Twilio habrá
+  // terminado de reproducir TODO lo que le hemos mandado hasta ahora.
+  //
+  // Reemplaza un primer intento (firstAudioSentAt/totalAudioMsSent: "audio total enviado
+  // en TODA la llamada" menos "tiempo real transcurrido desde el PRIMER audio de la
+  // llamada") que parecía razonable pero se rompía en cuanto había más de un turno con
+  // silencio entre medio — el denominador ("tiempo transcurrido") sigue avanzando durante
+  // esos silencios aunque no haya nada que reproducir, así que el backlog calculado caía
+  // a 0 mucho antes de que la cola realmente se vaciara. Confirmado con datos reales: una
+  // llamada de 7 turnos terminó con Twilio reportando 83s de duración cuando el audio
+  // encolado necesitaba ~92s para reproducirse completo — la despedida final ("Perfecto,
+  // he registrado... Voy a finalizar la llamada" + "Adiós, que estés muy bien") se cortó
+  // a media frase porque el timeout de seguridad de hangupAfterPlayback() calculó
+  // backlog=0 (el cálculo viejo daba negativo, clampeado a 0) y cerró la llamada casi de
+  // inmediato en vez de esperar los ~10s reales que todavía faltaban por sonar.
   const BYTES_PER_MS = 8
-  let totalAudioMsSent = 0
-  let firstAudioSentAt: number | null = null
+  let queueDrainCompleteAt = 0
+
+  // --- Métricas de tiempo del flujo (para el modal de la llamada) ---
+  // Momento en que arrancó la llamada (evento 'start' de Twilio) — ancla de todos los
+  // "elapsedMs" (en qué momento del flujo ocurrió cada mensaje/función).
+  let callStartAt: number | null = null
+  // Cuándo terminó (estimado) el turno anterior — sirve para medir cuánto tardó en
+  // ARRANCAR el turno siguiente, sea de la IA o del cliente.
+  let lastTurnEndAt: number | null = null
+  // Cuándo empezó a sonar el audio de la respuesta EN CURSO y cuánto audio lleva —
+  // permite separar "cuánto tardó la IA en empezar a contestar" (latencyMs) de "cuánto
+  // tardó en terminar de decir el mensaje completo" (durationMs). Se reinicia en cada
+  // responseCreated — es independiente de queueDrainCompleteAt de arriba, que sigue
+  // acumulado a través de TODA la llamada (para el cálculo de colgado).
+  let currentResponseAudioStartAt: number | null = null
+  let currentResponseAudioMs = 0
+  // Cuándo empezó a hablar el cliente en su turno actual (input_audio_buffer.speech_started).
+  let currentUserSpeechStartAt: number | null = null
 
   const session = new OpenAIRealtimeSession()
 
   function audioBacklogMs(): number {
-    if (firstAudioSentAt === null) return 0
-    const elapsed = Date.now() - firstAudioSentAt
-    return Math.max(0, totalAudioMsSent - elapsed)
+    return Math.max(0, queueDrainCompleteAt - Date.now())
   }
 
   function closeAll(): void {
@@ -126,8 +186,12 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   session.on('audio', (payload) => {
     if (!streamSid || twilioWs.readyState !== WebSocket.OPEN) return
     isAgentSpeaking = true
-    if (firstAudioSentAt === null) firstAudioSentAt = Date.now()
-    totalAudioMsSent += Buffer.from(payload, 'base64').length / BYTES_PER_MS
+    if (currentResponseAudioStartAt === null) currentResponseAudioStartAt = Date.now()
+    const chunkMs = Buffer.from(payload, 'base64').length / BYTES_PER_MS
+    currentResponseAudioMs += chunkMs
+    // Encola este chunk detrás de lo que ya estaba pendiente (o a partir de ahora, si la
+    // cola ya se había vaciado) — ver comentario de queueDrainCompleteAt arriba.
+    queueDrainCompleteAt = Math.max(Date.now(), queueDrainCompleteAt) + chunkMs
     twilioWs.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }))
   })
 
@@ -137,27 +201,100 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
   // que causaba el error "no active response found" (cancelación duplicada).
   session.on('speechStarted', () => {
     isAgentSpeaking = false
+    currentUserSpeechStartAt = Date.now()
   })
 
   session.on('responseCreated', (responseId) => {
+    responseActive = true
+    currentResponseAudioStartAt = null
+    currentResponseAudioMs = 0
     if (awaitingHangupResponseCreation) {
       hangupAfterResponseId = responseId
       awaitingHangupResponseCreation = false
     }
   })
 
+  // Piden un turno de seguimiento normal (no despedida) desde handleFunctionCall. Si la
+  // respuesta que traía la function call ya terminó (responseActive ya es false para
+  // cuando los awaits de la función resolvieron), es seguro pedirlo ya mismo — si no,
+  // se difiere a responseDone vía pendingResponseCreate para no chocar con la API.
+  function requestFollowUpResponse(): void {
+    if (responseActive) {
+      pendingResponseCreate = true
+    } else {
+      session.createResponse()
+    }
+  }
+
+  // Mismo patrón que requestFollowUpResponse(), pero para la despedida — que además debe
+  // esperar hasta el 'mark' de Twilio de ESA respuesta antes de colgar (hangupAfterResponseId).
+  function requestFarewellResponse(): void {
+    hangupFarewellSpoken = false
+    if (responseActive) {
+      pendingFarewellTrigger = true
+    } else {
+      awaitingHangupResponseCreation = true
+      session.createResponse()
+    }
+  }
+
   session.on('responseDone', (status, responseId, usage) => {
     isAgentSpeaking = false
+    responseActive = false
     if (status === 'cancelled' && streamSid && twilioWs.readyState === WebSocket.OPEN) {
       // Corta el audio ya en el buffer de Twilio para que no siga sonando la frase
       // que el servidor ya decidió cortar.
       twilioWs.send(JSON.stringify({ event: 'clear', streamSid }))
-      // Ese audio descartado ya no cuenta como "por reproducir" — si no reseteamos,
-      // audioBacklogMs() seguiría contándolo y alargaría de más el próximo colgado.
-      totalAudioMsSent = 0
-      firstAudioSentAt = null
+      // Ese audio descartado ya no cuenta como "por reproducir" — el 'clear' de arriba
+      // vació la cola real de Twilio, así que el modelo de backlog debe reflejar eso.
+      queueDrainCompleteAt = Date.now()
+      // El audio de esta respuesta se descartó a medias — su transcript ya no aplica
+      // (ni es seguro para la red de seguridad de abajo, ni corresponde a audio real
+      // que Twilio vaya a reproducir completo).
+      lastAgentTranscript = null
     }
     if (usage) persistOpenAIUsage(usage)
+
+    // Guardado del turno del agente (movido aquí desde 'agentTranscript' — ver comentario
+    // ahí) + red de seguridad de looksLikeHangupIntent(): el modelo a veces DICE que va a
+    // colgar (frases tipo "voy a finalizar la llamada") sin llamar realmente a
+    // finalizar_llamada/requerir_humano. Antes esto se evaluaba en 'agentTranscript'
+    // (response.output_audio_transcript.done), pero ese evento NO garantiza que ya se
+    // haya emitido el último chunk de audio de la respuesta — transcript y audio se
+    // generan en paralelo, no en lockstep — y eso volvió a cortar la despedida a media
+    // frase. response.done sí es terminal: solo llega cuando YA se generó (y por lo tanto
+    // ya se mandó a Twilio vía el handler de 'audio') todo el audio de esta respuesta, así
+    // que es el único punto seguro para decidir esto Y para saber la duración real del
+    // audio (durationMs).
+    if (status === 'completed' && lastAgentTranscript && callDocId) {
+      const text = lastAgentTranscript
+      const messageStartAt = currentResponseAudioStartAt ?? Date.now()
+      const latencyMs = lastTurnEndAt !== null ? Math.max(0, Math.round(messageStartAt - lastTurnEndAt)) : null
+      const durationMs = currentResponseAudioMs > 0 ? Math.round(currentResponseAudioMs) : null
+      const elapsedMs = callStartAt !== null ? Math.max(0, Math.round(messageStartAt - callStartAt)) : null
+
+      const triggeredBySafetyNet = !shouldHangup && looksLikeHangupIntent(text)
+      if (triggeredBySafetyNet) shouldHangup = true
+
+      Call.findByIdAndUpdate(callDocId, {
+        ...(triggeredBySafetyNet ? { status: 'completed' } : {}),
+        $push: {
+          transcript: { role: 'assistant', content: text, timestamp: new Date(), elapsedMs, latencyMs, durationMs },
+        },
+      }).catch((err) => console.error('[VoiceStream] Error guardando transcript del agente:', err))
+
+      lastTurnEndAt = messageStartAt + (currentResponseAudioMs > 0 ? currentResponseAudioMs : 0)
+    }
+    lastAgentTranscript = null
+
+    // Turno de seguimiento genérico pedido por handleFunctionCall (ver declaración de
+    // pendingResponseCreate) — solo si la respuesta terminó de verdad; si el cliente
+    // interrumpió (status 'cancelled'), el propio servidor de OpenAI ya se encarga de
+    // generar la siguiente respuesta por su cuenta (create_response:true).
+    if (pendingResponseCreate) {
+      pendingResponseCreate = false
+      if (status === 'completed') session.createResponse()
+    }
 
     // La respuesta que contenía la llamada a requerir_humano/finalizar_llamada ya
     // terminó de verdad (generación Y sin quedar cancelada) — es seguro pedir ahora
@@ -194,18 +331,28 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
 
   session.on('userTranscript', (text) => {
     if (!text || !callDocId) return
+    // currentUserSpeechStartAt viene de 'speechStarted' (cuándo empezó a hablar el
+    // cliente) — la diferencia contra lastTurnEndAt (cuándo terminó el turno anterior,
+    // de la IA) es "cuánto tardó el cliente en contestar".
+    const messageStartAt = currentUserSpeechStartAt ?? Date.now()
+    const latencyMs = lastTurnEndAt !== null ? Math.max(0, Math.round(messageStartAt - lastTurnEndAt)) : null
+    const elapsedMs = callStartAt !== null ? Math.max(0, Math.round(messageStartAt - callStartAt)) : null
+    currentUserSpeechStartAt = null
+    lastTurnEndAt = Date.now() // el cliente ya terminó de hablar (transcript ya cerrado)
+
     Call.findByIdAndUpdate(callDocId, {
-      $push: { transcript: { role: 'user', content: text, timestamp: new Date() } },
+      $push: { transcript: { role: 'user', content: text, timestamp: new Date(), elapsedMs, latencyMs } },
     }).catch((err) => console.error('[VoiceStream] Error guardando transcript de usuario:', err))
   })
 
   session.on('agentTranscript', (text) => {
     if (!text || !callDocId) return
     hangupFarewellSpoken = true
+    lastAgentTranscript = text
     console.log(`[VoiceStream] agente dijo: "${text}"`)
-    Call.findByIdAndUpdate(callDocId, {
-      $push: { transcript: { role: 'assistant', content: text, timestamp: new Date() } },
-    }).catch((err) => console.error('[VoiceStream] Error guardando transcript del agente:', err))
+    // El guardado a Mongo (con latencyMs/durationMs) se hace en 'responseDone', no aquí —
+    // recién ahí se sabe la duración real del audio, y por la misma razón de orden de
+    // eventos ya documentada más abajo (transcript.done no garantiza audio completo).
   })
 
   session.on('functionCall', (fnCall) => {
@@ -232,28 +379,44 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
 
     // Registro de qué tool se llamó, independiente del resultado de cada case —
     // se usa al terminar la llamada para derivar `disposition` (ver voice.controller.ts).
-    await Call.findByIdAndUpdate(callDocId, { $push: { calledFunctions: name } })
+    // functionCallLog es el detalle con elapsedMs para mostrar en el modal EN QUÉ
+    // MOMENTO del flujo se disparó (calledFunctions se deja intacto, solo strings, porque
+    // computeVoiceDisposition depende de ese formato).
+    const functionElapsedMs = callStartAt !== null ? Math.max(0, Math.round(Date.now() - callStartAt)) : 0
+    await Call.findByIdAndUpdate(callDocId, {
+      $push: {
+        calledFunctions: name,
+        functionCallLog: { name, timestamp: new Date(), elapsedMs: functionElapsedMs },
+      },
+    })
 
     switch (name) {
       case 'confirmar_identidad': {
         call.identityConfirmed = true
         await call.save()
         session.sendFunctionCallOutput(callId, { ok: true })
-        session.createResponse()
+        requestFollowUpResponse()
         break
       }
 
       case 'marcar_ticket_aclaracion': {
         await runAction('crm', 'create_clarification_ticket', {}, call)
         session.sendFunctionCallOutput(callId, { ok: true })
-        session.createResponse()
+        requestFollowUpResponse()
         break
       }
 
       case 'marcar_factura_no_recibida': {
         await runAction('crm', 'mark_invoice_not_received', {}, call)
         session.sendFunctionCallOutput(callId, { ok: true })
-        session.createResponse()
+        requestFollowUpResponse()
+        break
+      }
+
+      case 'marcar_pago_domiciliado': {
+        await runAction('crm', 'mark_domiciliado', {}, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        requestFollowUpResponse()
         break
       }
 
@@ -263,7 +426,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         await runAction('crm', 'schedule_reminder', ctx, call)
         await runAction('whatsapp', 'send_payment_information', {}, call)
         session.sendFunctionCallOutput(callId, { ok: true })
-        session.createResponse()
+        requestFollowUpResponse()
         break
       }
 
@@ -275,7 +438,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         const received = normalizeRFC(String(args.ultimos4 ?? ''))
         const matches = Boolean(expected) && received === expected
         session.sendFunctionCallOutput(callId, { matches })
-        session.createResponse()
+        requestFollowUpResponse()
         return
       }
 
@@ -285,7 +448,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         const result = await runAction('payments', 'verify_payment', {}, call)
         const exists = Boolean(result?.payment_exists)
         session.sendFunctionCallOutput(callId, { payment_exists: exists })
-        session.createResponse()
+        requestFollowUpResponse()
         return
       }
 
@@ -298,9 +461,8 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
           await Client.findByIdAndUpdate(call.clientId, { requiresHuman: true, requiresHumanReason: motivo })
         }
         shouldHangup = true
-        hangupFarewellSpoken = false
-        pendingFarewellTrigger = true
         session.sendFunctionCallOutput(callId, { ok: true })
+        requestFarewellResponse()
         break
       }
 
@@ -308,22 +470,21 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         call.status = 'completed'
         await call.save()
         shouldHangup = true
-        hangupFarewellSpoken = false
-        pendingFarewellTrigger = true
         session.sendFunctionCallOutput(callId, { ok: true })
+        requestFarewellResponse()
         break
       }
 
       case 'marcar_extension': {
         // TODO: aún no se envían tonos DTMF al conmutador, solo se registra la intención.
         session.sendFunctionCallOutput(callId, { ok: true })
-        session.createResponse()
+        requestFollowUpResponse()
         break
       }
 
       default:
         session.sendFunctionCallOutput(callId, { ok: false, error: 'unknown_function' })
-        session.createResponse()
+        requestFollowUpResponse()
         break
     }
   }
@@ -380,6 +541,9 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         streamSid = event.start?.streamSid ?? null
         const callSid = event.start?.callSid ?? null
         console.log(`[VoiceStream] Stream iniciado streamSid=${streamSid} callSid=${callSid}`)
+        // Ancla de todos los "elapsedMs"/"latencyMs" del flujo (ver declaración arriba).
+        callStartAt = Date.now()
+        lastTurnEndAt = callStartAt
 
         if (!callSid) {
           console.error('[VoiceStream] Evento start sin callSid, cerrando')

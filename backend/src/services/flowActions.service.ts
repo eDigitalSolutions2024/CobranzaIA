@@ -103,6 +103,23 @@ const registry: Record<string, ActionFn> = {
       notes: `Cliente indicó que no ha recibido su factura del mes durante la llamada. CallSid: ${call.callSid}`,
     })
   },
+
+  // A diferencia de los demás Ticket ("open" — necesitan que alguien actúe),
+  // este se guarda cerrado: es solo un registro informativo, el pago ya está
+  // resuelto vía cargo automático y no requiere seguimiento de un cobrador.
+  'crm.mark_domiciliado': async (_ctx, call) => {
+    await Ticket.create({
+      clientId: call.clientId ?? null,
+      callId: call._id,
+      phone: call.phone,
+      reason: 'domiciliado',
+      status: 'closed',
+      notes: `Cliente reportó pago domiciliado/cargo automático durante la llamada. CallSid: ${call.callSid}`,
+    })
+    if (call.clientId) {
+      await Client.findByIdAndUpdate(call.clientId, { lastIntent: 'domiciliado' })
+    }
+  },
 }
 
 export async function runAction(

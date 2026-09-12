@@ -22,6 +22,10 @@ function minutes(seconds: number): string {
   return `${Math.round(Number(seconds || 0) / 60).toLocaleString("en-US")} min`
 }
 
+function usd(n: number): string {
+  return `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`
+}
+
 export default function UsagePage() {
   const [range, setRange] = useState<number | "all" | "today">(30)
   const [loading, setLoading] = useState(true)
@@ -71,7 +75,7 @@ export default function UsagePage() {
       </div>
 
       {/* Totales */}
-      <div className="mt-8 grid gap-6 md:grid-cols-3">
+      <div className="mt-8 grid gap-6 md:grid-cols-4">
         <div className="rounded-2xl border border-brand/30 bg-brand/5 p-6">
           <p className="text-sm text-white">Total calls</p>
           <h2 className="mt-4 text-3xl font-bold text-white">
@@ -91,6 +95,36 @@ export default function UsagePage() {
           <h2 className="mt-4 text-3xl font-bold text-white">
             {loading ? "..." : data?.whatsapp?.outboundCount ?? 0}
           </h2>
+        </div>
+
+        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6">
+          <p className="text-sm text-white">Total estimated cost</p>
+          <h2 className="mt-4 text-3xl font-bold text-emerald-400">
+            {loading ? "..." : usd(data?.totalCostUsd ?? 0)}
+          </h2>
+        </div>
+      </div>
+
+      {/* Costo por proveedor */}
+      <div className="mt-8">
+        <h2 className="text-sm font-medium text-white mb-3 uppercase tracking-wider">Cost by provider (estimated)</h2>
+        <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+            <p className="text-sm text-white">OpenAI (voice)</p>
+            <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : usd(data?.calls?.openai?.costUsd ?? 0)}</p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+            <p className="text-sm text-white">Claude (summaries)</p>
+            <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : usd(data?.calls?.claude?.costUsd ?? 0)}</p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+            <p className="text-sm text-white">Twilio (calls)</p>
+            <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : usd(data?.calls?.twilioCostUsd ?? 0)}</p>
+          </div>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+            <p className="text-sm text-white">WhatsApp</p>
+            <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : usd(data?.whatsapp?.costUsd ?? 0)}</p>
+          </div>
         </div>
       </div>
 
@@ -132,6 +166,29 @@ export default function UsagePage() {
                 formatter={(value: any) => [value, "Calls"]}
               />
               <Bar dataKey="calls" name="Calls" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Tendencia diaria de costo */}
+      <div className="mt-8 rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
+        <div className="mb-6">
+          <h2 className="text-lg font-semibold">Estimated cost per day</h2>
+          <p className="text-sm text-zinc-400">OpenAI + Claude + Twilio + WhatsApp combined</p>
+        </div>
+
+        <div className="h-80">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data?.timeseries ?? []}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+              <XAxis dataKey="date" stroke="#71717a" fontSize={12} />
+              <YAxis stroke="#71717a" fontSize={12} tickFormatter={(v) => usd(v)} />
+              <Tooltip
+                contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
+                formatter={(value: any) => [usd(Number(value)), "Cost"]}
+              />
+              <Bar dataKey="totalCostUsd" name="Cost" fill="#10b981" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
