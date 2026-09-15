@@ -38,6 +38,10 @@ const RISK_COLOR: Record<string, string> = {
   high: "bg-red-500/10 text-red-400",
 }
 
+const testingGroup:string [] = [
+  'Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes'
+]
+
 export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
   const [openModal, setOpenModal] = useState(false)
@@ -222,7 +226,7 @@ export default function ClientsPage() {
               <tbody>
                 {clients.map((client) => {
                   const expanded = expandedClientId === client._id;
-                  const checked = checkedClientId === client._id;
+                  const checked = checkedClientId === client._id; 
                   return (
                   <>
                   <tr
@@ -237,6 +241,17 @@ export default function ClientsPage() {
                     <td onClick={() => setDetailId(client._id)} className="py-4 font-medium cursor-pointer">
                       <div className="flex items-center gap-2">
                         {client.name}
+
+                        {testingGroup.map((name) => {
+                          return(
+                                client.name.trim().split(' ')[0] === name &&  ( 
+                                <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-400">
+                                  Test Group Calls
+                                </span>
+                              )
+                          )
+                        })
+                        }
                         {client.requiresHuman && (
                           <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-400">
                             Needs agent
