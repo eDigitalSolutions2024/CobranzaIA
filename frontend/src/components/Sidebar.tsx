@@ -4,7 +4,6 @@ import {
   MessageSquare,
   MessageCircle,
   Phone,
-  Gauge,
   ShieldCheck,
   ChevronsLeft,
   ChevronsRight,
@@ -25,7 +24,6 @@ const menu = [
   { id: "calls", name: "Calls", icon: Phone },
   { id: "conversations", name: "Conversations", icon: MessageCircle },
   { id: "messages", name: "Send WhatsApp", icon: MessageSquare },
-  { id: "usage", name: "Resources", icon: Gauge },
   { id: "security", name: "Security", icon: ShieldCheck },
 ]
 

@@ -5,7 +5,7 @@ import Call from '../models/Call'
 import Client from '../models/Client'
 import { runAction } from '../services/flowActions.service'
 import { OpenAIRealtimeSession, RealtimeFunctionCall, RealtimeUsage } from '../services/openaiRealtime.service'
-import { buildVoiceSystemPrompt, ClientInfo } from '../services/voiceConversation.service'
+import { buildVoiceSystemPrompt, buildTranscriptionPrompt, ClientInfo } from '../services/voiceConversation.service'
 import { normalizeRFC } from '../utils/rfc'
 
 // Red de seguridad para cuando el modelo DICE que va a colgar sin llamar a la
@@ -424,7 +424,6 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         const ctx = { amount: args.monto, payment_date: args.fecha }
         await runAction('crm', 'create_payment_commitment', ctx, call)
         await runAction('crm', 'schedule_reminder', ctx, call)
-        await runAction('whatsapp', 'send_payment_information', {}, call)
         session.sendFunctionCallOutput(callId, { ok: true })
         requestFollowUpResponse()
         break
@@ -510,9 +509,10 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
       : null
 
     const systemPrompt = buildVoiceSystemPrompt(clientInfo, call.phone)
+    const transcriptionPrompt = buildTranscriptionPrompt(clientInfo)
 
     try {
-      await session.connect(systemPrompt)
+      await session.connect(systemPrompt, transcriptionPrompt)
     } catch (err) {
       console.error('[VoiceStream] No se pudo conectar a OpenAI Realtime:', err)
       closeAll()

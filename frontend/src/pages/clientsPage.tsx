@@ -3,7 +3,6 @@ import { getClients, exportClientsExcel, deleteClient } from "../services/client
 import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
-import ImportClientsModal from "../components/ImportClientsModal"
 import ImportInvoicesModal from "../components/ImportInvoicesModal"
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
@@ -41,7 +40,6 @@ const RISK_COLOR: Record<string, string> = {
 export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
   const [openModal, setOpenModal] = useState(false)
-  const [importOpen, setImportOpen] = useState(false)
   const [importInvoicesOpen, setImportInvoicesOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
@@ -177,12 +175,6 @@ export default function ClientsPage() {
             <p className="mt-2 text-zinc-400">Smart collection management</p>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setImportOpen(true)}
-              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
-            >
-              Import Clients
-            </button>
             <button
               onClick={() => setImportInvoicesOpen(true)}
               className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
@@ -579,12 +571,6 @@ export default function ClientsPage() {
       <ClientDetailModal
         clientId={detailId}
         onClose={() => setDetailId(null)}
-      />
-
-      <ImportClientsModal
-        isOpen={importOpen}
-        onClose={() => setImportOpen(false)}
-        onImported={loadClients}
       />
 
       <ImportInvoicesModal

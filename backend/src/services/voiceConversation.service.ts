@@ -207,3 +207,21 @@ FLUJO A SEGUIR:
    - Si confirma → AHORA SÍ llama a la función registrar_promesa_pago (una llamada por cada cuota, si acuerdan un plan de pagos, máximo 12 cuotas) y continúa al punto 8.
 8. Cierra siempre con calidez. En cuanto la conversación termine (con o sin acuerdo), despídete y llama a la función finalizar_llamada.`
 }
+
+// Vocabulario de dominio para sesgar la TRANSCRIPCIÓN (session.audio.input.transcription.
+// prompt de la Realtime API) — ojo, esto NO cambia lo que el modelo conversacional
+// "escucha" (consume el audio directo, no pasa por aquí), solo ayuda a que
+// gpt-4o-transcribe adivine mejor palabras del dominio cuando el audio telefónico es
+// ambiguo. Confirmado con evidencia real (2026-09-11): "el pago está domiciliado" se
+// transcribió en vivo como "el pavo estaba mi gelero" — fonéticamente parecido pero sin
+// nada que ver, exactamente el tipo de error que un prompt de vocabulario ayuda a evitar.
+// La Realtime API rechaza el session.update si el prompt trae '<', '>' o saltos de línea
+// — se sanea el nombre del cliente por si acaso.
+export function buildTranscriptionPrompt(clientInfo: ClientInfo | null): string {
+  const vocab =
+    'adeudo, saldo pendiente, factura, pago domiciliado, cargo automático, promesa de pago, ' +
+    'fecha de pago, RFC, cobranza, vencido, próximo a vencer, transferencia, pago de contado'
+  if (!clientInfo?.name) return `Llamada de cobranza en español mexicano. Vocabulario frecuente: ${vocab}.`
+  const safeName = clientInfo.name.replace(/[<>\r\n]/g, '').trim()
+  return `Llamada de cobranza en español mexicano con ${safeName}. Vocabulario frecuente: ${vocab}.`
+}

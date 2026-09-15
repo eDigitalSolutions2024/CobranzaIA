@@ -54,7 +54,7 @@ export class OpenAIRealtimeSession extends EventEmitter {
   // El modelo conversa libre (a diferencia de la versión anterior, que lo forzaba a
   // recitar texto exacto) — turn_detection.create_response:true deja que responda solo
   // en cuanto detecta que el cliente terminó de hablar, como un agente humano real.
-  connect(instructions: string): Promise<void> {
+  connect(instructions: string, transcriptionPrompt?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(OPENAI_REALTIME_MODEL)}`
       const ws = new WebSocket(url, {
@@ -78,7 +78,12 @@ export class OpenAIRealtimeSession extends EventEmitter {
                 // gpt-4o-transcribe alucina mucho menos que whisper-1 con audio
                 // telefónico ruidoso (8kHz). "language" fija que la llamada es en
                 // español.
-                transcription: { model: 'gpt-4o-transcribe', language: 'es' },
+                // "prompt" sesga el vocabulario que gpt-4o-transcribe tiende a reconocer
+                // en audio ambiguo (ver buildTranscriptionPrompt en
+                // voiceConversation.service.ts) — NO afecta lo que el modelo conversacional
+                // "escucha" (consume el audio directo), solo mejora la calidad del
+                // transcript que se guarda en Mongo.
+                transcription: { model: 'gpt-4o-transcribe', language: 'es', ...(transcriptionPrompt ? { prompt: transcriptionPrompt } : {}) },
                 // Reduce ruido de línea telefónica. "near_field": el micrófono
                 // (bocina del teléfono) está pegado a la boca del cliente.
                 noise_reduction: { type: 'near_field' },
