@@ -7,6 +7,7 @@ import { runAction } from '../services/flowActions.service'
 import { OpenAIRealtimeSession, RealtimeFunctionCall, RealtimeUsage } from '../services/openaiRealtime.service'
 import { buildVoiceSystemPrompt, buildTranscriptionPrompt, ClientInfo } from '../services/voiceConversation.service'
 import { normalizeRFC } from '../utils/rfc'
+import { placeOutboundCall } from './voice.controller'
 
 // Red de seguridad para cuando el modelo DICE que va a colgar sin llamar a la
 // función real (ver uso en 'agentTranscript' más abajo) — frases que el propio
@@ -475,9 +476,34 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
       }
 
       case 'marcar_extension': {
-        // TODO: aún no se envían tonos DTMF al conmutador, solo se registra la intención.
+        // Es un conmutador, no una persona — no hay nada más que hablar. Se cuelga sin
+        // despedida y de inmediato se vuelve a marcar, esta vez con la extensión ya
+        // integrada en el número (ver placeOutboundCall en voice.controller.ts, que
+        // detecta Client.knownExtension y arma el "número,,,,ext#" para Twilio).
+        const extension = typeof args.extension === 'string' && args.extension.trim() ? args.extension.trim() : '1001'
+        const clientBefore = call.clientId ? await Client.findById(call.clientId).lean() : null
+        const alreadyHadExtension = Boolean(clientBefore?.knownExtension)
+
+        if (call.clientId) {
+          await Client.findByIdAndUpdate(call.clientId, { knownExtension: extension })
+        }
+
         session.sendFunctionCallOutput(callId, { ok: true })
-        requestFollowUpResponse()
+        shouldHangup = true
+        hangupFarewellSpoken = true
+
+        // Si esta llamada YA iba con una extensión pre-cargada (Client.knownExtension ya
+        // tenía valor) y de todos modos volvió a sonar a conmutador, no reintentamos en
+        // automático — evita un ciclo de remarcado infinito si la extensión guardada ya
+        // no es la correcta. Se deja para revisión manual.
+        if (call.clientId && !alreadyHadExtension) {
+          const publicUrl = (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
+          if (publicUrl) {
+            placeOutboundCall(String(call.clientId), publicUrl, 'manual').catch((err) =>
+              console.error('[VoiceStream] Error re-marcando con extensión:', err)
+            )
+          }
+        }
         break
       }
 

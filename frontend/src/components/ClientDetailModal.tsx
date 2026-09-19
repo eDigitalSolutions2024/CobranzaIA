@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react"
 import { getClientDetail, createInvoice, updateInvoice, deleteInvoice } from "../services/clients"
 import { apiBlobUrl } from "../services/api"
+import { getExchangeRates } from "../services/settings"
+import ExchangeRateModal from "./ExchangeRateModal"
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending", contacted: "Contacted", negotiating: "Negotiating",
@@ -267,14 +269,20 @@ function toDateInputValue(value: any): string {
 type InvoiceForm = {
   invoiceNumber: string
   amount: string
+  currencyCode: string
   issueDate: string
   dueDate: string
   status: string
   notes: string
 }
 
+// Monedas conocidas de antemano (además de las que ya tengan tasa configurada en
+// Settings, que se agregan dinámicamente vía knownCurrencies) — el datalist permite
+// tanto elegir una de la lista como escribir una nueva.
+const BASE_CURRENCIES = ["MXN", "USD", "PEN", "COP", "CLP"]
+
 function InvoiceFormFields({
-  form, onChange, onCancel, onSubmit, saving, submitLabel,
+  form, onChange, onCancel, onSubmit, saving, submitLabel, knownCurrencies,
 }: {
   form: InvoiceForm
   onChange: (form: InvoiceForm) => void
@@ -282,7 +290,9 @@ function InvoiceFormFields({
   onSubmit: (e: React.FormEvent) => void
   saving: boolean
   submitLabel: string
+  knownCurrencies: string[]
 }) {
+  const currencyOptions = [...new Set([...BASE_CURRENCIES, ...knownCurrencies])]
   return (
     <form onSubmit={onSubmit} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 grid grid-cols-2 gap-3">
       <input
@@ -299,6 +309,21 @@ function InvoiceFormFields({
         onChange={(e) => onChange({ ...form, amount: e.target.value })}
         className="rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white"
       />
+      <div>
+        <input
+          list="invoice-currency-options"
+          placeholder="Currency (MXN)"
+          value={form.currencyCode}
+          onChange={(e) => onChange({ ...form, currencyCode: e.target.value.toUpperCase() })}
+          maxLength={3}
+          className="w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white uppercase"
+        />
+        <datalist id="invoice-currency-options">
+          {currencyOptions.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
+      </div>
       <select
         value={form.status}
         onChange={(e) => onChange({ ...form, status: e.target.value })}
@@ -377,7 +402,7 @@ interface Props {
   onClose: () => void
 }
 
-const EMPTY_INVOICE_FORM = { invoiceNumber: "", amount: "", issueDate: "", dueDate: "", status: "pending", notes: "" }
+const EMPTY_INVOICE_FORM = { invoiceNumber: "", amount: "", currencyCode: "MXN", issueDate: "", dueDate: "", status: "pending", notes: "" }
 
 export default function ClientDetailModal({ clientId, onClose }: Props) {
   const [data, setData] = useState<any>(null)
@@ -390,6 +415,8 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
   const [showInvoiceForm, setShowInvoiceForm] = useState(false)
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null)
   const [savingInvoice, setSavingInvoice] = useState(false)
+  const [knownCurrencies, setKnownCurrencies] = useState<string[]>([])
+  const [rateModalOpen, setRateModalOpen] = useState(false)
 
   useEffect(() => {
     if (!clientId) return
@@ -401,6 +428,9 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
     setEditingInvoiceId(null)
     setInvoiceForm(EMPTY_INVOICE_FORM)
     getClientDetail(clientId).then(setData).catch(() => {})
+    getExchangeRates()
+      .then((rates) => setKnownCurrencies(rates.map((r) => r.currencyCode)))
+      .catch(() => {})
   }, [clientId])
 
   async function refresh() {
@@ -452,6 +482,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
     setInvoiceForm({
       invoiceNumber: inv.invoiceNumber ?? "",
       amount: inv.amount != null ? String(inv.amount) : "",
+      currencyCode: inv.currencyCode ?? "MXN",
       issueDate: toDateInputValue(inv.issueDate),
       dueDate: toDateInputValue(inv.dueDate),
       status: inv.status ?? "pending",
@@ -493,6 +524,13 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
 
   const client = data?.client
   const transcriptModalCall = data?.calls?.find((c: any) => c._id === transcriptModalCallId)
+  // data.promises viene ordenado por promisedDate (fecha del compromiso), no por cuándo
+  // se registró — para "la última registrada" se necesita ordenar por createdAt.
+  const latestPromise = data?.promises?.length
+    ? [...data.promises].sort(
+        (a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )[0]
+    : null
 
   return (
     <>
@@ -543,8 +581,8 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                 <StatTile label="USD Amount" value={client.usdAmount != null ? formatMoney(client.usdAmount) : "—"} />
                 <StatTile
                   label="Payment promise"
-                  value={client.paymentPromiseAmount != null ? formatMoney(client.paymentPromiseAmount) : "—"}
-                  sub={client.datePromise ? `Due ${formatDate(client.datePromise)}` : undefined}
+                  value={latestPromise ? `${formatMoney(latestPromise.amount)} MXN` : "—"}
+                  sub={latestPromise ? `Due ${formatDate(latestPromise.promisedDate)}` : undefined}
                 />
               </div>
 
@@ -552,6 +590,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-5 p-6 border-b border-zinc-800">
                 <Field label="Channel" value={client.channel} />
                 <Field label="Contact" value={client.contact} />
+                <Field label="Switchboard extension" value={client.knownExtension} />
                 <Field label="Team" value={client.team} />
                 <Field label="Team Leader" value={client.teamLeader} />
                 <Field label="Collector" value={client.collector} />
@@ -677,14 +716,22 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
 
                 {tab === "invoices" && (
                   <div className="space-y-3">
-                    {!showInvoiceForm && !editingInvoiceId && (
+                    <div className="flex items-center justify-between">
+                      {!showInvoiceForm && !editingInvoiceId ? (
+                        <button
+                          onClick={() => { setShowInvoiceForm(true); setInvoiceForm(EMPTY_INVOICE_FORM) }}
+                          className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 transition-colors"
+                        >
+                          + Add invoice
+                        </button>
+                      ) : <span />}
                       <button
-                        onClick={() => { setShowInvoiceForm(true); setInvoiceForm(EMPTY_INVOICE_FORM) }}
-                        className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 transition-colors"
+                        onClick={() => setRateModalOpen(true)}
+                        className="text-xs text-zinc-500 hover:text-blue-400 transition-colors"
                       >
-                        + Add invoice
+                        Exchange rates
                       </button>
-                    )}
+                    </div>
 
                     {showInvoiceForm && (
                       <InvoiceFormFields
@@ -694,6 +741,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                         onSubmit={handleAddInvoice}
                         saving={savingInvoice}
                         submitLabel="Save invoice"
+                        knownCurrencies={knownCurrencies}
                       />
                     )}
 
@@ -711,6 +759,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                           onSubmit={handleUpdateInvoice}
                           saving={savingInvoice}
                           submitLabel="Update invoice"
+                          knownCurrencies={knownCurrencies}
                         />
                       ) : (
                         <div
@@ -723,7 +772,20 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                               <p className="text-sm font-semibold text-white">{inv.invoiceNumber}</p>
                               <p className="text-sm text-zinc-400 mt-0.5">
                                 {formatMoney(inv.amount)} {inv.currencyCode || "MXN"}
-                                {inv.remainingAmount != null && ` · Remaining ${formatMoney(inv.remainingAmount)}`}
+                                {inv.currencyCode && inv.currencyCode !== "MXN" && (
+                                  inv.amountMxn != null
+                                    ? ` (≈ ${formatMoney(inv.amountMxn)} MXN)`
+                                    : " (no exchange rate set)"
+                                )}
+                                {inv.remainingAmount != null && (
+                                  <>
+                                    {" · Remaining "}
+                                    {formatMoney(inv.remainingAmount)} USD
+                                    {inv.remainingAmountMxn != null
+                                      ? ` (≈ ${formatMoney(inv.remainingAmountMxn)} MXN)`
+                                      : " (no exchange rate set)"}
+                                  </>
+                                )}
                               </p>
                               <p className="text-xs text-zinc-600 mt-1">
                                 {inv.issueDate ? `Issued ${formatDate(inv.issueDate)}` : ""}
@@ -832,6 +894,12 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
         </div>
       </div>
     )}
+
+    <ExchangeRateModal
+      isOpen={rateModalOpen}
+      onClose={() => setRateModalOpen(false)}
+      onUpdated={(rates) => setKnownCurrencies(rates.map((r) => r.currencyCode))}
+    />
     </>
   )
 }

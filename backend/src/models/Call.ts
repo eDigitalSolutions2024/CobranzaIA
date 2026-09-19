@@ -50,6 +50,10 @@ export interface ICall extends Document {
   requiresHuman: boolean
   identityConfirmed: boolean
   callSid: string
+  // Si la disparó el botón "Call" del dashboard o el scheduler de llamadas automáticas
+  // (ver autoCallScheduler.service.ts) — determina si el resultado de la llamada avanza
+  // el ciclo automático del cliente (voice.controller.ts, advanceAutoCallCycle).
+  triggeredBy: 'manual' | 'auto'
   flowStateId?: string | null
   flowContext?: Record<string, any>
   summary?: string | null
@@ -108,6 +112,7 @@ const CallSchema = new Schema<ICall>(
     requiresHuman: { type: Boolean, default: false },
     identityConfirmed: { type: Boolean, default: false },
     callSid: { type: String, required: true, unique: true },
+    triggeredBy: { type: String, enum: ['manual', 'auto'], default: 'manual' },
     // Estado y variables de la máquina de estados (backend/src/flows/cobranza_ai_v1.json)
     flowStateId: { type: String, default: null },
     flowContext: { type: Schema.Types.Mixed, default: {} },

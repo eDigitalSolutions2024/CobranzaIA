@@ -77,6 +77,14 @@ type:String,
 default:null
 },
 
+// Extensión del conmutador de este cliente, una vez detectada (ver marcar_extension en
+// voiceStream.controller.ts) — las llamadas futuras la marcan directo (ver
+// placeOutboundCall en voice.controller.ts), sin tener que redetectarla cada vez.
+knownExtension:{
+type:String,
+default:null
+},
+
 risk:{
 type:String,
 enum:[
@@ -268,6 +276,35 @@ default:null
 datePromise:{
 type:Date,
 default:null
+},
+
+// --- Ciclo de cobranza automática (ver services/autoCallScheduler.service.ts) ---
+// Paso ya hecho en el ciclo semanal actual: 0=nada, 1=1era llamada, 2=2da llamada,
+// 3=mensaje WhatsApp, 4=WhatsApp final — es lo que se muestra como "contador" en la
+// tabla de Clients.
+autoCallAttempt:{
+type:Number,
+default:0
+},
+
+// Cuándo arrancó el ciclo actual (1er intento) — un ciclo dura 7 días; pasado ese
+// tiempo, el cliente vuelve a ser elegible para un ciclo nuevo desde 0.
+autoCallCycleStartAt:{
+type:Date,
+default:null
+},
+
+// Cuándo toca el siguiente paso del ciclo — null si no hay ninguno programado.
+autoCallNextAttemptAt:{
+type:Date,
+default:null
+},
+
+// true cuando ya se disparó el paso 4 (WhatsApp final) sin que el cliente respondiera —
+// se agotó todo el ciclo automático de la semana, solo informativo en la UI.
+autoCycleExhausted:{
+type:Boolean,
+default:false
 }
 
 },

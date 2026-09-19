@@ -1,10 +1,17 @@
 import { Router } from "express"
-import { getExchangeRate, updateExchangeRate } from "../controllers/settingsController"
+import {
+  listExchangeRates,
+  upsertExchangeRate,
+  getAutomationSettings,
+  updateAutomationSettings,
+} from "../controllers/settingsController"
 import { requireAuth } from "../middleware/auth"
 
 const router = Router()
 
-router.get("/settings/exchange-rate", requireAuth, getExchangeRate)
-router.put("/settings/exchange-rate", requireAuth, updateExchangeRate)
+router.get("/settings/exchange-rates", requireAuth, listExchangeRates)
+router.put("/settings/exchange-rates", requireAuth, upsertExchangeRate)
+router.get("/settings/automation", requireAuth, getAutomationSettings)
+router.put("/settings/automation", requireAuth, updateAutomationSettings)
 
 export default router

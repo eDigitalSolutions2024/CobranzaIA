@@ -3,6 +3,11 @@ import Reminder from '../models/Reminder'
 import Client from '../models/Client'
 import { prepareWhatsappMessage } from './whatsappService'
 
+// Errores que prepareWhatsappMessage lanza a propósito por horario hábil / tope diario
+// (ver whatsappService.ts) — NO son una falla real, se debe reintentar en la siguiente
+// corrida en vez de marcar el recordatorio como 'failed' para siempre.
+const POSTPONED_ERRORS = new Set(['OUTSIDE_BUSINESS_HOURS', 'DAILY_MESSAGE_CAP_REACHED'])
+
 async function dispatchDueReminders(): Promise<void> {
   const due = await Reminder.find({ status: 'pending', remindAt: { $lte: new Date() } }).limit(50)
 
@@ -27,7 +32,11 @@ async function dispatchDueReminders(): Promise<void> {
       reminder.status = 'sent'
       await reminder.save()
       console.log(`[Reminders] Recordatorio enviado a ${client.phone} (reminder ${reminder._id})`)
-    } catch (error) {
+    } catch (error: any) {
+      if (POSTPONED_ERRORS.has(error?.message)) {
+        console.log(`[Reminders] Recordatorio ${reminder._id} pospuesto (${error.message}) — se reintenta en la siguiente corrida.`)
+        continue // se deja status:'pending', remindAt ya venció así que sigue elegible
+      }
       console.error(`[Reminders] Error enviando recordatorio ${reminder._id}:`, error)
       reminder.status = 'failed'
       await reminder.save()

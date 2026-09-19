@@ -38,6 +38,50 @@ async function applyDisposition(
   }
 }
 
+// Con AUTO_CALL_TEST_MODE=true (mismo env var que autoCallScheduler.service.ts) los gaps
+// se acortan a minutos, para poder ver el ciclo completo en una sola sesión de prueba en
+// vez de esperar días reales.
+const AUTO_CALL_TEST_MODE = process.env.AUTO_CALL_TEST_MODE === 'true'
+
+// Cuánto esperar antes del siguiente paso del ciclo tras una llamada sin respuesta —
+// entre las dos LLAMADAS (pasos 1->2) se da más margen que entre los MENSAJES que
+// siguen (pasos 2->3->4, ver autoCallScheduler.service.ts para el resto del ciclo:
+// arranca cada paso; esta función solo reacciona al RESULTADO de una llamada ya hecha).
+const AUTO_CALL_RETRY_GAP_MS = AUTO_CALL_TEST_MODE ? 60 * 1000 : 3 * 24 * 60 * 60 * 1000
+const AUTO_MESSAGE_GAP_MS = AUTO_CALL_TEST_MODE ? 60 * 1000 : 1 * 24 * 60 * 60 * 1000
+
+// El usuario decidió qué cuenta como "no hubo respuesta" para reintentar: no contestó/
+// ocupado/falló la conexión (disposition 'No answer', puesta directo en handleStatus) Y
+// buzón de voz — que aquí se detecta indirectamente vía 'Customer hung up' (menos de 2
+// turnos reales de conversación es la misma señal que usa computeVoiceDisposition, sin
+// necesitar activar detección de máquina de Twilio y meterle latencia a la llamada real).
+// Cualquier OTRA disposition significa que sí hubo una persona real en la línea — ahí se
+// detiene el ciclo automático de la semana, ya hubo contacto.
+const AUTO_CALL_NO_RESPONSE_DISPOSITIONS = new Set<DispositionStatus>(['No answer', 'Customer hung up'])
+
+async function advanceAutoCallCycle(
+  clientId: mongoose.Types.ObjectId | undefined | null,
+  disposition: DispositionStatus
+): Promise<void> {
+  if (!clientId) return
+  const client = await Client.findById(clientId)
+  if (!client) return
+
+  if (!AUTO_CALL_NO_RESPONSE_DISPOSITIONS.has(disposition)) {
+    // Contestó una persona real — se detiene el ciclo automático de esta semana.
+    client.autoCallNextAttemptAt = null
+    await client.save()
+    return
+  }
+
+  // Sin respuesta — programa el siguiente paso. Qué TIPO de paso es (llamada o mensaje)
+  // lo decide el scheduler según el número de intento cuando le toque correr, aquí solo
+  // se define CUÁNDO.
+  const gapMs = (client.autoCallAttempt as number) >= 2 ? AUTO_MESSAGE_GAP_MS : AUTO_CALL_RETRY_GAP_MS
+  client.autoCallNextAttemptAt = new Date(Date.now() + gapMs)
+  await client.save()
+}
+
 const { VoiceResponse } = twilio.twiml
 const VOICE = 'Polly.Mia-Neural' as const
 const LANGUAGE = 'es-MX' as const
@@ -139,34 +183,68 @@ export async function getCalls(req: Request, res: Response): Promise<void> {
   }
 }
 
+// Compartido entre el botón "Call" del dashboard (handleOutbound) y el scheduler de
+// llamadas automáticas (autoCallScheduler.service.ts).
+export async function placeOutboundCall(
+  clientId: string,
+  publicUrl: string,
+  triggeredBy: 'manual' | 'auto' = 'manual'
+): Promise<{ callSid: string; status: string }> {
+  const client = await Client.findById(clientId).lean()
+  if (!client) throw new Error('Cliente no encontrado')
+
+  const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
+  const rawPhone = client.phone as string
+  const basePhone = rawPhone.startsWith('+') ? rawPhone : `+52${rawPhone.replace(/\D/g, '')}`
+
+  // Si ya sabemos (de una llamada anterior, ver marcar_extension en
+  // voiceStream.controller.ts) que este cliente tiene conmutador, marcamos directo con
+  // la extensión incluida — cada coma es ~2s de pausa en Twilio, dándole tiempo al
+  // conmutador de terminar su saludo antes de que "presionemos" el número. El "#" cierra
+  // la marcación en conmutadores que lo requieren para confirmar la extensión.
+  const toPhone = client.knownExtension ? `${basePhone},,,,${client.knownExtension}#` : basePhone
+
+  const call = await twilioClient.calls.create({
+    to: toPhone,
+    from: process.env.TWILIO_PHONE_NUMBER!,
+    url: `${publicUrl}/api/voice/incoming?clientId=${clientId}`,
+    statusCallback: `${publicUrl}/api/voice/status`,
+    statusCallbackMethod: 'POST',
+    ...recordingParams(publicUrl),
+  })
+
+  // Se crea el Call AQUÍ, no cuando Twilio conteste — Twilio solo pide /incoming si
+  // alguien LEVANTA el teléfono; si nadie contesta (no-answer/busy/failed), Twilio manda
+  // directo el statusCallback final SIN pasar nunca por /incoming, y handleStatus se
+  // quedaba buscando un Call que nunca se había creado (confirmado en pruebas del
+  // ciclo automático: llamadas sin respuesta se quedaban con el ciclo congelado para
+  // siempre porque advanceAutoCallCycle nunca se llegaba a ejecutar).
+  await Call.create({
+    phone: basePhone,
+    clientId: client._id,
+    callSid: call.sid,
+    transcript: [],
+    status: 'in_progress',
+    requiresHuman: false,
+    triggeredBy,
+  })
+
+  return { callSid: call.sid, status: call.status }
+}
+
 export async function handleOutbound(req: Request, res: Response): Promise<void> {
   const { clientId } = req.body as { clientId: string }
 
   try {
-    const client = await Client.findById(clientId).lean()
-    if (!client) {
+    const publicUrl = (process.env.PUBLIC_URL ?? getBaseUrl(req)).replace(/\/$/, '')
+    const result = await placeOutboundCall(clientId, publicUrl, 'manual')
+    res.json(result)
+  } catch (err: any) {
+    console.error('[Voice] handleOutbound error:', err)
+    if (err.message === 'Cliente no encontrado') {
       res.status(404).json({ error: 'Cliente no encontrado' })
       return
     }
-
-    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
-    const publicUrl = (process.env.PUBLIC_URL ?? getBaseUrl(req)).replace(/\/$/, '')
-
-    const rawPhone = client.phone as string
-    const toPhone = rawPhone.startsWith('+') ? rawPhone : `+52${rawPhone.replace(/\D/g, '')}`
-
-    const call = await twilioClient.calls.create({
-      to: toPhone,
-      from: process.env.TWILIO_PHONE_NUMBER!,
-      url: `${publicUrl}/api/voice/incoming?clientId=${clientId}`,
-      statusCallback: `${publicUrl}/api/voice/status`,
-      statusCallbackMethod: 'POST',
-      ...recordingParams(publicUrl),
-    })
-
-    res.json({ callSid: call.sid, status: call.status })
-  } catch (err) {
-    console.error('[Voice] handleOutbound error:', err)
     res.status(500).json({ error: 'Error al iniciar llamada' })
   }
 }
@@ -294,25 +372,31 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
     let callerPhone: string
 
     if (clientIdParam) {
+      // Llamada OUTBOUND (manual o automática) — el Call ya se creó en
+      // placeOutboundCall al disparar la llamada, ANTES de que Twilio la conteste (ver
+      // comentario ahí: si nadie contesta, este webhook /incoming nunca llega, así que
+      // no podíamos esperar hasta aquí para crearlo). No se vuelve a crear — el callSid
+      // es único, intentarlo de nuevo tronaría con un error de duplicado.
       callerPhone = To
       const client = await Client.findById(clientIdParam).lean()
       if (client) clientId = client._id as mongoose.Types.ObjectId
     } else {
+      // Llamada INBOUND real (alguien marcó al número de Twilio) — esta sí es la
+      // primera vez que sabemos de ella, se registra aquí.
       callerPhone = From
       const found = await findClientByPhone(From)
       clientId = found?._id
-    }
 
-    // El agente conversa libre dentro del WebSocket de audio (voiceStream.controller.ts,
-    // guiado por voiceConversation.service.ts) — aquí solo se registra la llamada.
-    await Call.create({
-      phone: callerPhone,
-      clientId,
-      callSid: CallSid,
-      transcript: [],
-      status: 'in_progress',
-      requiresHuman: false,
-    })
+      await Call.create({
+        phone: callerPhone,
+        clientId,
+        callSid: CallSid,
+        transcript: [],
+        status: 'in_progress',
+        requiresHuman: false,
+        triggeredBy: 'manual',
+      })
+    }
 
     // Las llamadas OUTBOUND ya piden grabación al crearse (handleOutbound, record:true) —
     // aquí solo hace falta pedirla por REST para llamadas INBOUND reales (clientIdParam
@@ -353,7 +437,10 @@ export async function handleStatus(req: Request, res: Response): Promise<void> {
       )
       // El cliente nunca contestó — no hay conversación que analizar, el status se
       // sabe directo del propio evento de Twilio, sin necesidad de IA.
-      if (call) await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'No answer')
+      if (call) {
+        await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'No answer')
+        if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, 'No answer')
+      }
     } else if (CallStatus === 'completed') {
       // Marca como completadas las llamadas que se cortaron a media conversación
       await Call.findOneAndUpdate(
@@ -375,6 +462,7 @@ export async function handleStatus(req: Request, res: Response): Promise<void> {
       const relevantTurns = call.transcript.filter((t) => !t.content.startsWith('['))
       const disposition = computeVoiceDisposition(call.calledFunctions ?? [], relevantTurns.length)
       await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, disposition)
+      if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, disposition)
 
       if (relevantTurns.length < 2) {
         res.sendStatus(200)

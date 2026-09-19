@@ -20,6 +20,7 @@ import { validateTwilioConfig } from "./config/twilio"
 import { validateOpenAIConfig } from "./config/openai"
 import { startReminderScheduler } from "./services/reminderScheduler.service"
 import { startPhoneFallbackScheduler } from "./services/phoneFallback.service"
+import { startAutoCallScheduler } from "./services/autoCallScheduler.service"
 
 const app = express()
 
@@ -65,8 +66,13 @@ async function start() {
   await connectDB()
   validateTwilioConfig()
   validateOpenAIConfig()
-  startReminderScheduler()
-  startPhoneFallbackScheduler()
+  // Desactivados a petición del usuario (2026-09-18) — de momento no se necesita que
+  // manden la plantilla cobranza_recordatorio. Su única función era ese envío, así que
+  // se detiene el scheduler completo en vez de solo quitar el mensaje. Descomentar para
+  // reactivar (no requiere ningún otro cambio, el resto de su lógica sigue intacta).
+  // startReminderScheduler()
+  // startPhoneFallbackScheduler()
+  startAutoCallScheduler()
 
   const PORT = Number(process.env.PORT) || 3003
   const server = http.createServer(app)

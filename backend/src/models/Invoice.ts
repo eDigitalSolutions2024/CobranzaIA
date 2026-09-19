@@ -37,9 +37,27 @@ const InvoiceSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // `amount` convertido a pesos según `currencyCode` (ver utils/currency.ts). null si
+    // la moneda de la factura todavía no tiene tasa configurada en Settings — nunca se
+    // asume 1:1, así no se cuenta mal en Client.debt (ver syncClientFromInvoices).
+    amountMxn: {
+      type: Number,
+      default: null,
+    },
+
     // Saldo restante en USD al momento de la importación (columna "USD Remaining
     // Amount Due" del Excel) — puede diferir de `amount` si ya hubo pagos parciales.
+    // OJO: esta columna SIEMPRE viene en dólares sin importar `currencyCode` (así se
+    // llama la columna de origen), por eso se convierte con la tasa de USD, no la de
+    // currencyCode.
     remainingAmount: {
+      type: Number,
+      default: null,
+    },
+
+    // `remainingAmount` convertido a pesos con la tasa de USD. null si todavía no hay
+    // tasa de USD configurada.
+    remainingAmountMxn: {
       type: Number,
       default: null,
     },

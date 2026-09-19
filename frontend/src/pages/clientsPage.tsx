@@ -4,6 +4,7 @@ import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
 import ImportInvoicesModal from "../components/ImportInvoicesModal"
+import AutoCallToggle from "../components/AutoCallToggle"
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
 
@@ -38,7 +39,7 @@ const RISK_COLOR: Record<string, string> = {
 }
 
 const testingGroup:string [] = [
-  'Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes'
+  'Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes', 'British','A','3m','911' 
 ]
 
 export default function ClientsPage() {
@@ -179,6 +180,7 @@ export default function ClientsPage() {
             <p className="mt-2 text-zinc-400">Smart collection management</p>
           </div>
           <div className="flex items-center gap-3">
+            <AutoCallToggle />
             <button
               onClick={() => setImportInvoicesOpen(true)}
               className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
@@ -212,6 +214,7 @@ export default function ClientsPage() {
                   <th className="pb-4 text-sm text-zinc-500">Risk</th>
                   <th className="pb-4 text-sm text-zinc-500">Last contact</th>
                   <th className="pb-4 text-sm text-zinc-500">Payment Promise</th>
+                  <th className="pb-4 text-sm text-zinc-500">Auto Outreach</th>
                   <th className="pb-4 text-sm text-zinc-500">Classification</th>
                 </tr>
               </thead>
@@ -277,6 +280,17 @@ export default function ClientsPage() {
                         : "—"}
                     </td>
                     <td className="py-4">
+                      <span className="text-zinc-300">{client.autoCallAttempt ?? 0}/4</span>
+                      {client.autoCycleExhausted && (
+                        <span
+                          title="Se completaron los 4 pasos del ciclo (2 llamadas + 2 mensajes) sin respuesta"
+                          className="ml-2 rounded-full bg-yellow-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-yellow-400"
+                        >
+                          No response
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-4">
                       {client.lastIntent && client.lastIntent !== "general" && (
                         <span className="rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-300">
                           {client.lastIntent}
@@ -306,7 +320,7 @@ export default function ClientsPage() {
                   </tr>
                  {expanded && (
                   <tr className="bg-zinc-950/50">
-                    <td colSpan={9} className="p-5">
+                    <td colSpan={10} className="p-5">
                       <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] overflow-hidden">
                         <table className="w-full">
                           <thead>

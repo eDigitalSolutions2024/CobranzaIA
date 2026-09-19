@@ -4,6 +4,7 @@ import mongoose from "mongoose"
 import Invoice from "../models/Invoice"
 import Client from "../models/Client"
 import { normalizeMexicanPhone } from "../utils/phone"
+import { loadExchangeRates, toMxn } from "../utils/currency"
 
 // El saldo del cliente (`Client.debt`) no se captura a mano — es la suma de sus
 // facturas. Collector/TeamLeader/Aging tampoco se editan a mano en el cliente:
@@ -12,32 +13,58 @@ import { normalizeMexicanPhone } from "../utils/phone"
 // Las fechas (Create/Due) NO se sincronizan a nivel cliente a propósito —
 // varían por factura y ya se ven en la pestaña Invoices de cada una.
 // Se recalcula cada vez que una factura se crea, edita, borra o importa.
-async function syncClientFromInvoices(clientId: mongoose.Types.ObjectId | string): Promise<void> {
+export async function syncClientFromInvoices(clientId: mongoose.Types.ObjectId | string): Promise<void> {
   const [result] = await Invoice.aggregate([
     { $match: { clientId: new mongoose.Types.ObjectId(clientId), status: { $ne: "cancelled" } } },
     { $sort: { issueDate: -1 } },
     {
       $group: {
         _id: null,
-        total: { $sum: { $ifNull: ["$remainingAmount", "$amount"] } },
+        // Suma en pesos ya convertidos, no los montos crudos — una factura en USD sin
+        // tasa configurada todavía (amountMxn/remainingAmountMxn null) cuenta como 0 en
+        // vez de sumarse como si fuera pesos (ese era el bug original).
+        total: { $sum: { $ifNull: ["$remainingAmountMxn", { $ifNull: ["$amountMxn", 0] }] } },
         collector: { $first: "$collector" },
         teamLeader: { $first: "$teamLeader" },
         agingTarget: { $first: "$agingTarget" },
       },
     },
   ])
+  const debt = result?.total ?? 0
+  // Equivalente en dólares del saldo total (ya en pesos) — antes `usdAmount` solo se
+  // llenaba si alguien tecleaba la deuda a mano en NewClientModal, así que quedaba
+  // vacío para cualquier cliente cuya deuda viene de facturas (import/voz). Null si
+  // todavía no hay tasa de USD configurada, en vez de mostrar un cálculo inventado.
+  const rates = await loadExchangeRates()
+  const usdRate = rates.get("USD")
+  const usdAmount = usdRate ? Math.round((debt / usdRate) * 100) / 100 : null
+
   await Client.findByIdAndUpdate(clientId, {
-    debt: result?.total ?? 0,
+    debt,
+    usdAmount,
     collector: result?.collector ?? null,
     teamLeader: result?.teamLeader ?? null,
     agingTarget: result?.agingTarget ?? null,
   })
 }
 
+// El formulario manual de factura (ClientDetailModal) siempre manda el estado completo
+// del form al guardar (no un PATCH parcial de un solo campo), así que es seguro
+// recalcular amountMxn/remainingAmountMxn en cada create/update usando lo que venga en
+// el body — nunca queda un valor viejo desincronizado del amount/currencyCode actual.
+async function withMxnAmounts(body: Record<string, any>): Promise<Record<string, any>> {
+  const rates = await loadExchangeRates()
+  return {
+    ...body,
+    amountMxn: toMxn(body.amount, body.currencyCode, rates),
+    remainingAmountMxn: body.remainingAmount != null ? toMxn(body.remainingAmount, "USD", rates) : null,
+  }
+}
+
 export async function createInvoice(req: Request, res: Response) {
   try {
     const { id } = req.params
-    const invoice = await Invoice.create({ ...req.body, clientId: id })
+    const invoice = await Invoice.create({ ...(await withMxnAmounts(req.body)), clientId: String(id) })
     await syncClientFromInvoices(String(id))
     res.status(201).json(invoice)
   } catch (error: any) {
@@ -52,7 +79,7 @@ export async function createInvoice(req: Request, res: Response) {
 export async function updateInvoice(req: Request, res: Response) {
   try {
     const { invoiceId } = req.params
-    const invoice = await Invoice.findByIdAndUpdate(invoiceId, req.body, {
+    const invoice = await Invoice.findByIdAndUpdate(invoiceId, await withMxnAmounts(req.body), {
       new: true,
       runValidators: true,
     })
@@ -330,6 +357,11 @@ export async function importInvoices(req: Request, res: Response) {
 
     const skipped: { row: number; invoiceNumber: string; reason: string }[] = []
     const ops: any[] = []
+    // Monedas que aparecieron en el archivo pero no tienen tasa configurada todavía en
+    // Settings — se avisa en la respuesta para que se agreguen, en vez de dejar esas
+    // facturas contando como 0 en Client.debt sin que nadie se entere.
+    const unratedCurrencies = new Set<string>()
+    const rates = await loadExchangeRates()
 
     for (const row of rows) {
       const clientId = clientIdByCustomerId.get(row.customerId)
@@ -342,6 +374,13 @@ export async function importInvoices(req: Request, res: Response) {
         continue
       }
 
+      const amountMxn = toMxn(row.amount, row.currencyCode, rates)
+      if (amountMxn === null) unratedCurrencies.add((row.currencyCode || "MXN").toUpperCase())
+      // remainingAmount es SIEMPRE en USD (columna "USD Remaining Amount Due" del Excel,
+      // sin importar currencyCode) — ver comentario en models/Invoice.ts.
+      const remainingAmountMxn = row.remainingAmount != null ? toMxn(row.remainingAmount, "USD", rates) : null
+      if (row.remainingAmount != null && remainingAmountMxn === null) unratedCurrencies.add("USD")
+
       ops.push({
         updateOne: {
           filter: { invoiceNumber: row.invoiceNumber },
@@ -353,7 +392,9 @@ export async function importInvoices(req: Request, res: Response) {
               contractNumber: row.contractNumber,
               invoiceType: row.invoiceType,
               amount: row.amount,
+              amountMxn,
               remainingAmount: row.remainingAmount,
+              remainingAmountMxn,
               agingTarget: row.agingTarget,
               collector: row.collector,
               teamLeader: row.teamLeader,
@@ -387,6 +428,7 @@ export async function importInvoices(req: Request, res: Response) {
       clientsSkipped,
       skipped,
       errors: rowErrors,
+      unratedCurrencies: [...unratedCurrencies],
     })
   } catch (error) {
     console.error("Error importInvoices:", error)

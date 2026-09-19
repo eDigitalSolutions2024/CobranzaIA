@@ -79,6 +79,22 @@ function isWrongNumber(text: string): boolean {
   return WRONG_NUMBER_PATTERNS.some((p) => p.test(text))
 }
 
+// ── Botón de escape: enojo/insultos → escalar a un humano de inmediato ──────
+// Red de seguridad determinística por palabra clave — no depende de que Claude
+// reconozca el enojo correctamente en cada rama del guion (mismo patrón que
+// looksLikeHangupIntent en el flujo de voz). Se revisa ANTES de cualquier lógica de
+// estado, en cualquier paso — incluida una conversación ya cerrada.
+const ESCALATION_PATTERNS: RegExp[] = [
+  /furia/i, /estafa/i, /demanda/i, /\bhumano\b/i,
+  /pinch[eoa]/i, /cabr[oó]n/i, /chinga/i, /pendej/i, /idiota/i, /imb[eé]cil/i,
+  /voy a denunciar/i, /es un abuso/i, /(me )?est[áa]n acosando/i, /d[eé]jenme en paz/i,
+  /no me (molest|llam)/i,
+]
+
+function looksLikeAngryOrInsult(text: string): boolean {
+  return ESCALATION_PATTERNS.some((p) => p.test(text))
+}
+
 // ── Outcomes shared by invoice_check and payment_date ───────────────────────
 
 const OUTCOME_TYPES = [
@@ -181,7 +197,7 @@ Acabas de preguntarle: "¿Ya recibió sus facturas del mes?". Clasifica su respu
 
 - Respuesta AMBIGUA tipo "creo que sí" (no queda claro si se refiere a la factura o al pago) → request_clarification. Tu mensaje debe ser: "Solo para confirmar, ¿se refiere a que sí recibió la factura o a que ya tiene contemplado el pago?".
 
-Máximo 2 oraciones por mensaje. Sin emojis. Tono cálido y profesional, en español de México.`
+Escribe como se escribe en WhatsApp: máximo 2 líneas cortas por mensaje, nunca un párrafo largo — la gente no lee bloques de texto en un chat de cobranza. Sin emojis. Tono cálido y profesional, en español de México.`
 }
 
 // ── Step 3: payment_date — Claude + tools ───────────────────────────────────
@@ -247,7 +263,7 @@ Acabas de preguntarle: "¿Tiene contemplada alguna fecha para realizar el pago?"
 
 - Respuesta confusa/incomprensible, o no reconoce el saldo pese a la insistencia → request_clarification. Tu mensaje DEBE ser: "Disculpe, quiero asegurarme de registrar correctamente su respuesta. ¿Me podría indicar nuevamente la fecha estimada de pago?".
 
-Máximo 2 oraciones por mensaje. Sin emojis. Tono cálido y profesional, en español de México.`
+Escribe como se escribe en WhatsApp: máximo 2 líneas cortas por mensaje, nunca un párrafo largo — la gente no lee bloques de texto en un chat de cobranza. Sin emojis. Tono cálido y profesional, en español de México.`
 }
 
 // ── Reentrada: el cliente escribe después de que el guion ya había cerrado ──
@@ -298,7 +314,7 @@ La conversación ya se había cerrado (se agotó el guion) y el cliente acaba de
 
 - Respuesta confusa/incomprensible → request_clarification, pidiendo que aclare qué necesita.
 
-Máximo 2 oraciones por mensaje. Sin emojis. Tono cálido y profesional, en español de México.`
+Escribe como se escribe en WhatsApp: máximo 2 líneas cortas por mensaje, nunca un párrafo largo — la gente no lee bloques de texto en un chat de cobranza. Sin emojis. Tono cálido y profesional, en español de México.`
 }
 
 // ── Steps 4 y 5: confirming / final_confirming — Claude + tool (compartido) ─
@@ -340,7 +356,7 @@ Ya le dijiste al cliente: "${restated}" y esperas su respuesta.
 - Si corrige el monto o la fecha → confirm_agreement con correct=false y los valores corregidos que haya dado (deja el otro campo vacío si no lo corrigió). Tu mensaje debe repetir la nueva intención en palabras y volver a pedir confirmación.
 - Si dice que no sin dar una corrección clara → confirm_agreement con correct=false, sin nuevos valores. Pregunta amablemente cuál es el monto o la fecha correctos.
 
-Máximo 2 oraciones. Sin emojis. Tono cálido y profesional, en español de México.`
+Escribe como se escribe en WhatsApp: máximo 2 líneas cortas, nunca un párrafo largo. Sin emojis. Tono cálido y profesional, en español de México.`
 }
 
 const FINAL_CLOSING_MESSAGE =
@@ -417,6 +433,17 @@ export async function advanceWhatsappFlow(
   context: FlowContext
 ): Promise<FlowResult> {
   const effectiveState: FlowState = state ?? 'identity'
+
+  // Botón de escape — antes que cualquier otra lógica, en cualquier paso del guion.
+  if (looksLikeAngryOrInsult(text)) {
+    return {
+      reply: 'Entiendo su molestia, disculpe las molestias. Voy a canalizar su caso con un asesor humano de inmediato.',
+      newState: 'closed',
+      newContext: {},
+      closeConversation: true,
+      outcome: { type: 'pending_human', notes: `Escalado automático por palabra clave — mensaje del cliente: "${text.substring(0, 200)}"` },
+    }
+  }
 
   // --- STEP 1: identity ---
   if (effectiveState === 'identity') {

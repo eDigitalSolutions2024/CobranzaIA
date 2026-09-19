@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { createClient, updateClient } from "../services/clients"
-import { getExchangeRate } from "../services/settings"
+import { getExchangeRates } from "../services/settings"
 import ExchangeRateModal from "./ExchangeRateModal"
 
 interface Props {
@@ -95,6 +95,7 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
   const isEditMode = Boolean(client)
   const [form, setForm] = useState(initialForm)
   const [exchangeRate, setExchangeRate] = useState<number | null>(null)
+  const [exchangeRateError, setExchangeRateError] = useState(false)
   const [usdTouched, setUsdTouched] = useState(false)
   const [rateModalOpen, setRateModalOpen] = useState(false)
   const [errors, setErrors] = useState<{ nombre?: boolean; telefono?: boolean; deuda?: boolean }>({})
@@ -106,10 +107,29 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
     // hasta que el usuario toque el campo de deuda o el de USD explícitamente.
     setUsdTouched(Boolean(client))
     setErrors({})
-    getExchangeRate()
-      .then((data) => setExchangeRate(data.usdMxn))
-      .catch(() => {})
+    loadUsdRate()
   }, [isOpen, client])
+
+  // Antes esto fallaba en silencio (catch vacío) — si /settings/exchange-rates no
+  // respondía (auth, red, etc.), el campo "USD Amount" simplemente se quedaba vacío sin
+  // ninguna pista de por qué. Ahora se muestra un aviso explícito.
+  function loadUsdRate() {
+    setExchangeRateError(false)
+    getExchangeRates()
+      .then((rates) => {
+        const usd = rates.find((r) => r.currencyCode === "USD")
+        if (!usd) {
+          setExchangeRate(null)
+          setExchangeRateError(true)
+          return
+        }
+        setExchangeRate(usd.rateToMxn)
+      })
+      .catch(() => {
+        setExchangeRate(null)
+        setExchangeRateError(true)
+      })
+  }
 
   if (!isOpen) return null
 
@@ -471,6 +491,11 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
               placeholder="Auto-calculated"
               className="w-full mt-1 bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-white"
             />
+            {exchangeRateError && (
+              <p className="mt-1 text-xs text-yellow-500">
+                Couldn't load the USD rate — set one below to auto-calculate this field.
+              </p>
+            )}
           </div>
 
           <div>
@@ -577,11 +602,13 @@ export default function NewClientModal({ isOpen, client, onClose, onSave }: Prop
 
       <ExchangeRateModal
         isOpen={rateModalOpen}
-        currentRate={exchangeRate ?? 17.5}
         onClose={() => setRateModalOpen(false)}
-        onUpdated={(newRate) => {
-          setExchangeRate(newRate)
-          setForm((f) => (usdTouched ? f : { ...f, usdAmount: computeUsd(f.deuda, newRate) }))
+        onUpdated={(rates) => {
+          const usd = rates.find((r) => r.currencyCode === "USD")
+          if (!usd) return
+          setExchangeRate(usd.rateToMxn)
+          setExchangeRateError(false)
+          setForm((f) => (usdTouched ? f : { ...f, usdAmount: computeUsd(f.deuda, usd.rateToMxn) }))
         }}
       />
     </div>

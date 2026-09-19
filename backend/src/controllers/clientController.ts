@@ -575,6 +575,11 @@ export async function exportClients(req: Request, res: Response) {
       { header: "Aging Target", key: "agingTarget", width: 12 },
       { header: "Invoice Amount Due", key: "amount", width: 16 },
       { header: "USD Remaining Amount Due", key: "remainingAmount", width: 18 },
+      // Columnas informativas, calculadas — no forman parte del layout de import (se
+      // ignoran si se reimporta este mismo archivo), solo para ver el equivalente en
+      // pesos sin tener que abrir cada cliente.
+      { header: "Invoice Amount Due (MXN)", key: "amountMxn", width: 18 },
+      { header: "Remaining Amount (MXN)", key: "remainingAmountMxn", width: 18 },
     ]
     invoiceSheet.addRows(
       invoices.map((inv) => {
@@ -596,6 +601,8 @@ export async function exportClients(req: Request, res: Response) {
           agingTarget: inv.agingTarget || "",
           amount: inv.amount ?? 0,
           remainingAmount: inv.remainingAmount ?? "",
+          amountMxn: inv.amountMxn ?? "",
+          remainingAmountMxn: inv.remainingAmountMxn ?? "",
         }
       })
     )

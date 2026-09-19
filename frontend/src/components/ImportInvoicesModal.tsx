@@ -9,6 +9,7 @@ interface ImportResult {
   clientsSkipped: { customerId: number; reason: string }[]
   skipped: { row: number; invoiceNumber: string; reason: string }[]
   errors: { row: number; message: string }[]
+  unratedCurrencies: string[]
 }
 
 interface Props {
@@ -83,6 +84,18 @@ export default function ImportInvoicesModal({ isOpen, onClose, onImported }: Pro
             <p className="text-sm font-medium text-emerald-400">
               {result.createdCount} invoices created, {result.updatedCount} updated of {result.totalRows} rows
             </p>
+
+            {result.unratedCurrencies?.length > 0 && (
+              <div>
+                <p className="text-sm text-yellow-400 mb-1">
+                  No exchange rate set for: {result.unratedCurrencies.join(", ")}
+                </p>
+                <p className="text-xs text-zinc-500">
+                  Those invoices were saved but weren't converted to pesos yet, so they don't count toward
+                  the client's debt total. Add a rate for them (Invoices tab → "Exchange rates") and reimport.
+                </p>
+              </div>
+            )}
 
             {result.clientsCreated?.length > 0 && (
               <div>
