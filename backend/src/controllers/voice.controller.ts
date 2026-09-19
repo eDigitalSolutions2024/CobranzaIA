@@ -47,8 +47,8 @@ const AUTO_CALL_TEST_MODE = process.env.AUTO_CALL_TEST_MODE === 'true'
 // entre las dos LLAMADAS (pasos 1->2) se da más margen que entre los MENSAJES que
 // siguen (pasos 2->3->4, ver autoCallScheduler.service.ts para el resto del ciclo:
 // arranca cada paso; esta función solo reacciona al RESULTADO de una llamada ya hecha).
-const AUTO_CALL_RETRY_GAP_MS = AUTO_CALL_TEST_MODE ? 60 * 1000 : 3 * 24 * 60 * 60 * 1000
-const AUTO_MESSAGE_GAP_MS = AUTO_CALL_TEST_MODE ? 60 * 1000 : 1 * 24 * 60 * 60 * 1000
+const AUTO_CALL_RETRY_GAP_MS = AUTO_CALL_TEST_MODE ? 30 * 1000 : 3 * 24 * 60 * 60 * 1000
+const AUTO_MESSAGE_GAP_MS = AUTO_CALL_TEST_MODE ? 30 * 1000 : 1 * 24 * 60 * 60 * 1000
 
 // El usuario decidió qué cuenta como "no hubo respuesta" para reintentar: no contestó/
 // ocupado/falló la conexión (disposition 'No answer', puesta directo en handleStatus) Y
@@ -57,7 +57,7 @@ const AUTO_MESSAGE_GAP_MS = AUTO_CALL_TEST_MODE ? 60 * 1000 : 1 * 24 * 60 * 60 *
 // necesitar activar detección de máquina de Twilio y meterle latencia a la llamada real).
 // Cualquier OTRA disposition significa que sí hubo una persona real en la línea — ahí se
 // detiene el ciclo automático de la semana, ya hubo contacto.
-const AUTO_CALL_NO_RESPONSE_DISPOSITIONS = new Set<DispositionStatus>(['No answer', 'Customer hung up'])
+const AUTO_CALL_NO_RESPONSE_DISPOSITIONS = new Set<DispositionStatus>(['No answer', 'Customer hung up', 'Voice mail'])
 
 async function advanceAutoCallCycle(
   clientId: mongoose.Types.ObjectId | undefined | null,
@@ -210,6 +210,12 @@ export async function placeOutboundCall(
     url: `${publicUrl}/api/voice/incoming?clientId=${clientId}`,
     statusCallback: `${publicUrl}/api/voice/status`,
     statusCallbackMethod: 'POST',
+    // Respaldo duro independiente de nuestra propia lógica de colgado: si el modelo
+    // dice una frase de cierre nueva que looksLikeHangupIntent() todavía no cubre (ya
+    // pasó en producción — se quedó una llamada conectada indefinidamente porque dijo
+    // "le devolvemos la llamada" sin llamar a finalizar_llamada), Twilio corta solo a
+    // los 10 minutos. Ninguna llamada real de este proyecto ha pasado de ~2 minutos.
+    timeLimit: 600,
     ...recordingParams(publicUrl),
   })
 
@@ -423,6 +429,77 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
   }
 }
 
+// Lógica pura (sin req/res) para que la pueda usar tanto el webhook real de Twilio
+// (handleStatus) como el job de reconciliación (callReconciliation.service.ts) que
+// arregla llamadas que se quedaron 'in_progress' para siempre porque este webhook nunca
+// llegó (ej. el backend se reinició justo cuando Twilio intentó avisar).
+export async function processCallStatusUpdate(
+  callSid: string,
+  callStatus: string,
+  durationSeconds: number | null
+): Promise<void> {
+  if (['busy', 'failed', 'no-answer', 'canceled'].includes(callStatus)) {
+    const call = await Call.findOneAndUpdate(
+      { callSid, status: 'in_progress' },
+      { status: 'failed', ...(durationSeconds !== null ? { durationSeconds } : {}) }
+    )
+    // El cliente nunca contestó — no hay conversación que analizar, el status se
+    // sabe directo del propio evento de Twilio, sin necesidad de IA.
+    if (call) {
+      await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'No answer')
+      if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, 'No answer')
+    }
+  } else if (callStatus === 'completed') {
+    // Marca como completadas las llamadas que se cortaron a media conversación
+    await Call.findOneAndUpdate(
+      { callSid, status: 'in_progress' },
+      { status: 'completed', ...(durationSeconds !== null ? { durationSeconds } : {}) }
+    )
+    if (durationSeconds !== null) {
+      await Call.findOneAndUpdate({ callSid, status: { $ne: 'in_progress' } }, { durationSeconds })
+    }
+
+    // Resumen legible para el CRM. Ya no crea promesas de pago aquí: eso lo hace
+    // voiceStream.controller.ts en vivo, en cuanto el agente marca PROMESA_PAGO.
+    const call = await Call.findOne({ callSid, summary: null })
+    if (!call) return
+
+    const relevantTurns = call.transcript.filter((t) => !t.content.startsWith('['))
+    // detectedVoicemail manda ANTES que el conteo de turnos — el saludo grabado del
+    // buzón se transcribe como "user" y por conteo de turnos parecía una conversación
+    // real (>= 2 renglones), clasificando como 'Contact made - No resolution' en vez de
+    // 'Voice mail'. Eso detenía el ciclo automático como si hubiera contestado una
+    // persona, en vez de programar el reintento.
+    const disposition = call.detectedVoicemail
+      ? 'Voice mail'
+      : computeVoiceDisposition(call.calledFunctions ?? [], relevantTurns.length)
+    await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, disposition)
+    if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, disposition)
+
+    if (relevantTurns.length < 2) return
+
+    const populated = call.clientId ? await Client.findById(call.clientId).lean() : null
+    const clientInfo: ClientInfo | null = populated
+      ? {
+          _id: populated._id as mongoose.Types.ObjectId,
+          name: populated.name as string,
+          debt: (populated.debt as number) ?? 0,
+          status: populated.status as string,
+          phone: populated.phone as string,
+        }
+      : null
+
+    const analysis = await analyzeCallTranscript(call.transcript, clientInfo)
+    call.summary = analysis.summary
+    call.claudeUsage = {
+      inputTokens: analysis.usage.inputTokens,
+      outputTokens: analysis.usage.outputTokens,
+    }
+    await call.save()
+    console.log(`[Voice] Resumen post-llamada CallSid ${callSid}: ${analysis.summary}`)
+  }
+}
+
 export async function handleStatus(req: Request, res: Response): Promise<void> {
   const { CallSid, CallStatus, CallDuration } = req.body as { CallSid: string; CallStatus: string; CallDuration?: string }
   // CallDuration solo viene poblado en el statusCallback final (Twilio lo calcula al
@@ -430,65 +507,7 @@ export async function handleStatus(req: Request, res: Response): Promise<void> {
   const durationSeconds = CallDuration !== undefined ? Number(CallDuration) : null
 
   try {
-    if (['busy', 'failed', 'no-answer', 'canceled'].includes(CallStatus)) {
-      const call = await Call.findOneAndUpdate(
-        { callSid: CallSid, status: 'in_progress' },
-        { status: 'failed', ...(durationSeconds !== null ? { durationSeconds } : {}) }
-      )
-      // El cliente nunca contestó — no hay conversación que analizar, el status se
-      // sabe directo del propio evento de Twilio, sin necesidad de IA.
-      if (call) {
-        await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'No answer')
-        if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, 'No answer')
-      }
-    } else if (CallStatus === 'completed') {
-      // Marca como completadas las llamadas que se cortaron a media conversación
-      await Call.findOneAndUpdate(
-        { callSid: CallSid, status: 'in_progress' },
-        { status: 'completed', ...(durationSeconds !== null ? { durationSeconds } : {}) }
-      )
-      if (durationSeconds !== null) {
-        await Call.findOneAndUpdate({ callSid: CallSid, status: { $ne: 'in_progress' } }, { durationSeconds })
-      }
-
-      // Resumen legible para el CRM. Ya no crea promesas de pago aquí: eso lo hace
-      // voiceStream.controller.ts en vivo, en cuanto el agente marca PROMESA_PAGO.
-      const call = await Call.findOne({ callSid: CallSid, summary: null })
-      if (!call) {
-        res.sendStatus(200)
-        return
-      }
-
-      const relevantTurns = call.transcript.filter((t) => !t.content.startsWith('['))
-      const disposition = computeVoiceDisposition(call.calledFunctions ?? [], relevantTurns.length)
-      await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, disposition)
-      if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, disposition)
-
-      if (relevantTurns.length < 2) {
-        res.sendStatus(200)
-        return
-      }
-
-      const populated = call.clientId ? await Client.findById(call.clientId).lean() : null
-      const clientInfo: ClientInfo | null = populated
-        ? {
-            _id: populated._id as mongoose.Types.ObjectId,
-            name: populated.name as string,
-            debt: (populated.debt as number) ?? 0,
-            status: populated.status as string,
-            phone: populated.phone as string,
-          }
-        : null
-
-      const analysis = await analyzeCallTranscript(call.transcript, clientInfo)
-      call.summary = analysis.summary
-      call.claudeUsage = {
-        inputTokens: analysis.usage.inputTokens,
-        outputTokens: analysis.usage.outputTokens,
-      }
-      await call.save()
-      console.log(`[Voice] Resumen post-llamada CallSid ${CallSid}: ${analysis.summary}`)
-    }
+    await processCallStatusUpdate(CallSid, CallStatus, durationSeconds)
     res.sendStatus(200)
   } catch (err) {
     console.error('[Voice] handleStatus error:', err)

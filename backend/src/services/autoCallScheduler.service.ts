@@ -6,11 +6,11 @@
 // quedar manual, pero pidió automatizarlo también usando las plantillas de WhatsApp que
 // ya existen, aunque cambien más adelante).
 //
-// Corre en lotes chicos (AUTO_CALL_BATCH_SIZE, default 5) cada 15 minutos, solo en
+// Corre en lotes (AUTO_CALL_BATCH_SIZE, default 12) cada hora en punto, solo en
 // horario laboral (lun-sáb 9am-7pm hora CDMX) — con potencialmente cientos de clientes,
 // disparar todo de golpe saturaría la cuenta de Twilio/OpenAI (llamadas) y el rate limit
-// de Meta (mensajes). Procesando en lotes chicos varias veces al día, la cola se va
-// vaciando sola sin necesitar infraestructura de colas aparte.
+// de Meta (mensajes). Procesando en lotes varias veces al día, la cola se va vaciando
+// sola sin necesitar infraestructura de colas aparte.
 import cron from 'node-cron'
 import Client from '../models/Client'
 import Call from '../models/Call'
@@ -18,7 +18,7 @@ import AutomationSettings from '../models/AutomationSettings'
 import { placeOutboundCall } from '../controllers/voice.controller'
 import { prepareWhatsappMessage } from './whatsappService'
 
-const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 5
+const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 12
 
 // Modo de prueba: con AUTO_CALL_TEST_MODE=true, TODOS los tiempos del ciclo (gaps entre
 // pasos, duración del ciclo semanal, y qué tan seguido corre el cron) se acortan a
@@ -28,11 +28,17 @@ const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 5
 // archivos que manejan el timing del ciclo.
 const TEST_MODE = process.env.AUTO_CALL_TEST_MODE === 'true'
 
-const CYCLE_MS = TEST_MODE ? 5 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
+// 30 min (no 5) en modo prueba: con gaps de 30s entre pasos, un ciclo completo de 4
+// pasos "debería" tardar ~1.5 min, pero cada llamada real suma timbrado + conversación +
+// latencia del webhook de Twilio — con 5 min el reloj del ciclo se cumplía A MEDIAS
+// (ej. justo después del intento 2, antes del paso 3 de WhatsApp), y como
+// autoCallCycleStartAt seguía viéndose "viejo" (isNewCycle) el intento se reiniciaba a
+// 1/4 en vez de avanzar a 3/4 — nunca llegaba a mandar mensajes (ver bug de 2026-09-19).
+const CYCLE_MS = TEST_MODE ? 30 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
 // Gap entre el 3er y 4to paso (mensajes) — más corto que entre las dos llamadas (3 días,
 // ver AUTO_CALL_RETRY_GAP_MS en voice.controller.ts) porque mandar un WhatsApp no
 // necesita el mismo margen que esperar a que alguien note una llamada perdida.
-const MESSAGE_STEP_GAP_MS = TEST_MODE ? 60 * 1000 : 1 * 24 * 60 * 60 * 1000
+const MESSAGE_STEP_GAP_MS = TEST_MODE ? 30 * 1000 : 1 * 24 * 60 * 60 * 1000
 
 // Plantillas YA existentes y aprobadas — el usuario pidió usar lo que ya hay por ahora,
 // con el entendido de que se van a afinar/cambiar más adelante. 'cobranza_recordatorio'
@@ -58,8 +64,13 @@ function shuffle<T>(arr: T[]): T[] {
 // clientsPage.tsx usa para la etiqueta verde) — deja probar el flujo completo (llamadas +
 // mensajes) sin arriesgar a la base de clientes real. Quitar la variable (o ponerla en
 // false) para que vuelva a correr sobre todos los clientes elegibles.
+
+
 //const TEST_GROUP_FIRST_NAMES = ['Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes', 'British', '911', '3m', 'A']
-const TEST_GROUP_FIRST_NAMES = ['British', '911', '3m', 'A']
+const TEST_GROUP_FIRST_NAMES = ['British']
+
+
+
 async function runAutoCallCycle(): Promise<void> {
   const settings = await AutomationSettings.findById('global').lean()
   if (!settings?.autoCallsEnabled) return
@@ -170,10 +181,11 @@ async function runAutoCallCycle(): Promise<void> {
 }
 
 export function startAutoCallScheduler(): void {
-  // En modo prueba corre cada minuto, cualquier día/hora — para que el cron mismo no
-  // sea el cuello de botella al probar el ciclo rápido. En producción, cada 15 min y
-  // solo horario laboral (lun-sáb 9am-6:59pm CDMX).
-  const schedule = TEST_MODE ? '* * * * *' : '*/15 9-18 * * 1-6'
+  // En modo prueba corre cada 30 segundos (node-cron soporta un 1er campo opcional de
+  // segundos), cualquier día/hora — para que el cron mismo no sea el cuello de botella al
+  // probar el ciclo rápido. En producción, cada hora en punto y solo horario laboral
+  // (lun-sáb 9am-6:59pm CDMX).
+  const schedule = TEST_MODE ? '*/30 * * * * *' : '0 9-18 * * 1-6'
   cron.schedule(
     schedule,
     () => {
@@ -184,6 +196,6 @@ export function startAutoCallScheduler(): void {
   console.log(
     TEST_MODE
       ? '[AutoCall] Scheduler en MODO PRUEBA (cada minuto, sin restricción de horario/día — solo test group)'
-      : `[AutoCall] Scheduler de cobranza automática iniciado (lotes de ${BATCH_SIZE}, lun-sáb 9am-7pm CDMX)`
+      : `[AutoCall] Scheduler de cobranza automática iniciado (lotes de ${BATCH_SIZE}, cada hora, lun-sáb 9am-7pm CDMX)`
   )
 }

@@ -21,6 +21,7 @@ import { validateOpenAIConfig } from "./config/openai"
 import { startReminderScheduler } from "./services/reminderScheduler.service"
 import { startPhoneFallbackScheduler } from "./services/phoneFallback.service"
 import { startAutoCallScheduler } from "./services/autoCallScheduler.service"
+import { startCallReconciliationScheduler } from "./services/callReconciliation.service"
 
 const app = express()
 
@@ -73,6 +74,7 @@ async function start() {
   // startReminderScheduler()
   // startPhoneFallbackScheduler()
   startAutoCallScheduler()
+  startCallReconciliationScheduler()
 
   const PORT = Number(process.env.PORT) || 3003
   const server = http.createServer(app)

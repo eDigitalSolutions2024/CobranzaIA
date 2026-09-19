@@ -15,7 +15,16 @@ import { placeOutboundCall } from './voice.controller'
 // la llamada ya debería terminar aunque no haya llegado la tool call.
 function looksLikeHangupIntent(text: string): boolean {
   const t = text.toLowerCase()
-  return t.includes('finalizar la llamada') || t.includes('terminar la llamada') || t.includes('voy a colgar')
+  return (
+    t.includes('finalizar la llamada') ||
+    t.includes('terminar la llamada') ||
+    t.includes('voy a colgar') ||
+    // Cierre de buzón de voz (ver voiceConversation.service.ts) — capa extra por si el
+    // modelo parafrasea en vez de usar la frase exacta sugerida en el prompt. Confirmado
+    // en producción: el modelo dijo esto y NUNCA llamó a finalizar_llamada, dejando la
+    // llamada conectada indefinidamente (Twilio la reportaba 'in-progress' sin fin).
+    t.includes('le devolvemos la llamada')
+  )
 }
 
 // Puente de audio Twilio <-> OpenAI Realtime. El modelo conversa libre (guiado por el
@@ -351,6 +360,18 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
     hangupFarewellSpoken = true
     lastAgentTranscript = text
     console.log(`[VoiceStream] agente dijo: "${text}"`)
+
+    // Señal directa de que era buzón de voz, no una persona real — el propio texto que
+    // el prompt instruye decir en esa rama (ver voiceConversation.service.ts). Mucho más
+    // confiable que inferirlo contando renglones del transcript: el saludo grabado del
+    // buzón se transcribe como "user" y hacía que se contara como conversación real
+    // (bug confirmado en producción — el ciclo automático se detenía como si hubiera
+    // contestado una persona, en vez de reintentar).
+    if (text.toLowerCase().includes('le devolvemos la llamada')) {
+      Call.findByIdAndUpdate(callDocId, { detectedVoicemail: true }).catch((err) =>
+        console.error('[VoiceStream] Error marcando detectedVoicemail:', err)
+      )
+    }
     // El guardado a Mongo (con latencyMs/durationMs) se hace en 'responseDone', no aquí —
     // recién ahí se sabe la duración real del audio, y por la misma razón de orden de
     // eventos ya documentada más abajo (transcript.done no garantiza audio completo).
