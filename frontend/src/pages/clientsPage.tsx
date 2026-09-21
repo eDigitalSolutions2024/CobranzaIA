@@ -39,7 +39,7 @@ const RISK_COLOR: Record<string, string> = {
 }
 
 const testingGroup:string [] = [
-  'Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes', 'British','A','3m','911' 
+  'Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes' 
 ]
 
 export default function ClientsPage() {

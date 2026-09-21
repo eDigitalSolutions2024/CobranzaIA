@@ -28,6 +28,16 @@ const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 12
 // archivos que manejan el timing del ciclo.
 const TEST_MODE = process.env.AUTO_CALL_TEST_MODE === 'true'
 
+// Modo "test con timing real": restringe los candidatos al test group (igual que
+// TEST_MODE) pero SIN acelerar nada — mismo cron por hora, mismo horario laboral, mismo
+// ciclo de 7 días y mismos gaps que producción (AUTO_CALL_RETRY_GAP_MS/AUTO_MESSAGE_GAP_MS
+// en voice.controller.ts, que solo se aceleran con AUTO_CALL_TEST_MODE, no con esta
+// variable). Pensado para validar el comportamiento real del ciclo completo sobre el test
+// group antes de soltarlo a todos los clientes, sin esperar ni arriesgar la base real.
+// TEST_MODE sigue implicando esta restricción también (no se quita nada de lo que ya
+// funcionaba), solo se agrega una forma de tener SOLO la restricción sin la aceleración.
+const TEST_GROUP_ONLY = process.env.AUTO_CALL_TEST_GROUP_ONLY === 'true' || TEST_MODE
+
 // 30 min (no 5) en modo prueba: con gaps de 30s entre pasos, un ciclo completo de 4
 // pasos "debería" tardar ~1.5 min, pero cada llamada real suma timbrado + conversación +
 // latencia del webhook de Twilio — con 5 min el reloj del ciclo se cumplía A MEDIAS
@@ -59,15 +69,16 @@ function shuffle<T>(arr: T[]): T[] {
   return arr
 }
 
-// Con AUTO_CALL_TEST_MODE=true, el ciclo automático SOLO corre sobre los clientes
-// marcados como "Test Group Calls" en la tabla de Clients (mismos nombres que
-// clientsPage.tsx usa para la etiqueta verde) — deja probar el flujo completo (llamadas +
-// mensajes) sin arriesgar a la base de clientes real. Quitar la variable (o ponerla en
-// false) para que vuelva a correr sobre todos los clientes elegibles.
+// Con AUTO_CALL_TEST_GROUP_ONLY=true (o AUTO_CALL_TEST_MODE=true, que la implica), el
+// ciclo automático SOLO corre sobre los clientes marcados como "Test Group Calls" en la
+// tabla de Clients (mismos nombres que clientsPage.tsx usa para la etiqueta verde) — deja
+// probar el flujo completo (llamadas + mensajes) sin arriesgar a la base de clientes real.
+// Quitar ambas variables (o ponerlas en false) para que vuelva a correr sobre todos los
+// clientes elegibles.
 
 
-//const TEST_GROUP_FIRST_NAMES = ['Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes', 'British', '911', '3m', 'A']
-const TEST_GROUP_FIRST_NAMES = ['British']
+const TEST_GROUP_FIRST_NAMES = ['Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes']
+//const TEST_GROUP_FIRST_NAMES = ['British']
 
 
 
@@ -107,11 +118,11 @@ async function runAutoCallCycle(): Promise<void> {
   // a los mismos clientes primero (ej. los más viejos por orden de inserción).
   candidates = shuffle(candidates)
 
-  if (TEST_MODE) {
+  if (TEST_GROUP_ONLY) {
     candidates = candidates.filter((c) =>
       TEST_GROUP_FIRST_NAMES.includes(String(c.name ?? '').trim().split(' ')[0])
     )
-    console.log(`[AutoCall] TEST_MODE activo — ${candidates.length} candidato(s) del test group.`)
+    console.log(`[AutoCall] Restringido al test group — ${candidates.length} candidato(s).`)
   }
 
   let dispatched = 0
@@ -193,9 +204,9 @@ export function startAutoCallScheduler(): void {
     },
     { timezone: 'America/Mexico_City' }
   )
-  console.log(
-    TEST_MODE
-      ? '[AutoCall] Scheduler en MODO PRUEBA (cada minuto, sin restricción de horario/día — solo test group)'
-      : `[AutoCall] Scheduler de cobranza automática iniciado (lotes de ${BATCH_SIZE}, cada hora, lun-sáb 9am-7pm CDMX)`
-  )
+  const timingDesc = TEST_MODE
+    ? 'timing ACELERADO (cada 30s, sin restricción de horario/día)'
+    : `timing real (lotes de ${BATCH_SIZE}, cada hora, lun-sáb 9am-7pm CDMX)`
+  const groupDesc = TEST_GROUP_ONLY ? ' — restringido al test group' : ''
+  console.log(`[AutoCall] Scheduler iniciado — ${timingDesc}${groupDesc}`)
 }
