@@ -16,8 +16,10 @@ import settingsRoutes from "./routes/settings"
 import usageRoutes from "./routes/usage"
 import { connectDB } from "./db"
 import { handleMediaStream } from "./controllers/voiceStream.controller"
+import { handleMediaStreamCartesia } from "./controllers/voiceStreamCartesia.controller"
 import { validateTwilioConfig } from "./config/twilio"
 import { validateOpenAIConfig } from "./config/openai"
+import { validateVoicePipelineConfig } from "./config/voicePipeline"
 import { startReminderScheduler } from "./services/reminderScheduler.service"
 import { startPhoneFallbackScheduler } from "./services/phoneFallback.service"
 import { startAutoCallScheduler } from "./services/autoCallScheduler.service"
@@ -67,6 +69,7 @@ async function start() {
   await connectDB()
   validateTwilioConfig()
   validateOpenAIConfig()
+  validateVoicePipelineConfig()
   // Desactivados a petición del usuario (2026-09-18) — de momento no se necesita que
   // manden la plantilla cobranza_recordatorio. Su única función era ese envío, así que
   // se detiene el scheduler completo en vez de solo quitar el mensaje. Descomentar para
@@ -79,11 +82,33 @@ async function start() {
   const PORT = Number(process.env.PORT) || 3003
   const server = http.createServer(app)
 
-  // Puente de audio en tiempo real Twilio <-> OpenAI Realtime API
-  const wss = new WebSocketServer({ server, path: "/api/voice/stream" })
+  // Dos endpoints de WebSocket en el mismo servidor HTTP (Realtime de OpenAI y el
+  // piloto Deepgram+ElevenLabs) — se usa el patrón recomendado por la propia librería
+  // ws para varias rutas (noServer + enrutar el evento 'upgrade' a mano): con dos
+  // WebSocketServer atados directo vía {server, path}, cada uno registra su propio
+  // listener de 'upgrade' en el server y Twilio recibía 400 Bad Request al conectar al
+  // segundo (confirmado en la primera prueba real de este piloto).
+  const wss = new WebSocketServer({ noServer: true })
   wss.on("connection", (ws, req) => {
     console.log("[Voice] Media Stream WebSocket conectado")
     handleMediaStream(ws, req).catch((err) => console.error("[Voice] Error en handleMediaStream:", err))
+  })
+
+  const wssCartesia = new WebSocketServer({ noServer: true })
+  wssCartesia.on("connection", (ws, req) => {
+    console.log("[VoiceCartesia] Media Stream WebSocket conectado")
+    handleMediaStreamCartesia(ws, req).catch((err) => console.error("[VoiceCartesia] Error en handleMediaStreamCartesia:", err))
+  })
+
+  server.on("upgrade", (req, socket, head) => {
+    const pathname = req.url?.split("?")[0]
+    if (pathname === "/api/voice/stream") {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req))
+    } else if (pathname === "/api/voice/stream-cartesia") {
+      wssCartesia.handleUpgrade(req, socket, head, (ws) => wssCartesia.emit("connection", ws, req))
+    } else {
+      socket.destroy()
+    }
   })
 
   server.listen(PORT, () => {
