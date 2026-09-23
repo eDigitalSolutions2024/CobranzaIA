@@ -77,8 +77,8 @@ function shuffle<T>(arr: T[]): T[] {
 // clientes elegibles.
 
 
-const TEST_GROUP_FIRST_NAMES = ['Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes']
-//const TEST_GROUP_FIRST_NAMES = ['British']
+//const TEST_GROUP_FIRST_NAMES = ['Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes']
+const TEST_GROUP_FIRST_NAMES = ['British', 'A', '911', '3m']
 
 
 

@@ -49,6 +49,7 @@ export default function ClientsPage() {
   const [importInvoicesOpen, setImportInvoicesOpen] = useState(false)
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
+  const [callingPilotId, setCallingPilotId] = useState<string | null>(null)
   const [notifyingId, setNotifyingId] = useState<string | null>(null)
   const [notifyResult, setNotifyResult] = useState<Record<string, { label: string; tone: "success" | "warning" | "error" }>>({})
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -68,6 +69,23 @@ export default function ClientsPage() {
       alert("Error starting the call")
     } finally {
       setCallingId(null)
+    }
+  }
+
+  // Piloto Deepgram + Claude + ElevenLabs (voiceStreamCartesia.controller.ts) — camino
+  // aislado de producción, solo para pruebas puntuales. No hay botón en la UI para esto
+  // hasta ahora, así que hasta ahora la única forma de probarlo era curl/Postman.
+  async function handleCallPilot(clientId: string) {
+    setCallingPilotId(clientId)
+    try {
+      await api("/voice/outbound-cartesia", {
+        method: "POST",
+        body: JSON.stringify({ clientId }),
+      })
+    } catch {
+      alert("Error starting the pilot call")
+    } finally {
+      setCallingPilotId(null)
     }
   }
 
@@ -482,6 +500,30 @@ export default function ClientsPage() {
                                   <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
                                 </svg>
                                 Call
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleCallPilot(client._id) }}
+                            disabled={callingPilotId === client._id}
+                            title="Piloto Deepgram + Claude + ElevenLabs — camino aislado de producción"
+                            className="flex items-center gap-1.5 rounded-lg bg-purple-600/20 px-3 py-1.5 text-xs font-medium text-purple-400 hover:bg-purple-600/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                          >
+                            {callingPilotId === client._id ? (
+                              <>
+                                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                                </svg>
+                                Calling...
+                              </>
+                            ) : (
+                              <>
+                                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
+                                  <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+                                </svg>
+                                Test ElevenLabs
                               </>
                             )}
                           </button>
