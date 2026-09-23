@@ -1,20 +1,22 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import KpiCard from "../components/KpiCard"
 import RecoveryChart from "../components/RecoveryChart"
 import RecentActivity from "../components/RecentActivity"
 import ClientsTable from "../components/ClientsTable"
 import NewClientModal from "../components/NewClientModal"
+import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
 import { getClients } from "../services/clients"
 import { getMetrics } from "../services/metrics"
-import { CircleDollarSign, UsersRound, CircleCheckBig, 
+import { CircleDollarSign, UsersRound, CircleCheckBig,
         ArrowUpNarrowWide, TriangleAlert, Siren,SquareCheckBig } from "lucide-react"
 import VoiceViewCall from "../components/VoiceViewCall"
 
 export default function DashboardPage() {
   const [openModal, setOpenModal] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [clients, setClients] = useState<any[]>([])
+  const [rawClients, setRawClients] = useState<any[]>([])
   const [metrics, setMetrics] = useState<any>(null)
+  const [reportFilters, setReportFilters] = useState<ReportFilterValue>(EMPTY_REPORT_FILTERS)
 
   async function loadAll() {
     try {
@@ -24,7 +26,26 @@ export default function DashboardPage() {
         getMetrics(),
       ])
 
-      const formatted = clientsData.map((client: any) => ({
+      setRawClients(clientsData)
+      setMetrics(metricsData)
+    } catch (error) {
+      console.log(error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const clients = useMemo(() => {
+    return rawClients
+      .filter((client) => {
+        if (reportFilters.country && client.country !== reportFilters.country) return false
+        if (reportFilters.collectorId && String(client.collectorId ?? "") !== reportFilters.collectorId) return false
+        if (reportFilters.team && client.team !== reportFilters.team) return false
+        if (reportFilters.teamLeader && client.teamLeader !== reportFilters.teamLeader) return false
+        if (reportFilters.collector && client.collector !== reportFilters.collector) return false
+        return true
+      })
+      .map((client: any) => ({
         nombre: client.name,
         deuda: `$${Number(client.debt).toLocaleString("en-US")}`,
         estado: client.status ?? "pending",
@@ -34,15 +55,7 @@ export default function DashboardPage() {
           ? new Date(client.lastContactAt).toLocaleDateString("en-US")
           : "—",
       }))
-
-      setClients(formatted)
-      setMetrics(metricsData)
-    } catch (error) {
-      console.log(error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  }, [rawClients, reportFilters])
   useEffect(() => {
     loadAll()
     const interval = setInterval(loadAll, 30000)
@@ -160,6 +173,9 @@ export default function DashboardPage() {
         <div className="min-w-0 xl:col-span-2">
           <div className="mt-6">
 
+        <div className="mb-4">
+          <ReportFilters value={reportFilters} onChange={setReportFilters} />
+        </div>
         <ClientsTable clients={clients} />
         <div className="flex justify-end mb-4">
           <button

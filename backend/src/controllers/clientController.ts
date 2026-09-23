@@ -6,6 +6,7 @@ import Call from "../models/Call"
 import Invoice from "../models/Invoice"
 import { isValidRFC, normalizeRFC } from "../utils/rfc"
 import { normalizeMexicanPhone } from "../utils/phone"
+import { buildClientReportFilter } from "../utils/reportFilters"
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pendiente",
@@ -113,6 +114,36 @@ function toStringOrNull(value: unknown): string | null {
 const HEADER_TO_FIELD: Record<string, string> = {}
 for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
   for (const alias of aliases) HEADER_TO_FIELD[normalizeHeader(alias)] = field
+}
+
+// Valores distintos para los 5 filtros de "Reporte Filters" (Country/Collector ID/Team/
+// Team Leader/Collector — ver tarjeta del tablero) usados en el Dashboard y en Calls
+// (ReportFilters.tsx). Con Client.distinct() en vez de traer TODOS los clientes al
+// frontend — GET /clients está paginado (100 por página), así que construir las opciones
+// del <select> a partir de esa lista se quedaría corto en cuanto hubiera más de 100
+// clientes y algún valor solo apareciera pasada la primera página.
+export async function getClientFilterOptions(req: Request, res: Response) {
+  try {
+    const [country, collectorId, team, teamLeader, collector] = await Promise.all([
+      Client.distinct("country"),
+      Client.distinct("collectorId"),
+      Client.distinct("team"),
+      Client.distinct("teamLeader"),
+      Client.distinct("collector"),
+    ])
+    const clean = (arr: unknown[]) =>
+      arr.filter((v) => v !== null && v !== undefined && v !== "").sort((a: any, b: any) => (a > b ? 1 : a < b ? -1 : 0))
+    res.json({
+      country: clean(country),
+      collectorId: clean(collectorId),
+      team: clean(team),
+      teamLeader: clean(teamLeader),
+      collector: clean(collector),
+    })
+  } catch (error) {
+    console.log("Error getClientFilterOptions:", error)
+    res.status(500).json({ message: "Error obteniendo opciones de filtro" })
+  }
 }
 
 export async function getClients(req: Request, res: Response) {
@@ -417,11 +448,24 @@ export async function importClients(req: Request, res: Response) {
 
 export async function exportClients(req: Request, res: Response) {
   try {
-    const [clients, promises, calls, invoices] = await Promise.all([
-      Client.find().sort({ createdAt: -1 }).lean(),
-      PaymentPromise.find().sort({ promisedDate: 1 }).lean(),
-      Call.find().sort({ createdAt: -1 }).lean(),
-      Invoice.find().sort({ issueDate: -1 }).lean(),
+    // Filtro de "Reporte Filters" (Country/Collector ID/Team/Team Leader/Collector, ver
+    // tarjeta del tablero) — mismo filtro que usan GET /calls y GET /calls/export
+    // (reportFilters.ts). Sin ningún filtro activo, se comporta igual que antes: exporta
+    // TODO (clientes, promesas, llamadas, facturas).
+    const clientFilter = buildClientReportFilter(req.query)
+    const hasFilter = Object.keys(clientFilter).length > 0
+
+    const clients = await Client.find(clientFilter).sort({ createdAt: -1 }).lean()
+    const clientIds = clients.map((c) => c._id)
+    // Las otras 3 hojas se acotan a los clientes que matchearon, para que el reporte
+    // quede consistente (no tendría sentido filtrar "Clientes" por Team pero que
+    // "Facturas"/"Llamadas" sigan trayendo las de TODOS los equipos).
+    const relatedFilter = hasFilter ? { clientId: { $in: clientIds } } : {}
+
+    const [promises, calls, invoices] = await Promise.all([
+      PaymentPromise.find(relatedFilter).sort({ promisedDate: 1 }).lean(),
+      Call.find(relatedFilter).sort({ createdAt: -1 }).lean(),
+      Invoice.find(relatedFilter).sort({ issueDate: -1 }).lean(),
     ])
 
     const clientById = new Map(clients.map((c) => [String(c._id), c]))

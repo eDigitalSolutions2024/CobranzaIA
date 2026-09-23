@@ -2,11 +2,20 @@ import { Request, Response } from 'express'
 import mongoose from 'mongoose'
 import twilio from 'twilio'
 import axios from 'axios'
+import ExcelJS from 'exceljs'
 import Call from '../models/Call'
 import Client from '../models/Client'
 import { findClientByPhone } from '../services/customerLookup.service'
 import { analyzeCallTranscript, ClientInfo } from '../services/claudeVoice.service'
 import { DispositionStatus, nextActionFor } from '../config/disposition'
+import { CLIENT_REPORT_FIELDS, buildClientReportFilter } from '../utils/reportFilters'
+
+const CALL_STATUS_LABEL: Record<string, string> = {
+  in_progress: 'En curso',
+  completed: 'Completada',
+  failed: 'Fallida',
+  requires_human: 'Requiere asesor',
+}
 
 // Traduce lo que ya pasó en la llamada (qué function tool disparó el agente, o si
 // nunca hubo conversación real) a un Status del catálogo fijo — no se le pregunta
@@ -171,8 +180,17 @@ function connectStream(baseUrl: string): string {
 
 export async function getCalls(req: Request, res: Response): Promise<void> {
   try {
-    const calls = await Call.find()
-      .populate('clientId', 'name phone debt status')
+    const clientFilter = buildClientReportFilter(req.query)
+    const callFilter: Record<string, any> = {}
+    // Solo restringe por cliente si de verdad se mandó algún filtro — evita un $in: []
+    // (que traería 0 resultados) cuando no hay ningún filtro de Country/Team/etc activo.
+    if (Object.keys(clientFilter).length > 0) {
+      const matchingClients = await Client.find(clientFilter).select('_id').lean()
+      callFilter.clientId = { $in: matchingClients.map((c) => c._id) }
+    }
+
+    const calls = await Call.find(callFilter)
+      .populate('clientId', `debt status ${CLIENT_REPORT_FIELDS}`)
       .sort({ createdAt: -1 })
       .limit(100)
       .lean()
@@ -180,6 +198,104 @@ export async function getCalls(req: Request, res: Response): Promise<void> {
   } catch (err) {
     console.error('[Voice] getCalls error:', err)
     res.status(500).json({ error: 'Error al obtener llamadas' })
+  }
+}
+
+// Descarga en Excel de las llamadas, filtradas por los mismos 5 campos de Client que
+// pide la tarjeta "Reporte Filters" (Country/Collector ID/Team/Team Leader/Collector) —
+// compartidos con GET /calls y con los filtros del Dashboard (ver ReportFilters.tsx en
+// el frontend). A diferencia de GET /calls (limit 100, para la tabla en vivo), aquí no
+// hay límite — es un reporte, tiene que traer todo lo que matchee el filtro.
+export async function exportCalls(req: Request, res: Response): Promise<void> {
+  try {
+    const clientFilter = buildClientReportFilter(req.query)
+    const callFilter: Record<string, any> = {}
+    if (Object.keys(clientFilter).length > 0) {
+      const matchingClients = await Client.find(clientFilter).select('_id').lean()
+      callFilter.clientId = { $in: matchingClients.map((c) => c._id) }
+    }
+    const status = String(req.query.status ?? '')
+    if (status && status !== 'all') callFilter.status = status
+
+    let calls = await Call.find(callFilter)
+      .populate('clientId', CLIENT_REPORT_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean()
+
+    // 'search' (nombre/teléfono) no se traduce a Mongo porque el nombre vive en el
+    // cliente relacionado, no en Call — más simple filtrarlo aquí ya con todo populado,
+    // igual que el buscador de la tabla en el frontend.
+    const search = String(req.query.search ?? '').trim().toLowerCase()
+    if (search) {
+      calls = calls.filter((call: any) => {
+        const name = String(call.clientId?.name ?? '').toLowerCase()
+        const phone = String(call.phone ?? '').toLowerCase()
+        return name.includes(search) || phone.includes(search)
+      })
+    }
+
+    const workbook = new ExcelJS.Workbook()
+    const sheet = workbook.addWorksheet('Llamadas')
+    sheet.columns = [
+      { header: 'Country', key: 'country', width: 12 },
+      { header: 'CollectorID', key: 'collectorId', width: 12 },
+      { header: 'Team', key: 'team', width: 14 },
+      { header: 'TeamLeader', key: 'teamLeader', width: 16 },
+      { header: 'Collector', key: 'collector', width: 16 },
+      { header: 'Cliente', key: 'name', width: 25 },
+      { header: 'Teléfono', key: 'phone', width: 15 },
+      { header: 'Fecha', key: 'createdAt', width: 18 },
+      { header: 'Duración (min)', key: 'durationMin', width: 14 },
+      { header: 'Tipo', key: 'triggeredBy', width: 12 },
+      { header: 'Estado', key: 'status', width: 15 },
+      { header: 'Disposition', key: 'disposition', width: 24 },
+      { header: 'Next Action', key: 'nextAction', width: 18 },
+      { header: 'Monto promesa', key: 'amount', width: 14 },
+      { header: 'Fecha promesa', key: 'promiseDate', width: 16 },
+      { header: 'Requiere asesor', key: 'requiresHuman', width: 16 },
+      { header: 'Buzón de voz', key: 'detectedVoicemail', width: 14 },
+      { header: 'Resumen', key: 'summary', width: 40 },
+      { header: 'Transcript', key: 'transcript', width: 60 },
+    ]
+    sheet.addRows(
+      calls.map((call: any) => {
+        const client = call.clientId
+        const transcriptText = (call.transcript || [])
+          .map((t: any) => `${t.role === 'assistant' ? 'IA' : 'Cliente'}: ${t.content}`)
+          .join(' | ')
+        return {
+          country: client?.country || '',
+          collectorId: client?.collectorId ?? '',
+          team: client?.team || '',
+          teamLeader: client?.teamLeader || '',
+          collector: client?.collector || '',
+          name: client?.name || '—',
+          phone: call.phone || client?.phone || '—',
+          createdAt: call.createdAt ? new Date(call.createdAt) : null,
+          durationMin: call.durationSeconds != null ? Math.round((call.durationSeconds / 60) * 10) / 10 : '',
+          triggeredBy: call.triggeredBy === 'auto' ? 'Automática' : 'Manual',
+          status: CALL_STATUS_LABEL[call.status as string] || call.status,
+          disposition: call.disposition || '',
+          nextAction: call.nextAction || '',
+          amount: call.amount || '',
+          promiseDate: call.promiseDate ? new Date(call.promiseDate) : '',
+          requiresHuman: call.requiresHuman ? 'Sí' : 'No',
+          detectedVoicemail: call.detectedVoicemail ? 'Sí' : 'No',
+          summary: call.summary || '',
+          transcript: transcriptText,
+        }
+      })
+    )
+    sheet.getRow(1).font = { bold: true }
+
+    const buffer = await workbook.xlsx.writeBuffer()
+    const filename = `cobranzaia-llamadas-${new Date().toISOString().slice(0, 10)}.xlsx`
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.send(Buffer.from(buffer))
+  } catch (err) {
+    console.error('[Voice] exportCalls error:', err)
+    res.status(500).json({ error: 'Error exportando llamadas a Excel' })
   }
 }
 

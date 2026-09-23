@@ -1,10 +1,22 @@
 import { api, apiDownload, apiUpload } from "./api"
+import type { ReportFilterValue } from "../components/ReportFilters"
 
 export const getClients = () =>
   api("/clients").then((data) => data.clients)
 
 export const getClientDetail = (id: string) =>
   api(`/clients/${id}/detail`)
+
+export type ClientFilterOptions = {
+  country: string[]
+  collectorId: (string | number)[]
+  team: string[]
+  teamLeader: string[]
+  collector: string[]
+}
+
+export const getClientFilterOptions = (): Promise<ClientFilterOptions> =>
+  api("/clients/filter-options")
 
 export const createClient = (data: any) =>
   api("/clients", {
@@ -18,8 +30,19 @@ export const importClientsExcel = (file: File) => {
   return apiUpload("/clients/import", formData)
 }
 
-export const exportClientsExcel = () =>
-  apiDownload("/clients/export", `cobranzaia-clientes-${new Date().toISOString().slice(0, 10)}.xlsx`)
+export const exportClientsExcel = (filters?: ReportFilterValue) => {
+  const params = new URLSearchParams()
+  if (filters) {
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value) params.set(key, value)
+    })
+  }
+  const qs = params.toString()
+  return apiDownload(
+    `/clients/export${qs ? `?${qs}` : ""}`,
+    `cobranzaia-clientes-${new Date().toISOString().slice(0, 10)}.xlsx`
+  )
+}
 
 export const downloadClientsTemplate = () =>
   apiDownload("/clients/import-template", "plantilla-clientes.xlsx")

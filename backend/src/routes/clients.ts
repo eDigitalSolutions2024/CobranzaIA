@@ -10,6 +10,7 @@ import {
   exportClients,
   downloadImportTemplate,
   deleteClient,
+  getClientFilterOptions,
 } from "../controllers/clientController"
 import {
   createInvoice,
@@ -48,6 +49,7 @@ function uploadClientsFile(req: Request, res: Response, next: NextFunction) {
 const router = Router()
 
 router.get("/clients", requireAuth, getClients)
+router.get("/clients/filter-options", requireAuth, getClientFilterOptions)
 router.get("/clients/export", requireAuth, exportClients)
 router.get("/clients/import-template", requireAuth, downloadImportTemplate)
 router.get("/clients/:id/detail", requireAuth, getClientDetail)

@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react"
-import { getClients, exportClientsExcel, deleteClient } from "../services/clients"
+import { getClients, deleteClient } from "../services/clients"
 import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
 import ImportInvoicesModal from "../components/ImportInvoicesModal"
+import ExportClientsModal from "../components/ExportClientsModal"
 import AutoCallToggle from "../components/AutoCallToggle"
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
@@ -46,7 +47,7 @@ export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
   const [openModal, setOpenModal] = useState(false)
   const [importInvoicesOpen, setImportInvoicesOpen] = useState(false)
-  const [exporting, setExporting] = useState(false)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
   const [notifyingId, setNotifyingId] = useState<string | null>(null)
   const [notifyResult, setNotifyResult] = useState<Record<string, { label: string; tone: "success" | "warning" | "error" }>>({})
@@ -55,18 +56,6 @@ export default function ClientsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [editingClient, setEditingClient] = useState<any | null>(null)
   const [checkedClientId, setCheckedClientId] = useState<string | null>(null);
-
-  async function handleExport() {
-    setExporting(true)
-    try {
-      await exportClientsExcel()
-    } catch (error) {
-      console.log(error)
-      alert("Error exporting Excel file")
-    } finally {
-      setExporting(false)
-    }
-  }
 
   async function handleCall(clientId: string) {
     setCallingId(clientId)
@@ -188,11 +177,10 @@ export default function ClientsPage() {
               Import Invoices
             </button>
             <button
-              onClick={handleExport}
-              disabled={exporting}
-              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+              onClick={() => setExportModalOpen(true)}
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
             >
-              {exporting ? "Exporting..." : "Export Clients"}
+              Export Clients
             </button>
             <button
               onClick={() => { setEditingClient(null); setOpenModal(true) }}
@@ -606,6 +594,11 @@ export default function ClientsPage() {
         isOpen={importInvoicesOpen}
         onClose={() => setImportInvoicesOpen(false)}
         onImported={loadClients}
+      />
+
+      <ExportClientsModal
+        isOpen={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
       />
     </>
   )

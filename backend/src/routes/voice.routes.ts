@@ -7,6 +7,7 @@ import {
   handleNotifyHumanStatus,
   getNotifyHumanStatus,
   getCalls,
+  exportCalls,
   handleRecordingStatus,
   getCallRecording,
 } from '../controllers/voice.controller'
@@ -15,6 +16,7 @@ import { requireAuth } from '../middleware/auth'
 const router = Router()
 
 router.get('/calls', requireAuth, getCalls)
+router.get('/calls/export', requireAuth, exportCalls)
 router.post('/voice/outbound', requireAuth, handleOutbound)
 router.post('/voice/notify-human', requireAuth, handleNotifyHuman)
 router.get('/voice/notify-human-status/:callSid', requireAuth, getNotifyHumanStatus)
