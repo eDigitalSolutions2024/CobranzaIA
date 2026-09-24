@@ -400,6 +400,9 @@ export default function ClientsPage() {
 
                               <td className="px-4 py-3">{client.collector || "—"}</td>
 
+                              {/* Celdas de las columnas ocultas arriba (Invoice #, Create Date, Due Date,
+                                  Aging Bucket, Loan / Lease) — deben comentarse/descomentarse JUNTO con sus
+                                  <th>, si no el cuerpo queda desfasado respecto al encabezado.
                               <td className="px-4 py-3">{client.invoiceNumber || "—"}</td>
 
                               <td className="px-4 py-3">
@@ -417,6 +420,7 @@ export default function ClientsPage() {
                               <td className="px-4 py-3">{client.agingTarget || "—"}</td>
 
                               <td className="px-4 py-3">{client.loanLease || "—"}</td>
+                              */}
 
                               <td className="px-4 py-3">
                                 {client.debt != null

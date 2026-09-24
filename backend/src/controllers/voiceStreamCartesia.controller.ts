@@ -21,6 +21,7 @@ import { runAction } from '../services/flowActions.service'
 import { DeepgramSttSession } from '../services/deepgramStt.service'
 import { ElevenLabsTtsSession } from '../services/elevenLabsTts.service'
 import { normalizeRFC } from '../utils/rfc'
+import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { warmUpClaude, generateLiveVoiceTurn, LiveTurn, LiveToolCall, ToolOutcome } from '../services/claudeVoiceLive.service'
 import { ClientInfo } from '../services/voiceConversation.service'
 
@@ -134,10 +135,15 @@ export async function handleIncomingCartesia(req: Request, res: Response): Promi
 
 const VOICEMAIL_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono|no est[aá] disponible|fuera del [aá]rea de servicio|el n[uú]mero que usted marc[oó]/i
 
-function buildGreeting(name: string): string {
+// `name` es la EMPRESA, nunca una persona — con `contact` (el responsable) el saludo se
+// dirige a esa persona y menciona la empresa aparte, igual que en buildVoiceSystemPrompt
+// (voiceConversation.service.ts) — mismo texto, para que el saludo fijo de este piloto no
+// se desalinee del guion que sigue Claude en el resto de la llamada.
+function buildGreeting(name: string, contact?: string | null): string {
   const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Mexico_City' }).format(new Date())) % 24
   const salutation = hour < 12 ? 'buenos días' : hour < 19 ? 'buenas tardes' : 'buenas noches'
-  return `Hola, ${salutation}, soy Guadalupe Martínez, asistente virtual de HP Financial Services. ¿Tengo el gusto de hablar con ${name}?`
+  const who = contact?.trim() ? `${contact.trim()}, de ${name}` : name
+  return `Hola, ${salutation}, soy Guadalupe Martínez, asistente virtual de HP Financial Services. ¿Tengo el gusto de hablar con ${who}?`
 }
 
 export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: IncomingMessage): Promise<void> {
@@ -215,6 +221,12 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     if (shouldHangup) {
       const backlogMs = Math.max(0, queueDrainCompleteAt - Date.now())
       setTimeout(() => closeAll(), backlogMs + 300)
+    } else if (queuedUserText && !closed) {
+      // Texto que llegó mientras se hablaba (ver deepgram.on('transcript') arriba) y no
+      // ameritó barge-in — recién ahora que terminó de sonar se procesa como turno normal.
+      const next = queuedUserText
+      queuedUserText = ''
+      runTurn(next).catch((err) => console.error('[VoiceCartesia] Error procesando turno encolado:', err))
     }
   })
 
@@ -252,6 +264,21 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
       return
     }
     if (tryFastIdentityConfirmation(finishedUtterance)) return
+
+    // El agente sigue hablando (audio en curso) y esto no bastó para disparar el barge-in
+    // de arriba (menos de 2 palabras en el interim, ej. "bueno"/"aló"/muletillas) — no fue
+    // una interrupción real. Si de todos modos se llamara a runTurn() aquí, tts.beginTurn()
+    // pisaría currentContextId y el audio que ElevenLabs todavía está mandando de la
+    // respuesta en curso se descartaría en silencio (se corta a medias sin que nadie mande
+    // 'clear' a Twilio) — visto en prueba real: el saludo se cortaba y el agente volvía a
+    // preguntar como si "bueno" hubiera interrumpido algo. En vez de eso se encola (mismo
+    // mecanismo que ya existía para cuando Claude seguía generando) y se procesa en
+    // tts.on('done') de abajo, una vez que termine de hablar.
+    if (agentSpeaking) {
+      queuedUserText = queuedUserText ? `${queuedUserText} ${finishedUtterance}` : finishedUtterance
+      console.log(`[VoiceCartesia] Transcript en cola (agente hablando, no fue barge-in): "${finishedUtterance}"`)
+      return
+    }
     runTurn(finishedUtterance).catch((err) => console.error('[VoiceCartesia] Error procesando turno:', err))
   })
 
@@ -571,6 +598,8 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     phone = call.phone as string
 
     const client = call.clientId ? await Client.findById(call.clientId).lean() : null
+    // Si falla la consulta de facturas, la llamada sigue igual (el prompt cae a agingDays).
+    const invoices = client ? await loadInvoiceSummary(client._id).catch(() => null) : null
     clientInfo = client
       ? {
           name: client.name as string,
@@ -578,6 +607,8 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
           agingDays: (client.agingDays as number) ?? 0,
           status: client.status as string,
           rfc: (client.rfc as string) ?? null,
+          contact: (client.contact as string) ?? null,
+          invoices,
         }
       : null
 
@@ -589,7 +620,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     tts.connect().catch((err) => console.error('[VoiceCartesia] No se pudo conectar a ElevenLabs:', err))
     warmUpClaude(clientInfo, phone)
     const deepgramReady = deepgram.connect()
-    if (clientInfo) speakFixed(buildGreeting(clientInfo.name))
+    if (clientInfo) speakFixed(buildGreeting(clientInfo.name, clientInfo.contact))
 
     try {
       await deepgramReady

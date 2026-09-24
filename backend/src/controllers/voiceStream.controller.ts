@@ -7,6 +7,7 @@ import { runAction } from '../services/flowActions.service'
 import { OpenAIRealtimeSession, RealtimeFunctionCall, RealtimeUsage } from '../services/openaiRealtime.service'
 import { buildVoiceSystemPrompt, buildTranscriptionPrompt, ClientInfo } from '../services/voiceConversation.service'
 import { normalizeRFC } from '../utils/rfc'
+import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { placeOutboundCall } from './voice.controller'
 
 // Red de seguridad para cuando el modelo DICE que va a colgar sin llamar a la
@@ -545,6 +546,8 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
     callDocId = call._id as mongoose.Types.ObjectId
 
     const client = call.clientId ? await Client.findById(call.clientId).lean() : null
+    // Si falla la consulta de facturas, la llamada sigue igual (el prompt cae a agingDays).
+    const invoices = client ? await loadInvoiceSummary(client._id).catch(() => null) : null
     const clientInfo: ClientInfo | null = client
       ? {
           name: client.name as string,
@@ -552,6 +555,8 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
           agingDays: (client.agingDays as number) ?? 0,
           status: client.status as string,
           rfc: (client.rfc as string) ?? null,
+          contact: (client.contact as string) ?? null,
+          invoices,
         }
       : null
 

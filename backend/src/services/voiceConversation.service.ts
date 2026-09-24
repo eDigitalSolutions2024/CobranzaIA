@@ -11,6 +11,8 @@
 // modo de salida estructurado de primera clase, separado del audio, en vez de depender de
 // que el modelo "escriba bien" un texto mágico en medio de su respuesta hablada.
 
+import type { InvoiceSummary } from './invoiceSummary.service'
+
 export interface ClientInfo {
   name: string
   debt: number
@@ -21,6 +23,15 @@ export interface ClientInfo {
   // si incluir ese paso en el prompt; la comparación real la hace el backend (ver
   // voiceStream.controller.ts, caso 'verificar_rfc').
   rfc?: string | null
+  // Nombre (o teléfono) de la persona responsable dentro de la empresa — `name` es la
+  // EMPRESA (ej. "British American Hospital S.A."), nunca una persona que conteste el
+  // teléfono. Cuando existe, el saludo se dirige a esta persona mencionando la empresa
+  // aparte (ver tarjeta "En el script de entrada identificar la empresa"), en vez de
+  // preguntarle a quien conteste si "es" la empresa.
+  contact?: string | null
+  // Resumen de sus facturas abiertas (ver invoiceSummary.service.ts) — permite explicarle
+  // de qué facturas se le habla si pregunta, en vez de escalar a un humano.
+  invoices?: InvoiceSummary | null
 }
 
 // Definición de tools en formato Realtime API (session.tools). Los nombres y parámetros
@@ -145,6 +156,8 @@ ESTILO DE VOZ (esto es una llamada real, no un mensaje de texto leído en voz al
 - Deja micro-pausas naturales entre ideas, como respiraría alguien hablando de verdad.
 - Máximo 2 oraciones por respuesta.
 - Antes de responder, reconoce brevemente lo que dijo el cliente con una reacción que combine con su tono — nunca repitas la misma palabra de reconocimiento que usaste en tu turno anterior.
+- NUNCA repitas una de tus propias frases anteriores palabra por palabra. Si tienes que volver a preguntar algo (porque no te contestaron, no entendiste, o fue solo una interjección), formúlalo más corto y distinto la segunda vez — nunca el mismo bloque de texto completo otra vez.
+- EXCEPCIÓN — interjecciones de contestar el teléfono ("¿bueno?", "aló", "diga", "¿sí?" dichas justo al descolgar): NO son respuesta a lo que preguntaste ni algo que debas reconocer o repetir — es solo la forma en que alguien contesta el teléfono en México, típicamente porque tu saludo se cruzó con el suyo. Nunca las repitas tú (jamás digas "bueno" ni "aló" como si fueras tú quien contesta). Responde con algo breve tipo "sí, aquí estoy" o "¿me escucha bien?" y retoma SOLO la parte central de tu pregunta anterior, corta — nunca el saludo/presentación completa otra vez (ej. si ya dijiste "Hola, soy Guadalupe Martínez... ¿tengo el gusto de hablar con Juan?", la segunda vez di solo algo como "¿hablo con Juan?", no el párrafo completo).
 - Montos en palabras: "cuatro mil quinientos pesos", no "$4,500". Fechas en palabras: "el diecisiete de junio", no "17/06".
 - No repitas información ya mencionada. Adáptate si el cliente cambia de tema.
 - Solo texto plano, sin emojis ni negritas.
@@ -179,12 +192,39 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
      - Si NO coinciden → pídele que te los repita una sola vez más. Si en ese segundo intento tampoco coinciden, despídete con cortesía y llama a requerir_humano.`
     : `llama a la función confirmar_identidad y continúa al punto 3.`
 
+  // `name` es la EMPRESA, nunca una persona — preguntarle a quien conteste si "es" la
+  // empresa suena raro (ver tarjeta "En el script de entrada identificar la empresa").
+  // Cuando hay `contact` (el responsable), el saludo se dirige a esa persona y menciona
+  // la empresa aparte; sin contact, se mantiene el comportamiento anterior (preguntar
+  // directo por el nombre de la empresa, como cuando no se conoce a nadie en particular).
+  const contactName = clientInfo.contact?.trim() || null
+  const greetingInstruction = contactName
+    ? `pregúntale si tienes el gusto de hablar con "${contactName}", mencionando que le llamas de parte de "${clientInfo.name}" — no le pidas que diga su nombre completo por separado, ya lo tienes; solo necesitas que lo confirme o lo corrija.`
+    : `pregúntale si tienes el gusto de hablar con "${clientInfo.name}" — no le pidas que diga su nombre completo por separado, ya lo tienes; solo necesitas que lo confirme o lo corrija.`
+  const greetingExample = contactName
+    ? `Hola, buenas tardes, soy Guadalupe Martínez, asistente virtual de HP Financial Services. ¿Tengo el gusto de hablar con ${contactName}, de ${clientInfo.name}?`
+    : `Hola, buenas tardes, soy Guadalupe Martínez, asistente virtual de HP Financial Services. ¿Tengo el gusto de hablar con ${clientInfo.name}?`
+
+  // Texto para cuando el cliente pregunta "¿de qué facturas me habla?" (tarjeta "Agregar
+  // respuesta del Agente IA para aclaración de facturas vencidas"). Los números los arma
+  // el backend (no el modelo) con las facturas reales del cliente; el monto es el mismo
+  // saldo que se dice en el punto 4, para no dar dos cifras distintas en una llamada.
+  const debtText = `${clientInfo.debt.toLocaleString('es-MX')} pesos`
+  const overdueCount = clientInfo.invoices?.overdueCount ?? 0
+  const daysOverdue = clientInfo.invoices?.oldestDaysOverdue ?? (clientInfo.agingDays > 0 ? clientInfo.agingDays : null)
+  const invoiceExplanation =
+    daysOverdue === null
+      ? `Me comunico por la factura correspondiente al mes anterior, que vence próximamente. El monto pendiente es de ${debtText}.`
+      : overdueCount > 1
+        ? `Me comunico por las facturas pendientes de su cuenta: tiene ${overdueCount} facturas vencidas, y la más antigua ya registra ${daysOverdue} días de atraso. El monto total pendiente es de ${debtText}.`
+        : `Me comunico por la factura correspondiente al mes anterior, la cual ya venció y actualmente registra ${daysOverdue} días de atraso. El monto pendiente es de ${debtText}.`
+
   return `${base}
 
-CLIENTE: ${clientInfo.name} | Saldo pendiente: ${clientInfo.debt.toLocaleString('es-MX')} pesos | Días de atraso: ${clientInfo.agingDays}
+CLIENTE: ${clientInfo.name}${contactName ? ` | Contacto/responsable: ${contactName}` : ''} | Saldo pendiente: ${clientInfo.debt.toLocaleString('es-MX')} pesos | Días de atraso: ${clientInfo.agingDays}
 
 FLUJO A SEGUIR:
-1. Salúdalo y presentate con tu nombre y de donde llamas y en ese MISMO turno pregúntale si tienes el gusto de hablar con "${clientInfo.name}" — no le pidas que diga su nombre completo por separado, ya lo tienes; solo necesitas que lo confirme o lo corrija. Ejemplo de tono: "Hola, buenas tardes, soy Guadalupe Martínez, asistente virtual de HP Financial Services. ¿Tengo el gusto de hablar con ${clientInfo.name}?".
+1. Salúdalo y presentate con tu nombre y de donde llamas y en ese MISMO turno ${greetingInstruction} Ejemplo de tono: "${greetingExample}".
 2. Evalúa su respuesta con criterio flexible (acepta "sí", variaciones de pronunciación, o que corrija solo un detalle menor) — no exijas coincidencia exacta:
    - Si confirma → ${identityConfirmedStep}
    - Si dice que no es él, o da un nombre claramente distinto → pregunta una sola vez más para descartar mala transcripción del audio. Si en ese segundo intento sigue sin coincidir, despídete con cortesía y llama a la función requerir_humano. Nunca hagas más de 2 intentos en total — repetir la pregunta varias veces es peor que escalar rápido.
@@ -192,7 +232,8 @@ FLUJO A SEGUIR:
 3. Pregúntale: "Gracias. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?".
    - Si confirma que SÍ las recibió → continúa al punto 4.
    - Si dice que NO las ha recibido → llama a la función marcar_factura_no_recibida, dile con calidez que en breve se la reenvían por este medio, despídete y llama a finalizar_llamada. No sigas con el saldo ni la fecha de pago en esta llamada.
-   - Si dice que sí las recibió pero luego no reconoce o no sabe identificar a cuáles facturas te refieres (ej. pregunta "¿cuáles facturas?" y no las ubica) → NO se las expliques ni las inventes; llama a marcar_ticket_aclaracion y requerir_humano, despídete con cortesía.
+   - Si pregunta de qué facturas le hablas, o dice que no sabe a cuáles te refieres (ej. "¿de qué facturas me habla?", "¿cuáles facturas?") → NO escales todavía, ya tienes los datos de su cuenta. Explícaselo con estas palabras (puedes ajustar el tono, pero conserva los números tal cual, no los cambies ni inventes otros): "${invoiceExplanation}" Después pregúntale si ya la recibió o si la reconoce, y continúa al punto 4 según su respuesta.
+   - Si DESPUÉS de esa explicación sigue sin reconocer la factura o dice que no le corresponde → llama a marcar_ticket_aclaracion y requerir_humano, despídete con cortesía.
    - Si no está segura o no sabe si las recibió (pero eso no le impide seguir) → no te detengas por esto, continúa al punto 4 igual.
 4. Infórmale su saldo pendiente y pregúntale si reconoce el adeudo. Según su respuesta:
    - Si dice que NO lo reconoce → llama a marcar_ticket_aclaracion y requerir_humano, despídete con cortesía.
@@ -228,6 +269,11 @@ export function buildTranscriptionPrompt(clientInfo: ClientInfo | null): string 
     'adeudo, saldo pendiente, factura, pago domiciliado, cargo automático, promesa de pago, ' +
     'fecha de pago, RFC, cobranza, vencido, próximo a vencer, transferencia, pago de contado'
   if (!clientInfo?.name) return `Llamada de cobranza en español mexicano. Vocabulario frecuente: ${vocab}.`
-  const safeName = clientInfo.name.replace(/[<>\r\n]/g, '').trim()
-  return `Llamada de cobranza en español mexicano con ${safeName}. Vocabulario frecuente: ${vocab}.`
+  const sanitize = (s: string) => s.replace(/[<>\r\n]/g, '').trim()
+  const safeName = sanitize(clientInfo.name)
+  // El contacto (persona) también se agrega al sesgo — es el nombre que el cliente va a
+  // decir/confirmar en voz alta, así que ayuda tanto como el de la empresa.
+  const safeContact = clientInfo.contact?.trim() ? sanitize(clientInfo.contact) : null
+  const namesHint = safeContact ? `${safeContact}, ${safeName}` : safeName
+  return `Llamada de cobranza en español mexicano con ${namesHint}. Vocabulario frecuente: ${vocab}.`
 }

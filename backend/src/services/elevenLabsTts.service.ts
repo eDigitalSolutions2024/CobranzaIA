@@ -65,9 +65,17 @@ export class ElevenLabsTtsSession extends EventEmitter {
   private openSocket(): TtsSocket {
     // inactivity_timeout: por defecto ElevenLabs cierra la conexión a los 20s sin texto —
     // la tibia puede esperar todo un turno del cliente hablando.
+    // language_code=es: sin esto, eleven_flash_v2_5 detecta el idioma POR CADA PEDAZO de
+    // texto que se manda por separado (ver takeSpeakableChunk en
+    // voiceStreamCartesia.controller.ts, que trocea la respuesta de Claude en frases/
+    // cláusulas cortas para bajar latencia) — un fragmento corto o ambiguo (ej. "HP
+    // Financial Services", que es texto en inglés dentro del guion en español) puede
+    // hacer que ese pedazo se lea con acento/idioma equivocado, sonando como si el agente
+    // "cambiara de idioma" a media llamada. Con language_code fijo, cada pedazo se lee en
+    // español sin importar qué tan corto o ambiguo sea.
     const url =
       `wss://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}/stream-input` +
-      `?model_id=${ELEVENLABS_MODEL}&output_format=ulaw_8000&inactivity_timeout=120`
+      `?model_id=${ELEVENLABS_MODEL}&language_code=es&output_format=ulaw_8000&inactivity_timeout=120`
     const sock: TtsSocket = { ws: new WebSocket(url), open: false, pending: [], contextId: null, audioChunks: 0, discarded: false }
     const { ws } = sock
 
