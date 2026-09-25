@@ -153,7 +153,7 @@ function InvoiceFormFields({
 }) {
   const currencyOptions = [...new Set([...BASE_CURRENCIES, ...knownCurrencies])]
   return (
-    <form onSubmit={onSubmit} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 grid grid-cols-2 gap-3">
+    <form onSubmit={onSubmit} className="rounded-xl border border-zinc-800 bg-[var(--bg-primary)] p-4 grid grid-cols-2 gap-3">
       <input
         required
         placeholder="Invoice #"
@@ -231,6 +231,39 @@ function InvoiceFormFields({
   )
 }
 
+// Traduce cada tool de voz (ver VOICE_TOOLS en voiceConversation.service.ts) a una nota
+// corta para el resumen — se omiten las que son solo pasos de flujo (confirmar_identidad,
+// verificar_rfc, finalizar_llamada), ya que no aportan nada al resumen de negocio.
+const CALLED_FUNCTION_NOTE: Record<string, string> = {
+  registrar_promesa_pago: "Payment promise registered",
+  marcar_saldo_pagado: "Reported balance as already paid",
+  marcar_pago_domiciliado: "Reported automatic/domiciled payment",
+  marcar_factura_no_recibida: "Reported invoice not received",
+  solicitar_contrato: "Requested a copy of the contract",
+  solicitar_estado_cuenta: "Requested account statement",
+  marcar_ticket_aclaracion: "Did not recognize the debt — clarification ticket opened",
+  requerir_humano: "Escalated to a human agent",
+  marcar_extension: "Reached a switchboard — extension marked",
+}
+
+// Si el backend ya generó un resumen con Claude (ver analyzeCallTranscript en
+// voice.controller.ts — solo corre cuando hubo al menos 2 turnos reales), se usa ese
+// texto. Si no, la mejor aproximación disponible es la última frase que dijo el agente
+// (su despedida), que en la práctica ya resume el desenlace de la llamada — ver los
+// ejemplos de scripts de conclusión que motivaron este tab.
+function summarizeCall(call: any): { text: string; source: "ai" | "closing" | "none"; tags: string[] } {
+  const tags = ((call.calledFunctions ?? []) as string[])
+    .filter((fn) => CALLED_FUNCTION_NOTE[fn])
+    .map((fn) => CALLED_FUNCTION_NOTE[fn])
+
+  if (call.summary) return { text: call.summary, source: "ai", tags }
+
+  const lastAgentTurn = [...(call.transcript ?? [])].reverse().find((t: any) => t.role === "assistant")
+  if (lastAgentTurn?.content) return { text: lastAgentTurn.content, source: "closing", tags }
+
+  return { text: "No conversation recorded for this call.", source: "none", tags }
+}
+
 function formatMoney(value: any): string {
   if (value === null || value === undefined) return "—"
   return `$${Number(value).toLocaleString("en-US")}`
@@ -265,7 +298,7 @@ const EMPTY_INVOICE_FORM = { invoiceNumber: "", amount: "", currencyCode: "MXN",
 
 export default function ClientDetailModal({ clientId, onClose }: Props) {
   const [data, setData] = useState<any>(null)
-  const [tab, setTab] = useState<"promises" | "calls" | "invoices">("promises")
+  const [tab, setTab] = useState<"promises" | "calls" | "invoices" | "summaries">("promises")
   const [expandedCall, setExpandedCall] = useState<string | null>(null)
   const [transcriptModalCallId, setTranscriptModalCallId] = useState<string | null>(null)
   const transcriptEndRef = useRef<HTMLDivElement>(null)
@@ -494,6 +527,14 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                 >
                   Invoices ({data.invoices?.length ?? 0})
                 </button>
+                <button
+                  onClick={() => setTab("summaries")}
+                  className={`px-4 py-3 text-sm font-medium transition-colors ${
+                    tab === "summaries" ? "border-b-2 border-blue-500 text-white" : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  Summary Calls ({data.calls?.length ?? 0})
+                </button>
               </div>
 
               {/* Tab content */}
@@ -504,7 +545,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                       <p className="text-zinc-500 text-sm text-center py-6">No promises registered</p>
                     )}
                     {data.promises.map((p: any) => (
-                      <div key={p._id} className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                      <div key={p._id} className="rounded-xl border border-zinc-800 bg-[var(--bg-primary)] p-4">
                         <div className="flex items-center justify-between">
                           <div>
                             <p className="text-lg font-semibold text-white">
@@ -533,7 +574,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                       <p className="text-zinc-500 text-sm text-center py-6">No calls registered</p>
                     )}
                     {data.calls.map((call: any) => (
-                      <div key={call._id} className="rounded-xl border border-zinc-800 bg-zinc-950">
+                      <div key={call._id} className="rounded-xl border border-zinc-800 bg-[var(--bg-primary)]">
                         <div className="flex items-center justify-between p-4">
                           <div>
                             <p className="text-sm text-zinc-300">
@@ -624,7 +665,7 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                         <div
                           key={inv._id}
                           onClick={() => setExpandedInvoiceId(expandedInvoiceId === inv._id ? null : inv._id)}
-                          className="rounded-xl border border-zinc-800 bg-zinc-950 p-4 cursor-pointer"
+                          className="rounded-xl border border-zinc-800 bg-[var(--bg-primary)] p-4 cursor-pointer"
                         >
                           <div className="flex items-center justify-between">
                             <div>
@@ -702,6 +743,58 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                         </div>
                       )
                     )}
+                  </div>
+                )}
+                {tab === "summaries" && (
+                  <div className="space-y-3">
+                    {(!data.calls || data.calls.length === 0) && (
+                      <p className="text-zinc-500 text-sm text-center py-6">No calls registered</p>
+                    )}
+                    {data.calls?.map((call: any) => {
+                      const { text, source, tags } = summarizeCall(call)
+                      return (
+                        <div key={call._id} className="rounded-xl border border-zinc-800 bg-[var(--bg-primary)] p-4">
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <p className="text-sm text-zinc-300">
+                              {new Date(call.createdAt).toLocaleString("en-US")}
+                            </p>
+                            <div className="flex items-center gap-2">
+                              {call.disposition && (
+                                <span className="rounded-full px-3 py-1 text-xs font-medium bg-zinc-800 text-zinc-300">
+                                  {call.disposition}
+                                </span>
+                              )}
+                              <span className={`rounded-full px-3 py-1 text-xs ${CALL_STATUS_COLOR[call.status]}`}>
+                                {CALL_STATUS_LABEL[call.status] ?? call.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          <p className={`mt-3 text-sm leading-relaxed ${source === "none" ? "text-zinc-500 italic" : "text-zinc-200"}`}>
+                            {source === "closing" ? `"${text}"` : text}
+                          </p>
+
+                          {tags.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {tags.map((tag, i) => (
+                                <span key={i} className="rounded-full bg-blue-500/10 px-2.5 py-1 text-[11px] font-medium text-blue-400">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {(call.transcript?.length ?? 0) > 0 && (
+                            <button
+                              onClick={() => setTranscriptModalCallId(call._id)}
+                              className="mt-3 text-xs text-zinc-500 hover:text-blue-400 transition-colors"
+                            >
+                              View full call →
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
