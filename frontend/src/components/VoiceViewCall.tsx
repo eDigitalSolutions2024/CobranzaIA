@@ -67,8 +67,8 @@ export default function VoiceCallsOverview({ callStats }: Props) {
 
         <div className="flex flex-1 flex-col gap-4">
           <CallStat color="bg-green-500" label="Completed" value={callStats.completed ?? 0} total={callStats.total ?? 0} />
-          <CallStat color="bg-blue-500" label="With promise" value={callStats.withPromise ?? 0} total={callStats.total ?? 0} />
-          <CallStat color="bg-orange-500" label="Require agent" value={callStats.requires_human ?? 0} total={callStats.total ?? 0} />
+          <CallStat color="bg-blue-500" label="Payment promises" value={callStats.withPromise ?? 0} total={callStats.total ?? 0} />
+          <CallStat color="bg-orange-500" label="Requires Agent / Admin" value={callStats.requires_human ?? 0} total={callStats.total ?? 0} />
           <CallStat color="bg-slate-500" label="No answer / Busy" value={callStats.noAnswer ?? 0} total={callStats.total ?? 0} />
         </div>
 

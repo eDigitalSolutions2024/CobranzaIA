@@ -83,7 +83,10 @@ export default function DashboardPage() {
           value={
             loading
               ? "..."
-              : `$${Number(metrics?.totalDebt || 0).toLocaleString("en-US")}`
+              : `$${Number(metrics?.totalDebt || 0 ,).toLocaleString("en-US",{
+                currency: "USD",
+                maximumFractionDigits: 0,
+              })} USD`
           }
           change=""
         />

@@ -40,7 +40,7 @@ const RISK_COLOR: Record<string, string> = {
 }
 
 const testingGroup:string [] = [
-  'Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes' 
+  'Ever', 'Alberto', 'Laura', 'Ana', 'Lourdes' 
 ]
 
 export default function ClientsPage() {
@@ -331,22 +331,22 @@ export default function ClientsPage() {
                         <table className="w-full">
                           <thead>
                             <tr className="border-b border-zinc-800">
-                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                              {/*<th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Country
-                              </th>
+                              </th>*/}
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Customer ID
                               </th>
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Team
                               </th>
-                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                              {/*<th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Team Leader
                               </th>
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Collector
                               </th>
-                              {/*<th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Invoice #
                               </th>
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
@@ -367,9 +367,9 @@ export default function ClientsPage() {
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Status
                               </th>
-                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                              {/*<th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Channel
-                              </th>
+                              </th>*/}
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Contact
                               </th>
@@ -390,15 +390,15 @@ export default function ClientsPage() {
 
                           <tbody>
                             <tr className="border-b border-zinc-800">
-                              <td className="px-4 py-3">{client.country || "—"}</td>
+                              {/*<td className="px-4 py-3">{client.country || "—"}</td>*/}
 
                               <td className="px-4 py-3">{client.customerId || "—"}</td>
 
                               <td className="px-4 py-3">{client.team || "—"}</td>
 
-                              <td className="px-4 py-3">{client.teamLeader || "—"}</td>
+                              {/*<td className="px-4 py-3">{client.teamLeader || "—"}</td>
 
-                              <td className="px-4 py-3">{client.collector || "—"}</td>
+                              <td className="px-4 py-3">{client.collector || "—"}</td>*/}
 
                               {/* Celdas de las columnas ocultas arriba (Invoice #, Create Date, Due Date,
                                   Aging Bucket, Loan / Lease) — deben comentarse/descomentarse JUNTO con sus
@@ -432,7 +432,7 @@ export default function ClientsPage() {
                                 {STATUS_LABEL[client.status] || client.status || "—"}
                               </td>
 
-                              <td className="px-4 py-3">{client.channel || "—"}</td>
+                              {/*<td className="px-4 py-3">{client.channel || "—"}</td>*/}
 
                               <td className="px-4 py-3">{client.contact || "—"}</td>
 

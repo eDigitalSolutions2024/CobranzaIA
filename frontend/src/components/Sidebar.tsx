@@ -22,8 +22,8 @@ const menu = [
   { id: "dashboard", name: "Dashboard", icon: LayoutDashboard },
   { id: "clients", name: "Clients", icon: Users },
   { id: "calls", name: "Calls", icon: Phone },
-  { id: "conversations", name: "Conversations", icon: MessageCircle },
-  { id: "messages", name: "Send WhatsApp", icon: MessageSquare },
+  //{ id: "conversations", name: "Conversations", icon: MessageCircle },
+  //{ id: "messages", name: "Send WhatsApp", icon: MessageSquare },
   { id: "security", name: "Security", icon: ShieldCheck },
 ]
 
