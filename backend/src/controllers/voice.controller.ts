@@ -9,6 +9,7 @@ import { findClientByPhone } from '../services/customerLookup.service'
 import { analyzeCallTranscript, ClientInfo } from '../services/claudeVoice.service'
 import { DispositionStatus, nextActionFor } from '../config/disposition'
 import { CLIENT_REPORT_FIELDS, buildClientReportFilter } from '../utils/reportFilters'
+import type { VoiceEngine } from '../models/AutomationSettings'
 
 const CALL_STATUS_LABEL: Record<string, string> = {
   in_progress: 'En curso',
@@ -25,6 +26,8 @@ const CALL_STATUS_LABEL: Record<string, string> = {
 // literal para eso.
 function computeVoiceDisposition(calledFunctions: string[], relevantTurnCount: number): DispositionStatus {
   if (calledFunctions.includes('marcar_extension')) return 'Extension required'
+  if (calledFunctions.includes('marcar_negativa_pago')) return 'Payment refused'
+  if (calledFunctions.includes('marcar_pago_en_proceso')) return 'Payment in process'
   if (calledFunctions.includes('registrar_promesa_pago')) return 'Payment scheduled'
   if (calledFunctions.includes('marcar_saldo_pagado')) return 'Payment received'
   if (calledFunctions.includes('marcar_factura_no_recibida')) return 'Invoice, statement or contract required'
@@ -299,12 +302,17 @@ export async function exportCalls(req: Request, res: Response): Promise<void> {
   }
 }
 
-// Compartido entre el botón "Call" del dashboard (handleOutbound) y el scheduler de
-// llamadas automáticas (autoCallScheduler.service.ts).
+// Compartido entre el botón "Call" del dashboard (handleOutbound), el scheduler de
+// llamadas automáticas (autoCallScheduler.service.ts) y el botón "Test ElevenLabs"
+// (handleOutboundCartesia). `engine` solo cambia a QUÉ webhook de Twilio se conecta el
+// audio: todo lo demás (extensión de conmutador, grabación, límite de tiempo, creación
+// del Call, disposición y avance del ciclo automático en handleStatus) es idéntico para
+// los dos motores — así ElevenLabs se comporta igual que OpenAI en el ciclo automático.
 export async function placeOutboundCall(
   clientId: string,
   publicUrl: string,
-  triggeredBy: 'manual' | 'auto' = 'manual'
+  triggeredBy: 'manual' | 'auto' = 'manual',
+  engine: VoiceEngine = 'openai'
 ): Promise<{ callSid: string; status: string }> {
   const client = await Client.findById(clientId).lean()
   if (!client) throw new Error('Cliente no encontrado')
@@ -323,7 +331,7 @@ export async function placeOutboundCall(
   const call = await twilioClient.calls.create({
     to: toPhone,
     from: process.env.TWILIO_PHONE_NUMBER!,
-    url: `${publicUrl}/api/voice/incoming?clientId=${clientId}`,
+    url: `${publicUrl}/api/voice/${engine === 'elevenlabs' ? 'incoming-cartesia' : 'incoming'}?clientId=${clientId}`,
     statusCallback: `${publicUrl}/api/voice/status`,
     statusCallbackMethod: 'POST',
     // Respaldo duro independiente de nuestra propia lógica de colgado: si el modelo
@@ -607,9 +615,12 @@ export async function processCallStatusUpdate(
 
     const analysis = await analyzeCallTranscript(call.transcript, clientInfo)
     call.summary = analysis.summary
+    // Suma (no sobrescribe): en llamadas por ElevenLabs Claude ya consumió tokens durante
+    // la conversación (ver voiceStreamCartesia.controller.ts). En llamadas de OpenAI esto
+    // arranca en 0, así que el resultado es el mismo de siempre.
     call.claudeUsage = {
-      inputTokens: analysis.usage.inputTokens,
-      outputTokens: analysis.usage.outputTokens,
+      inputTokens: (call.claudeUsage?.inputTokens ?? 0) + analysis.usage.inputTokens,
+      outputTokens: (call.claudeUsage?.outputTokens ?? 0) + analysis.usage.outputTokens,
     }
     await call.save()
     console.log(`[Voice] Resumen post-llamada CallSid ${callSid}: ${analysis.summary}`)

@@ -443,6 +443,22 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         break
       }
 
+      case 'marcar_pago_en_proceso': {
+        const area = typeof args.area === 'string' ? args.area : ''
+        await runAction('crm', 'mark_payment_in_process', { area }, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        requestFollowUpResponse()
+        break
+      }
+
+      case 'marcar_negativa_pago': {
+        const motivo = typeof args.motivo === 'string' ? args.motivo : ''
+        await runAction('crm', 'mark_payment_refusal', { motivo }, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        requestFollowUpResponse()
+        break
+      }
+
       case 'registrar_promesa_pago': {
         const ctx = { amount: args.monto, payment_date: args.fecha }
         await runAction('crm', 'create_payment_commitment', ctx, call)
@@ -469,6 +485,10 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         // como salida de la función para que reaccione de forma natural en su siguiente turno.
         const result = await runAction('payments', 'verify_payment', {}, call)
         const exists = Boolean(result?.payment_exists)
+        // Se excluye del ciclo automático aunque el proveedor no lo haya confirmado
+        // todavía — ver tarjeta "Exclusión automática de clientes del ciclo mensual de
+        // cobranza": el pago queda pendiente de verificación, nunca se confirma solo.
+        await runAction('crm', 'mark_payment_reported', { paymentExists: exists }, call)
         session.sendFunctionCallOutput(callId, { payment_exists: exists })
         requestFollowUpResponse()
         return

@@ -5,6 +5,7 @@ import RecentActivity from "../components/RecentActivity"
 import ClientsTable from "../components/ClientsTable"
 import NewClientModal from "../components/NewClientModal"
 import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
+import BlacklistSection from "../components/BlacklistSection"
 import { getClients } from "../services/clients"
 import { getMetrics } from "../services/metrics"
 import { CircleDollarSign, UsersRound, CircleCheckBig,
@@ -151,7 +152,12 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-       
+
+      {/* Blacklist de clientes morosos con negativa de pago */}
+      <div className="mt-6">
+        <BlacklistSection />
+      </div>
+
       {/* Voice Calls Overview + Weekly Recovery */}
       {metrics?.callStats && (
         <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">

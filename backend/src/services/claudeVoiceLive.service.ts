@@ -50,6 +50,10 @@ export interface ToolOutcome {
 export interface LiveTurnResult {
   message: string
   toolCalls: LiveToolCall[]
+  // Tokens de Claude consumidos en este turno (todas las vueltas de tools sumadas) — se
+  // acumulan en Call.claudeUsage para que la pantalla de Usage refleje también las
+  // llamadas por ElevenLabs.
+  usage: { inputTokens: number; outputTokens: number }
 }
 
 export async function generateLiveVoiceTurn(
@@ -73,6 +77,7 @@ export async function generateLiveVoiceTurn(
 
   const toolCalls: LiveToolCall[] = []
   let message = ''
+  const usage = { inputTokens: 0, outputTokens: 0 }
 
   // Claude a veces responde SOLO con la tool (ej. confirmar_identidad) y sin texto — si el
   // turno terminara ahí, el cliente oiría silencio. Igual que en el pipeline de OpenAI, se
@@ -90,6 +95,8 @@ export async function generateLiveVoiceTurn(
     })
     if (onText) stream.on('text', (delta) => onText(delta))
     const response = await stream.finalMessage()
+    usage.inputTokens += response.usage.input_tokens
+    usage.outputTokens += response.usage.output_tokens
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -110,7 +117,12 @@ export async function generateLiveVoiceTurn(
     // dijo Claude es una pregunta (le toca al cliente). Si solo dijo algo como "Perfecto,
     // gracias." y llamó una tool de registro, se le deja seguir con el siguiente paso del
     // guion — antes el turno se daba por terminado ahí y la llamada se quedaba en silencio.
-    const closesCall = toolUses.some((b) => b.name === 'finalizar_llamada' || b.name === 'requerir_humano')
+    // marcar_extension también cierra el turno: es un conmutador, no hay nada que decirle
+    // (el controlador cuelga y remarca solo) — sin esto Claude recibía el resultado de la
+    // tool y seguía "conversando" con el menú automático.
+    const closesCall = toolUses.some(
+      (b) => b.name === 'finalizar_llamada' || b.name === 'requerir_humano' || b.name === 'marcar_extension'
+    )
     if (toolUses.length === 0 || closesCall || (text.endsWith('?') && !outcomes.some((o) => o.followUp))) break
     if (onText) onText(' ')
 
@@ -121,7 +133,7 @@ export async function generateLiveVoiceTurn(
     })
   }
 
-  return { message, toolCalls }
+  return { message, toolCalls, usage }
 }
 
 // Abre la conexión con Anthropic (TLS + HTTP keep-alive) antes del primer turno real —

@@ -2,12 +2,14 @@ import Message from '../models/Message'
 import Client from '../models/Client'
 import Conversation from '../models/Conversation'
 import PaymentPromise from '../models/PaymentPromise'
+import Ticket from '../models/Ticket'
 import { findOrCreateConversation, updateConversationLastMessage } from './conversationService'
 import { classifyIntent } from './intentClassifier'
 import { advanceWhatsappFlow, FlowContext, FlowState } from './whatsappFlow.service'
 import { sendWhatsappText, sendTypingIndicator } from './whatsappService'
 import { bufferMessage } from './whatsappDebounce.cache'
 import { DispositionStatus, nextActionFor } from '../config/disposition'
+import { endOfCurrentMonthMexicoCity } from '../utils/collectionExclusion'
 
 // Traduce el outcome.type que ya calculó el guion (whatsappFlow.service.ts) al
 // Status del catálogo fijo — no es una clasificación de IA aparte, es una
@@ -25,6 +27,17 @@ const WHATSAPP_OUTCOME_TO_STATUS: Record<string, DispositionStatus> = {
   wrong_contact: 'Wrong number',
   resend_invoice: 'Need invoice',
   pending_human: 'Prefers CAS support',
+  payment_refusal: 'Payment refused',
+  payment_in_process: 'Payment in process',
+}
+
+// Escenarios de la tarjeta "Exclusión automática de clientes del ciclo mensual de
+// cobranza" detectables por WhatsApp — cada uno con el motivo legible que se guarda en
+// Client.collectionExclusionReason (ver excludeFromCollectionWhatsapp abajo).
+const COLLECTION_EXCLUSION_REASON: Partial<Record<string, string>> = {
+  reported_payment: 'Pago reportado',
+  domiciliado: 'Pago domiciliado',
+  payment_in_process: 'Pago en proceso',
 }
 
 // Maps local intent → score
@@ -126,6 +139,49 @@ async function runWhatsappFlowTurn(
       newClientNextAction = nextActionFor(status)
       conversationUpdate.disposition = status
       conversationUpdate.nextAction = newClientNextAction
+    }
+
+    // Negativa explícita de pago detectada por WhatsApp — mismo tratamiento que la voz
+    // (ver flowActions.service.ts, crm.mark_payment_refusal): marca al cliente como
+    // CANDIDATO a Blacklist (no confirmado todavía) y abre un Ticket para que un
+    // administrador lo revise. Ver tarjeta "Implementar Blacklist de Clientes Morosos".
+    if (result.outcome.type === 'payment_refusal') {
+      const reason = result.outcome.notes?.trim() || 'Sin motivo especificado'
+      await Ticket.create({
+        clientId,
+        phone,
+        reason: 'payment_refusal',
+        status: 'open',
+        notes: `Negativa de pago detectada por WhatsApp: "${reason}"`,
+      })
+      await Client.findByIdAndUpdate(clientId, {
+        blacklistStatus: 'candidate',
+        blacklistReason: reason,
+        blacklistMarkedAt: new Date(),
+      })
+    }
+
+    // Pago reportado/en proceso/domiciliado detectado por WhatsApp — ver tarjeta
+    // "Exclusión automática de clientes del ciclo mensual de cobranza": se pausa el
+    // ciclo automático (autoCallScheduler.service.ts / reminderScheduler.service.ts)
+    // hasta fin de mes, SIN marcar el pago como confirmado ni tocar debt/status — el
+    // Ticket abierto es la tarea real de verificación/conciliación (ver mismo
+    // tratamiento en flowActions.service.ts, excludeFromCollection, para voz).
+    const exclusionReason = COLLECTION_EXCLUSION_REASON[result.outcome.type]
+    if (exclusionReason) {
+      const detail = result.outcome.notes?.trim()
+      await Ticket.create({
+        clientId,
+        phone,
+        reason: result.outcome.type,
+        status: result.outcome.type === 'domiciliado' ? 'closed' : 'open',
+        notes: `${exclusionReason} detectado por WhatsApp${detail ? `: "${detail}"` : ''}`,
+      })
+      await Client.findByIdAndUpdate(clientId, {
+        collectionExcludedUntil: endOfCurrentMonthMexicoCity(),
+        collectionExclusionReason: exclusionReason,
+        collectionExcludedAt: new Date(),
+      })
     }
   }
   await Conversation.findByIdAndUpdate(conversationId, conversationUpdate)

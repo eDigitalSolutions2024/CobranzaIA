@@ -88,6 +88,32 @@ export const VOICE_TOOLS = [
   },
   {
     type: 'function',
+    name: 'marcar_pago_en_proceso',
+    description:
+      'Llamar cuando el cliente dice que el pago YA está en trámite interno de su empresa (no que ya se realizó, sino que está siendo procesado) — ej. "está en tesorería", "está en cuentas por pagar", "está en finanzas", "lo tiene IT", "está en autorización", "está en programación", "está en revisión". Distinto de marcar_saldo_pagado (ya se pagó) y de registrar_promesa_pago (fecha futura de pago, todavía no iniciado).',
+    parameters: {
+      type: 'object',
+      properties: {
+        area: { type: 'string', description: 'El área o etapa que mencionó el cliente, ej. "tesorería", "autorización"' },
+      },
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'marcar_negativa_pago',
+    description:
+      'Llamar cuando el cliente se niega EXPLÍCITAMENTE a pagar ("no voy a pagar", "no pienso pagar eso", "no me interesa arreglar esto") — distinto de "no tengo dinero ahora mismo" (eso sigue el flujo normal de buscar una fecha, NO llames a esta función para eso). Marca al cliente como candidato a revisión de cobranza (Blacklist).',
+    parameters: {
+      type: 'object',
+      properties: {
+        motivo: { type: 'string', description: 'La razón que dio el cliente para negarse, en pocas palabras' },
+      },
+      required: ['motivo'],
+    },
+  },
+  {
+    type: 'function',
     name: 'registrar_promesa_pago',
     description:
       'Llamar SOLO después de la confirmación FINAL (la segunda vez que el cliente confirma, tras repetirle el acuerdo en tiempo pasado) — nunca en cuanto mencione fecha/monto por primera vez, ni tras la primera confirmación. Si acuerdan un plan de pagos en varias cuotas, llamar una vez por cada cuota (máximo 12).',
@@ -177,15 +203,6 @@ Número ${phone} no registrado en el sistema. Salúdalo, pide su nombre, informa
 Cuando la llamada deba terminar, despídete y llama a la función finalizar_llamada.`
   }
 
-  const agingGuidance =
-    clientInfo.agingDays <= 0
-      ? `Su pago está próximo a vencer, no ha vencido todavía. Coméntaselo con amabilidad, pero esto es cobranza — igual pregúntale si tiene contemplada una fecha para realizar el pago. No te conformes con solo recordarle: siempre busca obtener un compromiso de fecha, así la cuenta no esté vencida todavía.`
-      : clientInfo.agingDays <= 15
-        ? `Tiene entre 1 y 15 días de atraso. Pregúntale qué fecha estima para pagar.`
-        : clientInfo.agingDays <= 30
-          ? `Tiene entre 16 y 30 días de atraso. Puedes ofrecer una promesa de pago de hasta 15 días naturales.`
-          : `Tiene más de 30 días de atraso. Ofrece opciones de convenio o liquidación antes de acordar fecha y monto.`
-
   const identityConfirmedStep = clientInfo.rfc
     ? `llama a la función confirmar_identidad. Como segundo factor de seguridad, en ese MISMO turno pídele que te diga los últimos 4 caracteres de su RFC. En cuanto te los diga, llama a la función verificar_rfc con exactamente lo que escuchaste (letras y/o números, sin espacios). El sistema te dirá si coinciden:
      - Si coinciden → continúa al punto 3.
@@ -219,9 +236,24 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
         ? `Me comunico por las facturas pendientes de su cuenta: tiene ${overdueCount} facturas vencidas, y la más antigua ya registra ${daysOverdue} días de atraso. El monto total pendiente es de ${debtText}.`
         : `Me comunico por la factura correspondiente al mes anterior, la cual ya venció y actualmente registra ${daysOverdue} días de atraso. El monto pendiente es de ${debtText}.`
 
+  // Usa el MISMO daysOverdue ya resuelto arriba (prioriza las facturas reales sobre
+  // Client.agingDays, que es una foto fija de cuando se importó el cliente y no se
+  // vuelve a recalcular — ver invoiceSummary.service.ts) para que el punto 5 nunca
+  // contradiga lo que el agente ya dijo en el punto 3 (ej. "19 facturas vencidas, 87
+  // días de atraso" y luego "su pago está próximo a vencer" en la misma llamada, visto
+  // en una prueba real).
+  const agingGuidance =
+    daysOverdue === null
+      ? `Su pago está próximo a vencer, no ha vencido todavía. Coméntaselo con amabilidad, pero esto es cobranza — igual pregúntale si tiene contemplada una fecha para realizar el pago. No te conformes con solo recordarle: siempre busca obtener un compromiso de fecha, así la cuenta no esté vencida todavía.`
+      : daysOverdue <= 15
+        ? `Tiene entre 1 y 15 días de atraso. Pregúntale qué fecha estima para pagar.`
+        : daysOverdue <= 30
+          ? `Tiene entre 16 y 30 días de atraso. Puedes ofrecer una promesa de pago de hasta 15 días naturales.`
+          : `Tiene más de 30 días de atraso. Ofrece opciones de convenio o liquidación antes de acordar fecha y monto.`
+
   return `${base}
 
-CLIENTE: ${clientInfo.name}${contactName ? ` | Contacto/responsable: ${contactName}` : ''} | Saldo pendiente: ${clientInfo.debt.toLocaleString('es-MX')} pesos | Días de atraso: ${clientInfo.agingDays}
+CLIENTE: ${clientInfo.name}${contactName ? ` | Contacto/responsable: ${contactName}` : ''} | Saldo pendiente: ${clientInfo.debt.toLocaleString('es-MX')} pesos | Días de atraso: ${daysOverdue ?? 0}
 
 FLUJO A SEGUIR:
 1. Salúdalo y presentate con tu nombre y de donde llamas y en ese MISMO turno ${greetingInstruction} Ejemplo de tono: "${greetingExample}".
@@ -238,10 +270,13 @@ FLUJO A SEGUIR:
 4. Infórmale su saldo pendiente y pregúntale si reconoce el adeudo. Según su respuesta:
    - Si dice que NO lo reconoce → llama a marcar_ticket_aclaracion y requerir_humano, despídete con cortesía.
    - Si dice que YA LO PAGÓ → llama a marcar_saldo_pagado y dile que estás verificando; el sistema te dará el resultado, espera a tenerlo antes de continuar.
+   - Si dice que el pago YA está en trámite interno de su empresa (tesorería, cuentas por pagar, finanzas, IT, autorización, programación, revisión — no que ya se pagó, sino que está en proceso) → llama a marcar_pago_en_proceso con el área que haya mencionado, confírmale con calidez que quedó registrado, y cierra la llamada. NO le pidas fecha de pago ni llames a registrar_promesa_pago.
    - Si SÍ reconoce el adeudo → continúa al punto 5.
 5. ${agingGuidance}
    - Si dice que su pago está domiciliado o tiene cargo automático → llama a marcar_pago_domiciliado, confírmale que quedó registrado con calidez, y cierra la llamada. NO le pidas fecha de pago ni llames a registrar_promesa_pago — no es una promesa, es un cargo automático.
-   - Si no tiene dinero ahora → NUNCA ofrezcas ni aceptes un pago parcial (no existe esa opción). Pregunta para qué fecha podría tener el pago COMPLETO del saldo.
+   - Si dice que el pago YA está en trámite interno de su empresa (mismas áreas del punto 4) → llama a marcar_pago_en_proceso con el área mencionada, confírmale con calidez, y cierra la llamada. NO le pidas fecha de pago.
+   - Si no tiene dinero ahora → NUNCA ofrezcas ni aceptes un pago parcial (no existe esa opción). Pregunta para qué fecha podría tener el pago COMPLETO del saldo. Esto NO es una negativa — sigue buscando una fecha con naturalidad.
+   - Si se niega EXPLÍCITAMENTE a pagar (ej. "no voy a pagar", "no pienso pagar eso", "no me interesa arreglar esto") — distinto de "no tengo dinero ahora", que arriba sigue buscando fecha → llama a marcar_negativa_pago con el motivo que haya dado, despídete con cortesía sin insistir más, y cierra la llamada.
    - Si se enoja → empatiza, ofrece contactarlo en otro momento, cierra la llamada.
    - Si pide que le escriban por WhatsApp → confírmaselo y cierra la llamada.
    - Si propone pagar solo una parte del saldo → explícale con calidez que no se manejan pagos parciales, que necesitas una fecha en la que pueda cubrir el saldo COMPLETO (${clientInfo.debt.toLocaleString('es-MX')} pesos), y vuelve a preguntar la fecha.

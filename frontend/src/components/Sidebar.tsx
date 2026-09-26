@@ -1,8 +1,6 @@
 import {
   LayoutDashboard,
   Users,
-  MessageSquare,
-  MessageCircle,
   Phone,
   ShieldCheck,
   ChevronsLeft,

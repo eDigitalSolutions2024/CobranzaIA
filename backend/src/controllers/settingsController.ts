@@ -71,18 +71,33 @@ export async function upsertExchangeRate(req: AuthedRequest, res: Response) {
 export async function getAutomationSettings(req: AuthedRequest, res: Response) {
   try {
     const settings = await AutomationSettings.findById("global").lean()
-    res.json({ autoCallsEnabled: settings?.autoCallsEnabled ?? false })
+    res.json({
+      autoCallsEnabled: settings?.autoCallsEnabled ?? false,
+      voiceEngine: settings?.voiceEngine ?? "openai",
+    })
   } catch (error) {
     console.error("Error getAutomationSettings:", error)
     res.status(500).json({ message: "Error obteniendo la configuración de automatización" })
   }
 }
 
+// Acepta autoCallsEnabled y/o voiceEngine (al menos uno) — los dos piden contraseña
+// porque cambian qué corre contra clientes reales con costo real.
 export async function updateAutomationSettings(req: AuthedRequest, res: Response) {
   try {
-    const { autoCallsEnabled, password } = req.body as { autoCallsEnabled?: boolean; password?: string }
-    if (typeof autoCallsEnabled !== "boolean") {
+    const { autoCallsEnabled, voiceEngine, password } = req.body as {
+      autoCallsEnabled?: boolean
+      voiceEngine?: string
+      password?: string
+    }
+    if (autoCallsEnabled === undefined && voiceEngine === undefined) {
+      return res.status(400).json({ message: "Se requiere autoCallsEnabled o voiceEngine" })
+    }
+    if (autoCallsEnabled !== undefined && typeof autoCallsEnabled !== "boolean") {
       return res.status(400).json({ message: "autoCallsEnabled debe ser true o false" })
+    }
+    if (voiceEngine !== undefined && voiceEngine !== "openai" && voiceEngine !== "elevenlabs") {
+      return res.status(400).json({ message: "voiceEngine debe ser 'openai' o 'elevenlabs'" })
     }
 
     const check = await verifyPassword(req, password)
@@ -90,11 +105,15 @@ export async function updateAutomationSettings(req: AuthedRequest, res: Response
 
     const settings = await AutomationSettings.findByIdAndUpdate(
       "global",
-      { autoCallsEnabled, updatedBy: check.userId },
+      {
+        ...(autoCallsEnabled !== undefined ? { autoCallsEnabled } : {}),
+        ...(voiceEngine !== undefined ? { voiceEngine } : {}),
+        updatedBy: check.userId,
+      },
       { upsert: true, new: true }
     )
 
-    res.json({ autoCallsEnabled: settings.autoCallsEnabled })
+    res.json({ autoCallsEnabled: settings.autoCallsEnabled, voiceEngine: settings.voiceEngine })
   } catch (error) {
     console.error("Error updateAutomationSettings:", error)
     res.status(500).json({ message: "Error actualizando la configuración de automatización" })

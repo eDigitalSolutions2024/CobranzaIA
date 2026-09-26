@@ -1,10 +1,14 @@
 // Puente de audio Twilio <-> Deepgram (STT) + Claude (conversación) + ElevenLabs (TTS) —
-// PILOTO aislado del camino de producción (voiceStream.controller.ts, que sigue usando
-// OpenAI Realtime sin ningún cambio). Ver el plan en
-// C:\Users\test\.claude\plans\toasty-riding-floyd.md para contexto completo, qué se
-// reutiliza, y el alcance reducido de esta primera versión (no tiene paridad completa
-// con todos los casos ya endurecidos del otro controlador — eso se agrega después si se
-// decide seguir por este camino).
+// motor alterno al de producción (voiceStream.controller.ts, OpenAI Realtime). Se elige
+// para las llamadas AUTOMÁTICAS con AutomationSettings.voiceEngine (ver
+// autoCallScheduler.service.ts); el botón "Test ElevenLabs" siempre lo usa.
+//
+// Paridad con voiceStream.controller.ts en lo que necesita el ciclo automático: mismo
+// marcado (placeOutboundCall, con extensión de conmutador y grabación), mismas tools y
+// prompt (voiceConversation.service.ts), conmutador (marcar_extension + remarcado),
+// buzón de voz (detectedVoicemail), métricas de tiempo y uso de tokens de Claude.
+// Diferencias conocidas: el costo de Deepgram/ElevenLabs no se registra en Usage, y las
+// llamadas ENTRANTES (inbound) no buscan al cliente por teléfono.
 //
 // El nombre de este archivo/rutas ("Cartesia") quedó del plan original — se cambió a
 // ElevenLabs como TTS porque el registro en Cartesia estaba fallando el día de la
@@ -24,6 +28,7 @@ import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { warmUpClaude, generateLiveVoiceTurn, LiveTurn, LiveToolCall, ToolOutcome } from '../services/claudeVoiceLive.service'
 import { ClientInfo } from '../services/voiceConversation.service'
+import { placeOutboundCall } from './voice.controller'
 
 const { VoiceResponse } = twilio.twiml
 
@@ -52,46 +57,16 @@ function getBaseUrl(req: Request): string {
   return `${proto}://${host}`
 }
 
-// Dispara una llamada saliente de PRUEBA por el camino nuevo — separada de
-// placeOutboundCall (voice.controller.ts) a propósito, para no tocar ese archivo. Uso
-// esperado: un script o botón de prueba puntual, no el ciclo automático de cobranza.
-export async function placeOutboundCallCartesia(clientId: string, publicUrl: string): Promise<{ callSid: string; status: string }> {
-  const client = await Client.findById(clientId).lean()
-  if (!client) throw new Error('Cliente no encontrado')
-
-  const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
-  const rawPhone = client.phone as string
-  const toPhone = rawPhone.startsWith('+') ? rawPhone : `+52${rawPhone.replace(/\D/g, '')}`
-
-  const call = await twilioClient.calls.create({
-    to: toPhone,
-    from: process.env.TWILIO_PHONE_NUMBER!,
-    url: `${publicUrl}/api/voice/incoming-cartesia?clientId=${clientId}`,
-    statusCallback: `${publicUrl}/api/voice/status`,
-    statusCallbackMethod: 'POST',
-    timeLimit: 600,
-  })
-
-  await Call.create({
-    phone: toPhone,
-    clientId: client._id,
-    callSid: call.sid,
-    transcript: [],
-    status: 'in_progress',
-    requiresHuman: false,
-    triggeredBy: 'manual',
-  })
-
-  return { callSid: call.sid, status: call.status }
-}
-
-// Endpoint de prueba con auth (a diferencia del webhook de Twilio) — dispara una
-// llamada saliente por el camino nuevo desde el dashboard/Postman/curl.
+// Endpoint con auth (a diferencia del webhook de Twilio) — botón "Test ElevenLabs" del
+// dashboard. Usa placeOutboundCall (voice.controller.ts) con engine 'elevenlabs', el
+// MISMO camino que el ciclo automático cuando el motor está en ElevenLabs — así lo que se
+// prueba aquí (extensión de conmutador, grabación, límite de tiempo) es lo que corre en
+// automático.
 export async function handleOutboundCartesia(req: Request, res: Response): Promise<void> {
   const { clientId } = req.body as { clientId: string }
   try {
     const publicUrl = (process.env.PUBLIC_URL ?? getBaseUrl(req)).replace(/\/$/, '')
-    const result = await placeOutboundCallCartesia(clientId, publicUrl)
+    const result = await placeOutboundCall(clientId, publicUrl, 'manual', 'elevenlabs')
     res.json(result)
   } catch (err: any) {
     console.error('[VoiceCartesia] handleOutboundCartesia error:', err)
@@ -108,7 +83,7 @@ export async function handleIncomingCartesia(req: Request, res: Response): Promi
 
   try {
     if (clientIdParam) {
-      // Outbound: el Call ya se creó en placeOutboundCallCartesia, antes de que Twilio
+      // Outbound: el Call ya se creó en placeOutboundCall, antes de que Twilio
       // conteste — mismo motivo que placeOutboundCall en voice.controller.ts (si nadie
       // contesta, este webhook nunca llega).
     } else {
@@ -166,11 +141,25 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   let firstAudioLogged = false
   let turnAudioMs = 0
   let stageDepth = 0
+  // --- Métricas de tiempo del flujo (para el modal de la llamada, ver CallTimeline.tsx)
+  // — mismo concepto que voiceStream.controller.ts (producción), adaptado a este pipeline.
+  // Este piloto nunca las grabó (se agregó después de esa instrumentación en producción),
+  // por eso el modal se veía sin los contadores/píldoras de función en llamadas del piloto.
+  let callStartAt: number | null = null
+  let lastTurnEndAt: number | null = null
+  let currentUserSpeechStartAt: number | null = null
+  // Texto del turno del agente ya guardado en `history` (para que Claude lo vea de
+  // inmediato) pero cuyo timing todavía no se escribe a Mongo — se hace hasta
+  // tts.on('done') porque solo ahí se conoce durationMs real (audio ya completo), igual
+  // que responseDone en el pipeline de producción. Si el turno se cancela (barge-in),
+  // tts.on('done') nunca llega para ese contexto y este valor simplemente se sobreescribe
+  // en el siguiente turno — la entrada cancelada nunca se guarda, que es lo correcto.
+  let pendingAssistantText: string | null = null
   let consecutiveFailures = 0
   let deepgramReconnects = 0
   const executedOnce = new Set<string>()
   const registeredPromises = new Set<string>()
-  const ONCE_ONLY_TOOLS = new Set(['confirmar_identidad', 'marcar_ticket_aclaracion', 'marcar_factura_no_recibida', 'marcar_pago_domiciliado'])
+  const ONCE_ONLY_TOOLS = new Set(['confirmar_identidad', 'marcar_ticket_aclaracion', 'marcar_factura_no_recibida', 'marcar_pago_domiciliado', 'marcar_pago_en_proceso', 'marcar_negativa_pago'])
 
   const deepgram = new DeepgramSttSession()
   const tts = new ElevenLabsTtsSession()
@@ -218,6 +207,22 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     if (contextId !== currentContextId) return
     agentSpeaking = false
     console.log(`[VoiceCartesia] Turno de voz terminado: ${Math.round(turnAudioMs)}ms de audio en total`)
+
+    // Recién aquí se conoce durationMs real (todo el audio de este turno ya se generó y
+    // se mandó a Twilio) — ver comentario de pendingAssistantText arriba.
+    if (callDocId && pendingAssistantText) {
+      const text = pendingAssistantText
+      pendingAssistantText = null
+      const messageStartAt = turnStartedAt || Date.now()
+      const latencyMs = lastTurnEndAt !== null ? Math.max(0, Math.round(messageStartAt - lastTurnEndAt)) : null
+      const durationMs = turnAudioMs > 0 ? Math.round(turnAudioMs) : null
+      const elapsedMs = callStartAt !== null ? Math.max(0, Math.round(messageStartAt - callStartAt)) : null
+      Call.findByIdAndUpdate(callDocId, {
+        $push: { transcript: { role: 'assistant', content: text, timestamp: new Date(), elapsedMs, latencyMs, durationMs } },
+      }).catch((err) => console.error('[VoiceCartesia] Error guardando transcript del agente:', err))
+      lastTurnEndAt = messageStartAt + (turnAudioMs > 0 ? turnAudioMs : 0)
+    }
+
     if (shouldHangup) {
       const backlogMs = Math.max(0, queueDrainCompleteAt - Date.now())
       setTimeout(() => closeAll(), backlogMs + 300)
@@ -231,6 +236,29 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   })
 
   tts.on('error', (err) => console.error('[VoiceCartesia] Error de ElevenLabs TTS:', err))
+
+  // Solo para medir "cuánto tardó el cliente en empezar a contestar" (latencyMs) — a
+  // diferencia del barge-in de abajo, aquí SÍ sirve el evento crudo de VAD de Deepgram
+  // (no hace falta esperar 2+ palabras para saber que alguien empezó a hablar).
+  deepgram.on('speechStarted', () => {
+    currentUserSpeechStartAt = Date.now()
+  })
+
+  // Guarda el turno del cliente con su timing (elapsedMs/latencyMs, ver CallTimeline.tsx)
+  // y avanza lastTurnEndAt — mismo criterio que voiceStream.controller.ts: el cliente ya
+  // terminó de hablar en cuanto Deepgram cierra el enunciado, así que lastTurnEndAt se
+  // ancla a "ahora", no a currentUserSpeechStartAt (eso es solo para latencyMs).
+  function pushUserTranscript(text: string): void {
+    if (!callDocId) return
+    const messageStartAt = currentUserSpeechStartAt ?? Date.now()
+    const latencyMs = lastTurnEndAt !== null ? Math.max(0, Math.round(messageStartAt - lastTurnEndAt)) : null
+    const elapsedMs = callStartAt !== null ? Math.max(0, Math.round(messageStartAt - callStartAt)) : null
+    currentUserSpeechStartAt = null
+    lastTurnEndAt = Date.now()
+    Call.findByIdAndUpdate(callDocId, {
+      $push: { transcript: { role: 'user', content: text, timestamp: new Date(), elapsedMs, latencyMs } },
+    }).catch((err) => console.error('[VoiceCartesia] Error guardando transcript:', err))
+  }
 
   // Barge-in por PALABRAS reales (interim con 2+ palabras), no por el evento SpeechStarted de
   // Deepgram: ese se dispara con cualquier ruido (tos, eco de la línea, "mjm") y cancelaba
@@ -255,11 +283,11 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     // Buzón de voz / contestadora: no tiene caso hablarle (ni pagar Claude y voz por ello).
     if (history.length <= 3 && VOICEMAIL_PATTERN.test(finishedUtterance)) {
       console.log('[VoiceCartesia] Buzón de voz detectado, terminando llamada')
-      if (callDocId) {
-        Call.findByIdAndUpdate(callDocId, {
-          $push: { transcript: { role: 'user', content: finishedUtterance, timestamp: new Date() } },
-        }).catch((err) => console.error('[VoiceCartesia] Error guardando transcript:', err))
-      }
+      pushUserTranscript(finishedUtterance)
+      // Señal directa (igual que voiceStream.controller.ts): handleStatus la usa para
+      // clasificar 'Voice mail' y reintentar en el ciclo automático, en vez de contarlo
+      // como conversación real.
+      markVoicemail()
       closeAll()
       return
     }
@@ -332,9 +360,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     console.log('[VoiceCartesia] Camino rápido: identidad confirmada sin pasar por Claude')
 
     history.push({ role: 'user', content: text })
-    Call.findByIdAndUpdate(callDocId, {
-      $push: { transcript: { role: 'user', content: text, timestamp: new Date() } },
-    }).catch((err) => console.error('[VoiceCartesia] Error guardando transcript:', err))
+    pushUserTranscript(text)
 
     for (const sentence of IDENTITY_NEXT_STEP.match(/[^.?]+[.?]/g) ?? [IDENTITY_NEXT_STEP]) {
       tts.sendText(ctx, sentence, true)
@@ -347,13 +373,23 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     return true
   }
 
+  // El guardado real a Mongo (con latencyMs/durationMs) se hace en tts.on('done'), no
+  // aquí — aquí solo se actualiza `history` (Claude necesita verlo de inmediato para el
+  // siguiente turno, no puede esperar a que termine de sonar el audio).
   function recordAssistant(text: string): void {
     history.push({ role: 'assistant', content: text })
-    if (callDocId) {
-      Call.findByIdAndUpdate(callDocId, {
-        $push: { transcript: { role: 'assistant', content: text, timestamp: new Date() } },
-      }).catch((err) => console.error('[VoiceCartesia] Error guardando transcript:', err))
-    }
+    pendingAssistantText = text
+    // Mismo criterio que voiceStream.controller.ts: la frase que el prompt instruye decir
+    // en la rama de buzón de voz es la señal directa y confiable de que no contestó una
+    // persona.
+    if (text.toLowerCase().includes('le devolvemos la llamada')) markVoicemail()
+  }
+
+  function markVoicemail(): void {
+    if (!callDocId) return
+    Call.findByIdAndUpdate(callDocId, { detectedVoicemail: true }).catch((err) =>
+      console.error('[VoiceCartesia] Error marcando detectedVoicemail:', err)
+    )
   }
 
   // Habla un texto ya conocido de una sola vez (el saludo) — sin pasar por Claude.
@@ -424,18 +460,19 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     firstAudioLogged = false
     stageDepth = 0
     let ctx = ''
+    // Declarado fuera del try (no dentro) porque el drenado de queuedUserText de abajo
+    // necesita saber si este turno terminó CON o SIN audio, para decidir si tiene que
+    // esperar a tts.on('done') o si puede drenar de inmediato (ver comentario abajo).
+    let spoken = ''
     try {
       if (newUserText) {
         history.push({ role: 'user', content: newUserText })
-        Call.findByIdAndUpdate(callDocId, {
-          $push: { transcript: { role: 'user', content: newUserText, timestamp: new Date() } },
-        }).catch((err) => console.error('[VoiceCartesia] Error guardando transcript:', err))
+        pushUserTranscript(newUserText)
       }
 
       ctx = tts.beginTurn()
       currentContextId = ctx
       let pending = ''
-      let spoken = ''
       let firstTokenLogged = false
 
       const sendChunk = (chunk: string) => {
@@ -472,6 +509,14 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         return executeTool(toolCall)
       })
       flushPending()
+      // Se acumula con $inc (varios turnos por llamada) — mismo patrón que openaiUsage en
+      // voiceStream.controller.ts; handleStatus suma su resumen post-llamada a este total.
+      Call.findByIdAndUpdate(callDocId, {
+        $inc: {
+          'claudeUsage.inputTokens': result.usage.inputTokens,
+          'claudeUsage.outputTokens': result.usage.outputTokens,
+        },
+      }).catch((err) => console.error('[VoiceCartesia] Error guardando uso de Claude:', err))
       console.log(`[VoiceCartesia] +${Date.now() - turnStartedAt}ms Claude terminó: "${spoken}" tools=${result.toolCalls.map((t) => t.name).join(',') || '-'}`)
 
       if (spoken) {
@@ -494,7 +539,13 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     } finally {
       processingTurn = false
     }
-    if (queuedUserText && !closed && !shouldHangup) {
+    // Si el turno SÍ habló (tts.endTurn), el drenado de queuedUserText se hace en
+    // tts.on('done') más arriba, una vez que el audio de ESTE turno termine de sonar —
+    // hacerlo aquí de inmediato pisaría currentContextId mientras ElevenLabs todavía
+    // manda audio en curso (mismo bug ya arreglado para el camino de deepgram.on
+    // ('transcript'), visto de nuevo en pruebas reales por este segundo camino). Si el
+    // turno NO habló (tts.cancel, sin audio que esperar), sí es seguro drenar ya mismo.
+    if (!spoken && queuedUserText && !closed && !shouldHangup) {
       const next = queuedUserText
       queuedUserText = ''
       await runTurn(next)
@@ -520,7 +571,17 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
       registeredPromises.add(key)
     }
 
-    await Call.findByIdAndUpdate(callDocId, { $push: { calledFunctions: toolCall.name } })
+    // functionCallLog es el detalle con elapsedMs para mostrar en el modal EN QUÉ
+    // momento del flujo se disparó cada función (ver CallTimeline.tsx) — calledFunctions
+    // se mantiene igual (solo strings) porque computeVoiceDisposition en
+    // voice.controller.ts depende de ese formato exacto.
+    const functionElapsedMs = callStartAt !== null ? Math.max(0, Math.round(Date.now() - callStartAt)) : 0
+    await Call.findByIdAndUpdate(callDocId, {
+      $push: {
+        calledFunctions: toolCall.name,
+        functionCallLog: { name: toolCall.name, timestamp: new Date(), elapsedMs: functionElapsedMs },
+      },
+    })
     console.log(`[VoiceCartesia] tool llamada: ${toolCall.name}(${JSON.stringify(toolCall.input)})`)
 
     switch (toolCall.name) {
@@ -551,6 +612,18 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         await runAction('crm', 'mark_domiciliado', {}, call)
         return { output: 'ok' }
 
+      case 'marcar_pago_en_proceso': {
+        const area = typeof toolCall.input.area === 'string' ? toolCall.input.area : ''
+        await runAction('crm', 'mark_payment_in_process', { area }, call)
+        return { output: 'ok' }
+      }
+
+      case 'marcar_negativa_pago': {
+        const motivo = typeof toolCall.input.motivo === 'string' ? toolCall.input.motivo : ''
+        await runAction('crm', 'mark_payment_refusal', { motivo }, call)
+        return { output: 'ok' }
+      }
+
       case 'registrar_promesa_pago': {
         const ctx = { amount: toolCall.input.monto as number, payment_date: toolCall.input.fecha as string }
         await runAction('crm', 'create_payment_commitment', ctx, call)
@@ -560,7 +633,9 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
 
       case 'marcar_saldo_pagado': {
         const result = await runAction('payments', 'verify_payment', {}, call)
-        return { output: JSON.stringify({ payment_exists: Boolean(result?.payment_exists) }), followUp: true }
+        const exists = Boolean(result?.payment_exists)
+        await runAction('crm', 'mark_payment_reported', { paymentExists: exists }, call)
+        return { output: JSON.stringify({ payment_exists: exists }), followUp: true }
       }
 
       case 'requerir_humano': {
@@ -580,6 +655,38 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         await call.save()
         shouldHangup = true
         return { output: 'ok' }
+
+      case 'marcar_extension': {
+        // Mismo comportamiento que voiceStream.controller.ts (producción): es un conmutador,
+        // no una persona — se guarda la extensión, se cuelga sin despedida y de inmediato se
+        // vuelve a marcar con la extensión ya integrada en el número (ver placeOutboundCall,
+        // que arma "número,,,,ext#" a partir de Client.knownExtension). La única diferencia
+        // es que el remarcado sigue por el motor ElevenLabs.
+        const extension =
+          typeof toolCall.input.extension === 'string' && toolCall.input.extension.trim()
+            ? toolCall.input.extension.trim()
+            : '1001'
+        const clientBefore = call.clientId ? await Client.findById(call.clientId).lean() : null
+        const alreadyHadExtension = Boolean(clientBefore?.knownExtension)
+
+        if (call.clientId) {
+          await Client.findByIdAndUpdate(call.clientId, { knownExtension: extension })
+        }
+        shouldHangup = true
+
+        // Si esta llamada YA iba con una extensión pre-cargada y de todos modos volvió a
+        // sonar a conmutador, no se reintenta en automático — evita un ciclo de remarcado
+        // infinito si la extensión guardada ya no es la correcta (queda para revisión manual).
+        if (call.clientId && !alreadyHadExtension) {
+          const publicUrl = (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
+          if (publicUrl) {
+            placeOutboundCall(String(call.clientId), publicUrl, 'manual', 'elevenlabs').catch((err) =>
+              console.error('[VoiceCartesia] Error re-marcando con extensión:', err)
+            )
+          }
+        }
+        return { output: 'ok' }
+      }
 
       default:
         console.log(`[VoiceCartesia] Tool "${toolCall.name}" no implementada en este piloto todavía`)
@@ -651,6 +758,9 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         streamSid = event.start?.streamSid ?? null
         const callSid = event.start?.callSid ?? null
         console.log(`[VoiceCartesia] Stream iniciado streamSid=${streamSid} callSid=${callSid}`)
+        // Ancla de todos los elapsedMs/latencyMs del flujo (ver declaración arriba).
+        callStartAt = Date.now()
+        lastTurnEndAt = callStartAt
         if (!callSid) {
           closeAll()
           break

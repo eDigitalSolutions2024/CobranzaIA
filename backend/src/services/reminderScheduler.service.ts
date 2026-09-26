@@ -20,6 +20,16 @@ async function dispatchDueReminders(): Promise<void> {
         continue
       }
 
+      // Pago reportado/en proceso/domiciliado detectado desde que se agendó este
+      // recordatorio — ver tarjeta "Exclusión automática de clientes del ciclo mensual
+      // de cobranza". Se deja 'pending' (no 'failed') — si la exclusión termina antes de
+      // que se agote la promesa, el recordatorio sigue teniendo sentido y se manda solo.
+      const excludedUntil = client.collectionExcludedUntil as Date | null
+      if (excludedUntil && excludedUntil > new Date()) {
+        console.log(`[Reminders] Recordatorio ${reminder._id} pospuesto — ${client.name} excluido del ciclo (${client.collectionExclusionReason}).`)
+        continue
+      }
+
       await prepareWhatsappMessage({
         phone: client.phone,
         template: 'cobranza_recordatorio',

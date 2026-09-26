@@ -151,10 +151,14 @@ export async function getClients(req: Request, res: Response) {
     const page = Math.max(1, Number(req.query.page) || 1)
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100))
     const skip = (page - 1) * limit
+    // Búsqueda opcional por nombre — usada por el buscador de "agregar a la Blacklist"
+    // (BlacklistSection.tsx) para encontrar un cliente sin tener que hojear páginas.
+    const search = String(req.query.search ?? "").trim()
+    const filter = search ? { name: { $regex: search, $options: "i" } } : {}
 
     const [clients, total] = await Promise.all([
-      Client.find().sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      Client.countDocuments(),
+      Client.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Client.countDocuments(filter),
     ])
 
     res.json({ clients, total, page, pages: Math.ceil(total / limit) })

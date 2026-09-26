@@ -12,9 +12,26 @@ interface Props {
   isOpen: boolean
   onClose: () => void
   onImported: () => void
+  // Opcionales — permiten reutilizar el modal para otros imports de clientes (ej. el
+  // "New Client Month Master") sin duplicar la UI de carga/resultado. Sin ellos, se
+  // comporta igual que el "Import Clients" original.
+  title?: string
+  description?: React.ReactNode
+  onUpload?: (file: File) => Promise<ImportResult>
+  uploadDisabledReason?: string
+  showTemplateLink?: boolean
 }
 
-export default function ImportClientsModal({ isOpen, onClose, onImported }: Props) {
+export default function ImportClientsModal({
+  isOpen,
+  onClose,
+  onImported,
+  title = "Import clients from Excel",
+  description,
+  onUpload = importClientsExcel,
+  uploadDisabledReason,
+  showTemplateLink = true,
+}: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ImportResult | null>(null)
@@ -31,7 +48,7 @@ export default function ImportClientsModal({ isOpen, onClose, onImported }: Prop
     setResult(null)
 
     try {
-      const data = await importClientsExcel(file)
+      const data = await onUpload(file)
       setResult(data)
       onImported()
     } catch (err: any) {
@@ -51,28 +68,38 @@ export default function ImportClientsModal({ isOpen, onClose, onImported }: Prop
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className="bg-[var(--bg-main)] border border-[var(--border)] rounded-2xl w-full max-w-lg p-6">
-        <h2 className="text-2xl font-bold text-white mb-2">Import clients from Excel</h2>
+        <h2 className="text-2xl font-bold text-white mb-2">{title}</h2>
         <p className="text-sm text-zinc-400 mb-4">
-          The file must have <strong>CustomerName</strong> and <strong>Phone</strong> columns.
-          Optional: RFC, Country, CustomerID, CollectorID, Team, TeamLeader, Collector, Invoice Number,
-          Create Date, Due Date, Aging Days, Loan/Lease, Debt, USD Amount, Channel, Risk, Contact,
-          Next Action, Payment Promise, Date Promise and Notes. Phone numbers that already exist are skipped;
-          rows with an invalid RFC format are imported without RFC.
+          {description ?? (
+            <>
+              The file must have <strong>CustomerName</strong> and <strong>Phone</strong> columns.
+              Optional: RFC, Country, CustomerID, CollectorID, Team, TeamLeader, Collector, Invoice Number,
+              Create Date, Due Date, Aging Days, Loan/Lease, Debt, USD Amount, Channel, Risk, Contact,
+              Next Action, Payment Promise, Date Promise and Notes. Phone numbers that already exist are skipped;
+              rows with an invalid RFC format are imported without RFC.
+            </>
+          )}
         </p>
 
-        <button
-          onClick={() => downloadClientsTemplate()}
-          className="text-sm text-blue-400 hover:text-blue-300 underline mb-4"
-        >
-          Download sample template
-        </button>
+        {showTemplateLink && (
+          <button
+            onClick={() => downloadClientsTemplate()}
+            className="text-sm text-blue-400 hover:text-blue-300 underline mb-4"
+          >
+            Download sample template
+          </button>
+        )}
+
+        {uploadDisabledReason && (
+          <p className="text-sm text-amber-400 mb-3">{uploadDisabledReason}</p>
+        )}
 
         <input
           ref={fileInputRef}
           type="file"
           accept=".xlsx,.xls"
           onChange={handleFileChange}
-          disabled={loading}
+          disabled={loading || Boolean(uploadDisabledReason)}
           className="block w-full text-sm text-zinc-300 file:mr-4 file:rounded-lg file:border-0 file:bg-brand file:px-4 file:py-2 file:text-white hover:file:bg-brand-light disabled:opacity-50"
         />
 

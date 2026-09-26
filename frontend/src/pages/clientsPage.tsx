@@ -4,8 +4,10 @@ import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
 import ImportInvoicesModal from "../components/ImportInvoicesModal"
+import ImportClientsModal from "../components/ImportClientsModal"
 import ExportClientsModal from "../components/ExportClientsModal"
 import AutoCallToggle from "../components/AutoCallToggle"
+import AutoCallEngineToggle from "../components/AutoCallEngineToggle"
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
 
@@ -47,6 +49,7 @@ export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
   const [openModal, setOpenModal] = useState(false)
   const [importInvoicesOpen, setImportInvoicesOpen] = useState(false)
+  const [monthMasterOpen, setMonthMasterOpen] = useState(false)
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [callingId, setCallingId] = useState<string | null>(null)
   const [callingPilotId, setCallingPilotId] = useState<string | null>(null)
@@ -188,11 +191,18 @@ export default function ClientsPage() {
           </div>
           <div className="flex items-center gap-3">
             <AutoCallToggle />
+            <AutoCallEngineToggle />
             <button
               onClick={() => setImportInvoicesOpen(true)}
               className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
             >
               Import Invoices
+            </button>
+            <button
+              onClick={() => setMonthMasterOpen(true)}
+              className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
+            >
+              New Client Month Master
             </button>
             <button
               onClick={() => setExportModalOpen(true)}
@@ -295,6 +305,16 @@ export default function ClientsPage() {
                           No response
                         </span>
                       )}
+                      {client.collectionExcludedUntil && new Date(client.collectionExcludedUntil) > new Date() && (
+                        <span
+                          title={`${client.collectionExclusionReason ?? "Excluido"} — pausado hasta el ${new Date(
+                            client.collectionExcludedUntil
+                          ).toLocaleDateString("en-US")}`}
+                          className="ml-2 rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-400"
+                        >
+                          Excluded
+                        </span>
+                      )}
                     </td>
                     <td className="py-4">
                       {client.lastIntent && client.lastIntent !== "general" && (
@@ -385,6 +405,9 @@ export default function ClientsPage() {
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Intent
                               </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Excluded until
+                              </th>
                             </tr>
                           </thead>
 
@@ -454,6 +477,19 @@ export default function ClientsPage() {
 
                               <td className="px-4 py-3">
                                 {client.lastIntent || "—"}
+                              </td>
+
+                              <td className="px-4 py-3">
+                                {client.collectionExcludedUntil && new Date(client.collectionExcludedUntil) > new Date() ? (
+                                  <span title={client.collectionExclusionReason || ""}>
+                                    {new Date(client.collectionExcludedUntil).toLocaleDateString("en-US")}
+                                    {client.collectionExclusionReason && (
+                                      <span className="text-zinc-500"> · {client.collectionExclusionReason}</span>
+                                    )}
+                                  </span>
+                                ) : (
+                                  "—"
+                                )}
                               </td>
                             </tr>
                           </tbody>
@@ -640,6 +676,20 @@ export default function ClientsPage() {
         isOpen={importInvoicesOpen}
         onClose={() => setImportInvoicesOpen(false)}
         onImported={loadClients}
+      />
+
+      {/* Import mensual del "maestro de clientes" — solo altas de clientes nuevos, sin
+          facturas. Carga desactivada hasta tener la plantilla del reporte: cuando llegue,
+          pasar aquí `onUpload` (import propio con el mapeo de columnas del maestro) y
+          quitar `uploadDisabledReason` y `showTemplateLink={false}` según corresponda. */}
+      <ImportClientsModal
+        isOpen={monthMasterOpen}
+        onClose={() => setMonthMasterOpen(false)}
+        onImported={loadClients}
+        title="New Client Month Master"
+        description="Monthly client master report: adds only NEW clients (existing ones are skipped) and never touches invoices."
+        showTemplateLink={false}
+        uploadDisabledReason="Coming soon — waiting for the report template to set up the column mapping."
       />
 
       <ExportClientsModal

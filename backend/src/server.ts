@@ -14,6 +14,7 @@ import conversationRoutes from "./routes/conversations"
 import voiceRoutes from "./routes/voice.routes"
 import settingsRoutes from "./routes/settings"
 import usageRoutes from "./routes/usage"
+import blacklistRoutes from "./routes/blacklist"
 import { connectDB } from "./db"
 import { handleMediaStream } from "./controllers/voiceStream.controller"
 import { handleMediaStreamCartesia } from "./controllers/voiceStreamCartesia.controller"
@@ -59,6 +60,7 @@ app.use("/api", conversationRoutes)
 app.use("/api", voiceRoutes)
 app.use("/api", settingsRoutes)
 app.use("/api", usageRoutes)
+app.use("/api", blacklistRoutes)
 
 async function start() {
   if (!process.env.JWT_SECRET) {

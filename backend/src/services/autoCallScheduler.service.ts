@@ -102,6 +102,12 @@ async function runAutoCallCycle(): Promise<void> {
     debt: { $gt: 0 },
     phone: { $exists: true, $nin: [null, ''] },
     requiresHuman: { $ne: true },
+    // Pago reportado/en proceso/domiciliado detectado por la IA (voz o WhatsApp) — ver
+    // tarjeta "Exclusión automática de clientes del ciclo mensual de cobranza". Pausa
+    // SOLO el ciclo automático, no toca debt/status — si la deuda sigue abierta el mes
+    // que entra (el pago nunca se concretó), collectionExcludedUntil ya pasó y el
+    // cliente vuelve a ser elegible normalmente, sin necesitar reincorporarlo a mano.
+    $and: [{ $or: [{ collectionExcludedUntil: null }, { collectionExcludedUntil: { $lte: now } }] }],
     $or: [
       { autoCallCycleStartAt: null },
       { autoCallCycleStartAt: { $lte: cycleThreshold } },
@@ -150,9 +156,9 @@ async function runAutoCallCycle(): Promise<void> {
       })
 
       try {
-        await placeOutboundCall(String(client._id), publicUrl, 'auto')
+        await placeOutboundCall(String(client._id), publicUrl, 'auto', settings.voiceEngine ?? 'openai')
         dispatched++
-        console.log(`[AutoCall] Intento ${attemptNumber}/4 (llamada) disparado: ${client.name} (${client.phone})`)
+        console.log(`[AutoCall] Intento ${attemptNumber}/4 (llamada, motor ${settings.voiceEngine ?? 'openai'}) disparado: ${client.name} (${client.phone})`)
       } catch (err) {
         console.error(`[AutoCall] Error llamando a ${client.name} (${client._id}):`, err)
       }

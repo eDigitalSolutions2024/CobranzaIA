@@ -305,6 +305,64 @@ default:null
 autoCycleExhausted:{
 type:Boolean,
 default:false
+},
+
+// --- Blacklist de clientes morosos con negativa de pago (ver tarjeta "Implementar
+// Blacklist de Clientes Morosos en el Dashboard") ---
+// 'none': nunca se ha marcado. 'candidate': la IA detectó una negativa de pago (voz o
+// WhatsApp) y lo sugiere para revisión. 'confirmed': un administrador lo confirmó (o lo
+// agregó a mano) — este es el que realmente cuenta como "en la Blacklist".
+blacklistStatus:{
+type:String,
+enum:["none","candidate","confirmed"],
+default:"none"
+},
+
+// Motivo de la negativa, en las palabras que dio el cliente (lo llena la IA al marcar,
+// o el administrador al agregar/editar a mano).
+blacklistReason:{
+type:String,
+default:null
+},
+
+// Cuándo se marcó por última vez (como candidato o al confirmarlo) — se usa como
+// "fecha del último contacto" relacionado a la negativa en el listado.
+blacklistMarkedAt:{
+type:Date,
+default:null
+},
+
+// Persona de cobranza asignada para dar seguimiento al caso — texto libre, mismo
+// patrón que `collector`/`teamLeader` (no hay cuentas de usuario por cobrador todavía).
+blacklistAssignedTo:{
+type:String,
+default:null
+},
+
+// --- Exclusión temporal del ciclo automático de cobranza (ver tarjeta "Exclusión
+// automática de clientes del ciclo mensual de cobranza") ---
+// Mientras esta fecha sea futura, autoCallScheduler.service.ts y
+// reminderScheduler.service.ts NO lo eligen para llamadas/mensajes automáticos — normalmente
+// se fija a fin del mes en curso. No borra ni marca el pago como confirmado: solo pausa el
+// ciclo mientras alguien verifica de verdad (ver Ticket asociado). Si al mes siguiente la
+// deuda sigue abierta (el pago nunca se concretó), esta fecha ya pasó y el cliente vuelve a
+// ser elegible normalmente — no hace falta reincorporarlo a mano.
+collectionExcludedUntil:{
+type:Date,
+default:null
+},
+
+// Motivo en texto legible (ej. "Pago reportado", "Pago en proceso — tesorería", "Pago
+// domiciliado") — se muestra en la ficha del cliente.
+collectionExclusionReason:{
+type:String,
+default:null
+},
+
+// Cuándo el cliente dio la información que disparó la exclusión.
+collectionExcludedAt:{
+type:Date,
+default:null
 }
 
 },

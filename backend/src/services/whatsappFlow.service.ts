@@ -100,6 +100,7 @@ function looksLikeAngryOrInsult(text: string): boolean {
 const OUTCOME_TYPES = [
   'reported_payment', 'domiciliado', 'callback_later', 'no_payment_capacity',
   'dispute_amount', 'dispute_invoice', 'wrong_contact', 'resend_invoice', 'pending_human',
+  'payment_refusal', 'payment_in_process',
 ] as const
 
 // Todos requieren un segundo turno para capturar el detalle (fecha, nombre de
@@ -115,6 +116,10 @@ const NEEDS_FOLLOWUP: Record<string, boolean> = {
   wrong_contact: true,
   resend_invoice: true,
   pending_human: false,
+  // Igual que pending_human: cierre inmediato, sin turno extra — el motivo ya viene en
+  // el mensaje que disparó la clasificación (ver notes en handleOutcomeToolUse).
+  payment_refusal: false,
+  payment_in_process: false,
 }
 
 const CLOSING_LINE: Record<string, string> = {
@@ -126,6 +131,8 @@ const CLOSING_LINE: Record<string, string> = {
   dispute_invoice: 'Gracias, un asesor revisará la factura y se pondrá en contacto con usted en breve.',
   wrong_contact: 'Gracias, actualizaremos el contacto para futuras comunicaciones.',
   resend_invoice: 'Con gusto, en breve le reenviamos la factura por este medio. Gracias.',
+  payment_refusal: 'Entendido, quedó registrado. Gracias por su tiempo.',
+  payment_in_process: 'Perfecto, quedó registrado. Gracias por su tiempo.',
 }
 
 const SHARED_OUTCOME_TOOL: Anthropic.Tool = {
@@ -241,6 +248,8 @@ Acabas de preguntarle: "¿Tiene contemplada alguna fecha para realizar el pago?"
 
 - "Está domiciliado" / cargo automático → register_outcome tipo domiciliado. Tu mensaje DEBE ser: "Entendido. ¿El cargo está programado para alguna fecha específica?". NUNCA lo registres como promesa normal.
 
+- El pago YA está en trámite interno de su empresa (tesorería, cuentas por pagar, finanzas, IT, autorización, programación, revisión — no que ya se pagó, sino que está siendo procesado) → register_outcome tipo payment_in_process. Tu mensaje DEBE ser: "Perfecto, quedó registrado. Gracias por su tiempo.".
+
 - "No sé" (desconoce estatus del pago) → register_outcome tipo callback_later. Tu mensaje DEBE ser: "No hay problema. ¿Sabe aproximadamente cuándo podría confirmar la fecha de pago?".
 
 - Respuesta AMBIGUA tipo "creo que sí" (no queda claro si ya tiene fecha contemplada) → request_clarification. Tu mensaje DEBE ser: "Solo para confirmar, ¿se refiere a que sí recibió la factura o a que ya tiene contemplado el pago?". NUNCA asumas ni registres un compromiso ante una respuesta ambigua.
@@ -250,6 +259,8 @@ Acabas de preguntarle: "¿Tiene contemplada alguna fecha para realizar el pago?"
 - "No tengo fecha" (sin compromiso, sin problema evidente) → register_outcome tipo no_payment_capacity. Tu mensaje DEBE ser: "Entiendo. ¿Desea que registremos una fecha tentativa para dar seguimiento?".
 
 - "No puedo pagar en este momento" (posible problema de pago) → register_outcome tipo no_payment_capacity. Tu mensaje DEBE ser: "Entiendo. ¿Tiene una fecha aproximada en la que considere posible realizarlo?".
+
+- Se niega EXPLÍCITAMENTE a pagar ("no voy a pagar", "no pienso pagar eso", "no me interesa arreglar esto") — distinto de no_payment_capacity (que es no poder pagar AHORA, no negarse a pagar) → register_outcome tipo payment_refusal. Tu mensaje DEBE ser: "Entendido, quedó registrado. Gracias por su tiempo.".
 
 - El MONTO/saldo no es correcto (disputa de saldo) → register_outcome tipo dispute_amount. Tu mensaje DEBE ser: "Entiendo. Registraré la diferencia para su revisión. ¿Me puede indicar cuál es el monto que usted tiene registrado?".
 
@@ -298,9 +309,13 @@ La conversación ya se había cerrado (se agotó el guion) y el cliente acaba de
 
 - "Está domiciliado" / cargo automático → register_outcome tipo domiciliado. Tu mensaje DEBE ser: "Entendido. ¿El cargo está programado para alguna fecha específica?". NUNCA lo registres como promesa normal.
 
+- El pago YA está en trámite interno de su empresa (tesorería, cuentas por pagar, finanzas, IT, autorización, programación, revisión) → register_outcome tipo payment_in_process. Tu mensaje DEBE ser: "Perfecto, quedó registrado. Gracias por su tiempo.".
+
 - Pide tiempo para revisarlo / prefiere que le contacten después → register_outcome tipo callback_later. Tu mensaje DEBE ser: "Claro. ¿Qué fecha y horario le convendría para volver a contactarle?".
 
 - No puede pagar en este momento o no tiene fecha → register_outcome tipo no_payment_capacity. Tu mensaje DEBE ser: "Entiendo. ¿Tiene una fecha aproximada en la que considere posible realizarlo?".
+
+- Se niega EXPLÍCITAMENTE a pagar (distinto de no poder pagar ahora) → register_outcome tipo payment_refusal. Tu mensaje DEBE ser: "Entendido, quedó registrado. Gracias por su tiempo.".
 
 - El MONTO/saldo no es correcto (disputa de saldo) → register_outcome tipo dispute_amount. Tu mensaje DEBE ser: "Entiendo. Registraré la diferencia para su revisión. ¿Me puede indicar cuál es el monto que usted tiene registrado?".
 
@@ -380,7 +395,11 @@ function firstToolUse(response: Anthropic.Message): Anthropic.ToolUseBlock | und
 // entre invoice_check y payment_date.
 function handleOutcomeToolUse(
   toolUse: Anthropic.ToolUseBlock,
-  context: FlowContext
+  context: FlowContext,
+  // Mensaje crudo del cliente que disparó esta clasificación — se usa como `notes` en
+  // los outcomes de cierre inmediato (sin turno de seguimiento) para no perder el motivo
+  // que dio, ej. payment_refusal (ver models/Ticket.ts, mismo patrón que la voz).
+  text = ''
 ): FlowResult | null {
   if (toolUse.name === 'request_clarification') {
     const input = toolUse.input as { message: string }
@@ -411,7 +430,7 @@ function handleOutcomeToolUse(
         newState: 'closed',
         newContext: {},
         closeConversation: true,
-        outcome: { type: input.type },
+        outcome: { type: input.type, notes: text.slice(0, 300) },
       }
     }
 
@@ -505,7 +524,7 @@ export async function advanceWhatsappFlow(
       }
     }
 
-    const outcomeResult = handleOutcomeToolUse(toolUse, context)
+    const outcomeResult = handleOutcomeToolUse(toolUse, context, text)
     if (outcomeResult) return outcomeResult
   }
 
@@ -555,7 +574,7 @@ export async function advanceWhatsappFlow(
       }
     }
 
-    const outcomeResult = handleOutcomeToolUse(toolUse, context)
+    const outcomeResult = handleOutcomeToolUse(toolUse, context, text)
     if (outcomeResult) return outcomeResult
   }
 
@@ -688,7 +707,7 @@ export async function advanceWhatsappFlow(
       }
     }
 
-    const outcomeResult = handleOutcomeToolUse(toolUse, {})
+    const outcomeResult = handleOutcomeToolUse(toolUse, {}, text)
     if (outcomeResult) return outcomeResult
 
     return { reply: '', newState: 'closed', newContext: {}, closeConversation: true }

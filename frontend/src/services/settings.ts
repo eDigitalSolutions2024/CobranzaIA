@@ -9,11 +9,19 @@ export const updateExchangeRate = (currencyCode: string, rateToMxn: number, pass
     body: JSON.stringify({ currencyCode, rateToMxn, password }),
   })
 
-export const getAutomationSettings = (): Promise<{ autoCallsEnabled: boolean }> =>
+export type VoiceEngine = "openai" | "elevenlabs"
+
+export const getAutomationSettings = (): Promise<{ autoCallsEnabled: boolean; voiceEngine: VoiceEngine }> =>
   api("/settings/automation")
 
 export const updateAutomationSettings = (autoCallsEnabled: boolean, password: string) =>
   api("/settings/automation", {
     method: "PUT",
     body: JSON.stringify({ autoCallsEnabled, password }),
+  })
+
+export const updateVoiceEngine = (voiceEngine: VoiceEngine, password: string) =>
+  api("/settings/automation", {
+    method: "PUT",
+    body: JSON.stringify({ voiceEngine, password }),
   })

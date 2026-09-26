@@ -238,6 +238,8 @@ const CALLED_FUNCTION_NOTE: Record<string, string> = {
   registrar_promesa_pago: "Payment promise registered",
   marcar_saldo_pagado: "Reported balance as already paid",
   marcar_pago_domiciliado: "Reported automatic/domiciled payment",
+  marcar_pago_en_proceso: "Reported payment in process (internal approval)",
+  marcar_negativa_pago: "Explicitly refused to pay — Blacklist candidate",
   marcar_factura_no_recibida: "Reported invoice not received",
   solicitar_contrato: "Requested a copy of the contract",
   solicitar_estado_cuenta: "Requested account statement",
@@ -454,6 +456,14 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                     {client.risk && (
                       <span className={`rounded-full px-3 py-1 text-xs font-medium ${RISK_COLOR[client.risk] || "bg-zinc-500/10 text-zinc-400"}`}>
                         {RISK_LABEL[client.risk] ?? client.risk}
+                      </span>
+                    )}
+                    {client.collectionExcludedUntil && new Date(client.collectionExcludedUntil) > new Date() && (
+                      <span
+                        title={`Pausado del ciclo automático hasta el ${formatDate(client.collectionExcludedUntil)}`}
+                        className="rounded-full px-3 py-1 text-xs font-medium bg-blue-500/10 text-blue-400"
+                      >
+                        Excluded until {formatDate(client.collectionExcludedUntil)} — {client.collectionExclusionReason}
                       </span>
                     )}
                   </div>

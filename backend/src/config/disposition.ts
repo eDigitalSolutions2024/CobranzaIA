@@ -19,6 +19,8 @@ export const STATUS_OPTIONS = [
   "Need invoice",
   "Phone number updated",
   "Prefers CAS support",
+  "Payment refused",
+  "Payment in process",
 ] as const
 
 export type DispositionStatus = (typeof STATUS_OPTIONS)[number]
@@ -39,6 +41,8 @@ export const NEXT_ACTION_BY_STATUS: Record<DispositionStatus, string> = {
   "Need invoice": "Admin response",
   "Phone number updated": "New Call",
   "Prefers CAS support": "Collector review",
+  "Payment refused": "Collector review",
+  "Payment in process": "Confirm payment",
 }
 
 export function nextActionFor(status: DispositionStatus): string {
