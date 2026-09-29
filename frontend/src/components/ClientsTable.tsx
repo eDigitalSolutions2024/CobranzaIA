@@ -1,5 +1,6 @@
 interface Client {
   nombre: string
+  needsAdmin?: boolean
   deuda: string
   estado: string
   riesgo: string
@@ -64,9 +65,21 @@ export default function ClientsTable({ clients }: Props) {
           </thead>
           <tbody>
             {clients.map((client, index) => (
-              <tr key={index} className="border-b border-zinc-800">
+              <tr
+                key={index}
+                className={`border-b ${client.needsAdmin ? "border-yellow-900/60 bg-yellow-500/10" : "border-zinc-800"}`}
+              >
 
-                <td className="py-4 font-medium">{client.nombre}</td>
+                <td className="py-4 font-medium">
+                  <div className="flex items-center gap-2">
+                    {client.nombre}
+                    {client.needsAdmin && (
+                      <span className="rounded-full bg-yellow-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-yellow-400">
+                        Needs admin
+                      </span>
+                    )}
+                  </div>
+                </td>
 
                 <td className="py-4">{client.deuda}</td>
 

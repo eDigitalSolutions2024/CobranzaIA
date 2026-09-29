@@ -4,6 +4,7 @@ import Client from "../models/Client"
 import PaymentPromise from "../models/PaymentPromise"
 import Call from "../models/Call"
 import Invoice from "../models/Invoice"
+import Ticket from "../models/Ticket"
 import { isValidRFC, normalizeRFC } from "../utils/rfc"
 import { normalizeMexicanPhone } from "../utils/phone"
 import { buildClientReportFilter } from "../utils/reportFilters"
@@ -739,5 +740,29 @@ export async function downloadImportTemplate(req: Request, res: Response) {
   } catch (error) {
     console.error("Error downloadImportTemplate:", error)
     res.status(500).json({ message: "Error generando la plantilla" })
+  }
+}
+
+// "Mark sent" — el administrador ya envió los documentos que el cliente pidió en la
+// llamada (ver crm.request_documents en flowActions.service.ts). Quita Needs Admin y
+// cierra los tickets de documentos abiertos; no toca requiresHuman (Needs Agent), que es
+// un tipo de intervención distinto.
+export async function markNeedsAdminSent(req: Request, res: Response) {
+  try {
+    const { id } = req.params
+    const client = await Client.findByIdAndUpdate(
+      id,
+      { needsAdmin: false, needsAdminDocuments: [], needsAdminDetail: null, needsAdminAt: null },
+      { new: true }
+    )
+    if (!client) return res.status(404).json({ message: "Cliente no encontrado" })
+    await Ticket.updateMany(
+      { clientId: client._id, reason: { $in: ["resend_invoice", "document_request"] }, status: "open" },
+      { status: "closed" }
+    )
+    res.json(client)
+  } catch (error) {
+    console.error("[Clients] markNeedsAdminSent error:", error)
+    res.status(500).json({ message: "Error al marcar como enviado" })
   }
 }

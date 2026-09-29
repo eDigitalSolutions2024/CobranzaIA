@@ -48,6 +48,7 @@ export default function DashboardPage() {
       })
       .map((client: any) => ({
         nombre: client.name,
+        needsAdmin: Boolean(client.needsAdmin),
         deuda: `$${Number(client.debt).toLocaleString("en-US")}`,
         estado: client.status ?? "pending",
         riesgo: client.risk,

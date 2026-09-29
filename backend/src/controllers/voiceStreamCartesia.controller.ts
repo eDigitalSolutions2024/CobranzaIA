@@ -27,7 +27,7 @@ import { ElevenLabsTtsSession } from '../services/elevenLabsTts.service'
 import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { warmUpClaude, generateLiveVoiceTurn, LiveTurn, LiveToolCall, ToolOutcome } from '../services/claudeVoiceLive.service'
-import { ClientInfo } from '../services/voiceConversation.service'
+import { ClientInfo, buildVoicemailMessage } from '../services/voiceConversation.service'
 import { placeOutboundCall } from './voice.controller'
 
 const { VoiceResponse } = twilio.twiml
@@ -109,6 +109,12 @@ export async function handleIncomingCartesia(req: Request, res: Response): Promi
 }
 
 const VOICEMAIL_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono|no est[aá] disponible|fuera del [aá]rea de servicio|el n[uú]mero que usted marc[oó]/i
+// Subconjunto de VOICEMAIL_PATTERN que sí es un buzón que graba (se deja recado); el resto
+// son avisos del operador que no graban nada.
+const VOICEMAIL_RECORDS_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono/i
+// Silencio del buzón (sin texto nuevo de Deepgram) tras el cual se asume que ya sonó el
+// tono y está grabando.
+const VOICEMAIL_SILENCE_MS = 1500
 
 // `name` es la EMPRESA, nunca una persona — con `contact` (el responsable) el saludo se
 // dirige a esa persona y menciona la empresa aparte, igual que en buildVoiceSystemPrompt
@@ -130,6 +136,10 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   let ready = false
   let processingTurn = false
   let shouldHangup = false
+  // Buzón de voz detectado: se espera a que termine su saludo para dejar el recado
+  let voicemailMode = false
+  let voicemailMessageSent = false
+  let voicemailTimer: NodeJS.Timeout | null = null
   let agentSpeaking = false
   let currentContextId: string | null = null
   let queueDrainCompleteAt = 0
@@ -159,7 +169,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   let deepgramReconnects = 0
   const executedOnce = new Set<string>()
   const registeredPromises = new Set<string>()
-  const ONCE_ONLY_TOOLS = new Set(['confirmar_identidad', 'marcar_ticket_aclaracion', 'marcar_factura_no_recibida', 'marcar_pago_domiciliado', 'marcar_pago_en_proceso', 'marcar_negativa_pago'])
+  const ONCE_ONLY_TOOLS = new Set(['confirmar_identidad', 'marcar_ticket_aclaracion', 'marcar_pago_domiciliado', 'marcar_pago_en_proceso', 'marcar_negativa_pago', 'programar_llamada', 'actualizar_contacto'])
 
   const deepgram = new DeepgramSttSession()
   const tts = new ElevenLabsTtsSession()
@@ -265,6 +275,10 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   // la voz del agente a media frase — visto en la prueba real, la llamada se quedaba muda.
   // Nunca se interrumpe una despedida (shouldHangup).
   deepgram.on('interim', (text) => {
+    if (voicemailMode) {
+      if (text.trim()) scheduleVoicemailMessage()
+      return
+    }
     if (!agentSpeaking || !currentContextId || shouldHangup) return
     if (text.trim().split(/\s+/).length < 2) return
     console.log(`[VoiceCartesia] Barge-in por: "${text}"`)
@@ -275,20 +289,41 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
 
   deepgram.on('transcript', (text, isFinal) => {
     if (!text) return
+    // Ya se detectó el buzón: lo que siga es el propio saludo grabado — solo sirve para
+    // saber que todavía no termina de hablar (ver scheduleVoicemailMessage).
+    if (voicemailMode) {
+      if (isFinal) pushUserTranscript(text)
+      scheduleVoicemailMessage()
+      return
+    }
     if (!isFinal) return
     console.log(`[VoiceCartesia] Cliente dijo: "${text}"`)
     utteranceBuffer = utteranceBuffer ? `${utteranceBuffer} ${text}` : text
     const finishedUtterance = utteranceBuffer
     utteranceBuffer = ''
-    // Buzón de voz / contestadora: no tiene caso hablarle (ni pagar Claude y voz por ello).
+    // Buzón de voz / contestadora: no se conversa con él (ni se paga Claude por ello).
     if (history.length <= 3 && VOICEMAIL_PATTERN.test(finishedUtterance)) {
-      console.log('[VoiceCartesia] Buzón de voz detectado, terminando llamada')
       pushUserTranscript(finishedUtterance)
       // Señal directa (igual que voiceStream.controller.ts): handleStatus la usa para
       // clasificar 'Voice mail' y reintentar en el ciclo automático, en vez de contarlo
       // como conversación real.
       markVoicemail()
-      closeAll()
+      // Si el saludo del agente seguía sonando, se corta — no tiene caso sobre un buzón.
+      if (agentSpeaking && currentContextId) {
+        tts.cancel(currentContextId)
+        sendClearToTwilio()
+        agentSpeaking = false
+      }
+      // Mensajes del operador ("el número que usted marcó no está disponible", "fuera del
+      // área de servicio") no graban nada — dejar recado ahí no sirve, se cuelga como antes.
+      if (!VOICEMAIL_RECORDS_PATTERN.test(finishedUtterance)) {
+        console.log('[VoiceCartesia] Mensaje del operador (sin buzón que grabe), terminando llamada')
+        closeAll()
+        return
+      }
+      console.log('[VoiceCartesia] Buzón de voz detectado, esperando el tono para dejar recado')
+      voicemailMode = true
+      scheduleVoicemailMessage()
       return
     }
     if (tryFastIdentityConfirmation(finishedUtterance)) return
@@ -383,6 +418,26 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     // en la rama de buzón de voz es la señal directa y confiable de que no contestó una
     // persona.
     if (text.toLowerCase().includes('le devolvemos la llamada')) markVoicemail()
+  }
+
+  // Recado de voz (ver tarjeta "Dejar un recado de voz por medio del agente AI"): se habla
+  // cuando el saludo grabado del buzón lleva VOICEMAIL_SILENCE_MS sin decir nada — es decir,
+  // ya sonó el tono y el buzón está grabando. Si el buzón lanza la frase detectada antes de
+  // terminar su saludo ("Bienvenido al buzón de voz de... grabe su mensaje"), cada texto
+  // nuevo reinicia la espera. Texto fijo, sin pasar por Claude.
+  function scheduleVoicemailMessage(): void {
+    if (voicemailMessageSent || closed) return
+    if (voicemailTimer) clearTimeout(voicemailTimer)
+    voicemailTimer = setTimeout(leaveVoicemailMessage, VOICEMAIL_SILENCE_MS)
+  }
+
+  function leaveVoicemailMessage(): void {
+    if (voicemailMessageSent || closed) return
+    voicemailMessageSent = true
+    console.log('[VoiceCartesia] Dejando recado en el buzón de voz')
+    shouldHangup = true
+    speakFixed(buildVoicemailMessage(clientInfo))
+    scheduleHangupFallback()
   }
 
   function markVoicemail(): void {
@@ -600,21 +655,37 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         return { output: JSON.stringify({ matches }), followUp: true }
       }
 
-      case 'marcar_ticket_aclaracion':
-        await runAction('crm', 'create_clarification_ticket', {}, call)
+      case 'marcar_ticket_aclaracion': {
+        const { tipo, monto_cliente, detalle } = toolCall.input as Record<string, any>
+        await runAction('crm', 'create_clarification_ticket', { tipo, monto_cliente, detalle }, call)
         return { output: 'ok' }
+      }
 
-      case 'marcar_factura_no_recibida':
-        await runAction('crm', 'mark_invoice_not_received', {}, call)
+      case 'programar_llamada': {
+        const { fecha = '', hora = '', motivo = '' } = toolCall.input as Record<string, any>
+        await runAction('crm', 'schedule_callback', { fecha, hora, motivo }, call)
         return { output: 'ok' }
+      }
+
+      case 'actualizar_contacto': {
+        const { nombre = '', telefono = '', puesto = '' } = toolCall.input as Record<string, any>
+        await runAction('crm', 'update_contact', { nombre, telefono, puesto }, call)
+        return { output: 'ok' }
+      }
+
+      case 'solicitar_documentos': {
+        const { documentos = [], facturas = '', medio = '', detalle = '' } = toolCall.input as Record<string, any>
+        await runAction('crm', 'request_documents', { documentos, facturas, medio, detalle }, call)
+        return { output: 'ok' }
+      }
 
       case 'marcar_pago_domiciliado':
-        await runAction('crm', 'mark_domiciliado', {}, call)
+        await runAction('crm', 'mark_domiciliado', { fecha: typeof toolCall.input.fecha === 'string' ? toolCall.input.fecha : '' }, call)
         return { output: 'ok' }
 
       case 'marcar_pago_en_proceso': {
         const area = typeof toolCall.input.area === 'string' ? toolCall.input.area : ''
-        await runAction('crm', 'mark_payment_in_process', { area }, call)
+        await runAction('crm', 'mark_payment_in_process', { area, fecha_estimada: toolCall.input.fecha_estimada }, call)
         return { output: 'ok' }
       }
 
@@ -634,7 +705,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
       case 'marcar_saldo_pagado': {
         const result = await runAction('payments', 'verify_payment', {}, call)
         const exists = Boolean(result?.payment_exists)
-        await runAction('crm', 'mark_payment_reported', { paymentExists: exists }, call)
+        await runAction('crm', 'mark_payment_reported', { paymentExists: exists, fechaPago: toolCall.input.fecha_pago, montoPagado: toolCall.input.monto_pagado, medioPago: toolCall.input.medio_pago }, call)
         return { output: JSON.stringify({ payment_exists: exists }), followUp: true }
       }
 

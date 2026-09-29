@@ -77,8 +77,8 @@ function shuffle<T>(arr: T[]): T[] {
 // clientes elegibles.
 
 
-//const TEST_GROUP_FIRST_NAMES = ['Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes']
-const TEST_GROUP_FIRST_NAMES = ['British', 'A', '911', '3m']
+const TEST_GROUP_FIRST_NAMES = ['Ever', 'Alberto', 'Laura', 'Ana', 'Francisco', 'Lourdes','Esteban','Gerardo','Leslie' ]
+//const TEST_GROUP_FIRST_NAMES = ['British', 'A', '911', '3m']
 
 
 
@@ -107,6 +107,9 @@ async function runAutoCallCycle(): Promise<void> {
     // SOLO el ciclo automático, no toca debt/status — si la deuda sigue abierta el mes
     // que entra (el pago nunca se concretó), collectionExcludedUntil ya pasó y el
     // cliente vuelve a ser elegible normalmente, sin necesitar reincorporarlo a mano.
+    // Llamada de seguimiento pendiente que el propio cliente pidió ("háblame el jueves") —
+    // no se le llama antes por el ciclo normal; la dispara dispatchScheduledCallbacks.
+    scheduledCallbackAt: null,
     $and: [{ $or: [{ collectionExcludedUntil: null }, { collectionExcludedUntil: { $lte: now } }] }],
     $or: [
       { autoCallCycleStartAt: null },
@@ -197,7 +200,54 @@ async function runAutoCallCycle(): Promise<void> {
   }
 }
 
+// Llamadas de seguimiento agendadas por el agente (programar_llamada → crm.schedule_callback)
+// cuando el cliente pidió que le llamen en un día/hora. Independiente del ciclo de 4
+// pasos: se dispara con triggeredBy 'manual' para no avanzar ni reiniciar ese ciclo, y
+// respeta el mismo interruptor global de llamadas automáticas.
+async function dispatchScheduledCallbacks(): Promise<void> {
+  const settings = await AutomationSettings.findById('global').lean()
+  if (!settings?.autoCallsEnabled) return
+
+  const publicUrl = (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
+  if (!publicUrl) return
+
+  const now = new Date()
+  const due = await Client.find({ scheduledCallbackAt: { $ne: null, $lte: now } }).limit(BATCH_SIZE).lean()
+
+  for (const client of due) {
+    // Se limpia ANTES de llamar, con la misma fecha como condición, para que otra corrida
+    // no la dispare dos veces.
+    const claimed = await Client.findOneAndUpdate(
+      { _id: client._id, scheduledCallbackAt: client.scheduledCallbackAt },
+      { scheduledCallbackAt: null, scheduledCallbackReason: null }
+    )
+    if (!claimed) continue
+
+    // Ya pagó / pago en proceso mientras tanto, o ya no debe nada: no se llama.
+    const excluded = client.collectionExcludedUntil && (client.collectionExcludedUntil as Date) > now
+    if (!client.debt || (client.debt as number) <= 0 || excluded) continue
+
+    const activeCall = await Call.findOne({ phone: client.phone, status: 'in_progress' }).lean()
+    if (activeCall) continue
+
+    try {
+      await placeOutboundCall(String(client._id), publicUrl, 'manual', settings.voiceEngine ?? 'openai')
+      console.log(`[AutoCall] Llamada de seguimiento agendada disparada: ${client.name} (${client.phone})`)
+    } catch (err) {
+      console.error(`[AutoCall] Error en llamada agendada de ${client.name} (${client._id}):`, err)
+    }
+  }
+}
+
 export function startAutoCallScheduler(): void {
+  cron.schedule(
+    '* * * * *',
+    () => {
+      dispatchScheduledCallbacks().catch((err) => console.error('[AutoCall] Error en llamadas agendadas:', err))
+    },
+    { timezone: 'America/Mexico_City' }
+  )
+
   // En modo prueba corre cada 30 segundos (node-cron soporta un 1er campo opcional de
   // segundos), cualquier día/hora — para que el cron mismo no sea el cuello de botella al
   // probar el ciclo rápido. En producción, cada hora en punto y solo horario laboral

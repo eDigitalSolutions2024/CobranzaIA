@@ -81,6 +81,10 @@ export interface ICall extends Document {
   // GET /api/voice/:id/recording (requireAuth) — nunca se expone la URL de Twilio ni las
   // credenciales directo al frontend.
   recordingSid?: string | null
+  // Si la grabación se conserva (true) o se borró de Twilio (false) — solo se conservan
+  // las llamadas de más de 1 minuto con negativa de pago (ver applyRecordingRetention en
+  // voice.controller.ts). null mientras la llamada no termina de procesarse.
+  recordingRetained?: boolean | null
   // Duración reportada por Twilio en el statusCallback final (CallDuration, en segundos) —
   // null hasta que la llamada termina y Twilio manda el webhook 'completed'.
   durationSeconds?: number | null
@@ -133,6 +137,7 @@ const CallSchema = new Schema<ICall>(
     ],
     disposition: { type: String, default: null },
     recordingSid: { type: String, default: null },
+    recordingRetained: { type: Boolean, default: null },
     nextAction: { type: String, default: null },
     durationSeconds: { type: Number, default: null },
     openaiUsage: {

@@ -47,8 +47,57 @@ export const VOICE_TOOLS = [
   {
     type: 'function',
     name: 'marcar_ticket_aclaracion',
-    description: 'Llamar cuando el cliente dice que NO reconoce el adeudo.',
-    parameters: { type: 'object', properties: {}, required: [] },
+    description:
+      'Llamar cuando el cliente dice que NO reconoce el adeudo, que el MONTO no es correcto, o que la FACTURA está incorrecta. Crea un ticket de aclaración para revisión.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tipo: {
+          type: 'string',
+          enum: ['adeudo', 'monto', 'factura', 'servicio', 'contrato', 'otro'],
+          description: '"adeudo" si no reconoce la deuda, "monto" si reconoce la deuda pero no la cifra, "factura" si dice que la factura está incorrecta, "servicio" si hay un problema con el servicio o equipo, "contrato" si hay un problema con el contrato, "otro" para cualquier otro problema (explícalo en detalle)',
+        },
+        monto_cliente: {
+          type: 'number',
+          description: 'Solo para tipo "monto": el monto que el cliente dice tener registrado, en pesos. Omitir si no lo dio.',
+        },
+        detalle: {
+          type: 'string',
+          description: 'Lo que explicó el cliente, en pocas palabras (ej. "cobraron dos veces el mismo cargo"). Vacío si no hay.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'programar_llamada',
+    description:
+      'Llamar cuando el cliente pide que le llamen después o necesita revisar antes de responder ("déjame revisarlo", "háblame después", "ahorita no puedo"), DESPUÉS de preguntarle qué día y horario le conviene. Agenda una nueva llamada.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fecha: { type: 'string', description: 'Día acordado, formato YYYY-MM-DD' },
+        hora: { type: 'string', description: 'Hora acordada en formato 24h HH:MM, hora del centro de México. Vacío si solo dio el día.' },
+        motivo: { type: 'string', description: 'Por qué pidió que le llamen después, en pocas palabras' },
+      },
+      required: ['fecha'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'actualizar_contacto',
+    description:
+      'Llamar cuando quien contesta dice que la cuenta o los pagos los ve OTRA persona, DESPUÉS de preguntarle quién es la persona responsable de cuentas por pagar. Actualiza el contacto del cliente.',
+    parameters: {
+      type: 'object',
+      properties: {
+        nombre: { type: 'string', description: 'Nombre de la persona responsable' },
+        telefono: { type: 'string', description: 'Teléfono de esa persona, solo dígitos. Vacío si no lo dio.' },
+        puesto: { type: 'string', description: 'Puesto o área (ej. "cuentas por pagar"). Vacío si no lo dio.' },
+      },
+      required: ['nombre'],
+    },
   },
   {
     type: 'function',
@@ -68,33 +117,86 @@ export const VOICE_TOOLS = [
   },
   {
     type: 'function',
-    name: 'marcar_factura_no_recibida',
-    description: 'Llamar cuando el cliente dice que NO ha recibido su factura del mes.',
-    parameters: { type: 'object', properties: {}, required: [] },
+    name: 'solicitar_documentos',
+    description:
+      'Llamar cuando el cliente dice que NO tiene, no le ha llegado o pide alguno de estos documentos: factura, contrato o estado de cuenta — DESPUÉS de indagar qué le falta y a qué medio enviárselo (ver flujo). Registra una acción administrativa pendiente para que se lo envíen.',
+    parameters: {
+      type: 'object',
+      properties: {
+        documentos: {
+          type: 'array',
+          items: { type: 'string', enum: ['factura', 'contrato', 'estado_de_cuenta'] },
+          description: 'Los documentos que pidió o dijo no tener',
+        },
+        facturas: {
+          type: 'string',
+          description: 'Qué facturas dice que no le han llegado (ej. "todas", "la de agosto"). Vacío si no lo supo.',
+        },
+        medio: {
+          type: 'string',
+          description: 'Correo o medio donde quiere recibirlas, tal como lo confirmó el cliente. Vacío si no lo dio.',
+        },
+        detalle: {
+          type: 'string',
+          description: 'Cualquier otro contexto que haya dado (ej. "cambió de correo", "le llegan a otra área"). Vacío si no hay.',
+        },
+      },
+      required: ['documentos'],
+    },
   },
   {
     type: 'function',
     name: 'marcar_saldo_pagado',
     description:
-      'Llamar cuando el cliente dice que YA pagó su adeudo. El sistema verificará el pago y te dará el resultado para que continúes la conversación.',
-    parameters: { type: 'object', properties: {}, required: [] },
+      'Llamar cuando el cliente dice que YA pagó su adeudo, DESPUÉS de preguntarle la fecha aproximada en que realizó el pago. El sistema verificará el pago y te dará el resultado para que continúes la conversación.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fecha_pago: {
+          type: 'string',
+          description: 'Fecha aproximada en que dice que pagó, formato YYYY-MM-DD. Vacío si no la supo.',
+        },
+        monto_pagado: {
+          type: 'number',
+          description: 'Monto que dice que pagó, en pesos, solo número. Omitir si no lo dio.',
+        },
+        medio_pago: {
+          type: 'string',
+          description: 'Cómo dice que pagó (ej. "transferencia", "depósito", "cheque"). Vacío si no lo dio.',
+        },
+      },
+      required: [],
+    },
   },
   {
     type: 'function',
     name: 'marcar_pago_domiciliado',
     description:
-      'Llamar cuando el cliente dice que su pago está domiciliado o tiene cargo automático programado. NO es lo mismo que una promesa de pago — nunca llames a registrar_promesa_pago en este caso.',
-    parameters: { type: 'object', properties: {}, required: [] },
+      'Llamar cuando el cliente dice que su pago está domiciliado o tiene cargo automático programado, DESPUÉS de preguntarle para qué fecha está programado ese cargo. El sistema lo registra como un pago programado — no llames por separado a registrar_promesa_pago para esto.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fecha: {
+          type: 'string',
+          description: 'Fecha en la que está programado el cargo, formato YYYY-MM-DD. Vacío si el cliente no la supo.',
+        },
+      },
+      required: [],
+    },
   },
   {
     type: 'function',
     name: 'marcar_pago_en_proceso',
     description:
-      'Llamar cuando el cliente dice que el pago YA está en trámite interno de su empresa (no que ya se realizó, sino que está siendo procesado) — ej. "está en tesorería", "está en cuentas por pagar", "está en finanzas", "lo tiene IT", "está en autorización", "está en programación", "está en revisión". Distinto de marcar_saldo_pagado (ya se pagó) y de registrar_promesa_pago (fecha futura de pago, todavía no iniciado).',
+      'Llamar cuando el cliente dice que el pago YA está en trámite interno de su empresa (no que ya se realizó, sino que está siendo procesado) — ej. "está en tesorería", "está en cuentas por pagar", "está en finanzas", "lo tiene IT", "está en autorización", "está en programación", "está en revisión". Distinto de marcar_saldo_pagado (ya se pagó) y de registrar_promesa_pago (fecha futura de pago, todavía no iniciado). Solo cuando el cliente lo afirma claramente por iniciativa propia; si lo que dijo es ambiguo, pregúntale primero y llama a esta función hasta que lo CONFIRME — nunca en el mismo turno en que se lo preguntas.',
     parameters: {
       type: 'object',
       properties: {
         area: { type: 'string', description: 'El área o etapa que mencionó el cliente, ej. "tesorería", "autorización"' },
+        fecha_estimada: {
+          type: 'string',
+          description: 'Fecha estimada en que el cliente cree que saldrá el pago, formato YYYY-MM-DD. Vacío si no la dio.',
+        },
       },
       required: [],
     },
@@ -103,7 +205,7 @@ export const VOICE_TOOLS = [
     type: 'function',
     name: 'marcar_negativa_pago',
     description:
-      'Llamar cuando el cliente se niega EXPLÍCITAMENTE a pagar ("no voy a pagar", "no pienso pagar eso", "no me interesa arreglar esto") — distinto de "no tengo dinero ahora mismo" (eso sigue el flujo normal de buscar una fecha, NO llames a esta función para eso). Marca al cliente como candidato a revisión de cobranza (Blacklist).',
+      'Llamar en cualquiera de estos dos casos: (1) el cliente se niega EXPLÍCITAMENTE a pagar ("no voy a pagar", "no pienso pagar eso", "no me interesa arreglar esto"); o (2) dice que no tiene dinero y, después de preguntarle 2 veces, sigue sin dar NINGUNA fecha de pago ("no tenemos fecha", "no sé", "ya le dije que no tenemos efectivo"). Un "no tengo dinero ahora" la PRIMERA vez NO cuenta — ahí primero busca una fecha. Marca al cliente como candidato a revisión de cobranza (Blacklist).',
     parameters: {
       type: 'object',
       properties: {
@@ -164,16 +266,29 @@ export const VOICE_TOOLS = [
   },
 ]
 
+// Recado para el buzón de voz (ver tarjeta "Dejar un recado de voz por medio del agente
+// AI") — lo usan el prompt de OpenAI y, como texto fijo, voiceStreamCartesia.controller.ts.
+// Sin montos ni "adeudo": lo puede escuchar otra persona. "le devolvemos la llamada" NO se
+// debe quitar: es la frase con la que voiceStream/voiceStreamCartesia detectan que fue
+// buzón (detectedVoicemail → reintento del ciclo automático) y con la que voiceStream
+// cuelga si el modelo no llama a finalizar_llamada.
+export function buildVoicemailMessage(clientInfo: ClientInfo | null): string {
+  const recipient = clientInfo?.contact?.trim() || clientInfo?.name
+  return `Buen día, le habla Guadalupe Martínez, asistente virtual de HP Financial Services${recipient ? `, con un mensaje para ${recipient}` : ''}. Le llamamos para dar seguimiento a su cuenta; le devolvemos la llamada en otro momento. Que tenga excelente día.`
+}
+
 export function buildVoiceSystemPrompt(clientInfo: ClientInfo | null, phone: string): string {
   const fechaHoy = new Date().toLocaleDateString('es-MX', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })
 
+  const voicemailMessage = buildVoicemailMessage(clientInfo)
+
   const base = `Eres Guadalupe Martínez, asistente virtual de HP Financial Services, del departamento de cobranza. Hablas por teléfono en español mexicano, de forma natural y cálida. Hoy: ${fechaHoy}.
 
 CONMUTADOR VS. BUZÓN DE VOZ (no los confundas, son opuestos):
 - CONMUTADOR/menú automático: es INTERACTIVO, te pide que TÚ hagas algo — "para ventas marque 1, para cobranza marque 2...", "presione la extensión que desea". Si escuchas esto, no converses con él — llama a la función marcar_extension (usa el dígito que haya mencionado para cobranza/pagos si fue claro; si no, usa "1001"), sin decir nada en voz.
-- BUZÓN DE VOZ: es UNIDIRECCIONAL, te pide a TI dejar algo — "no puedo contestar, deje su mensaje después del tono", termina en un beep. NUNCA llames marcar_extension para esto — es una persona que no está disponible, no un conmutador. En este caso simplemente di algo breve (no dejes un mensaje largo) terminando exactamente con la frase "Voy a finalizar la llamada." — por ejemplo: "Gracias, le devolvemos la llamada. Voy a finalizar la llamada." — y llama a la función finalizar_llamada en ese mismo turno.
+- BUZÓN DE VOZ: es UNIDIRECCIONAL, te pide a TI dejar algo — "no puedo contestar, deje su mensaje después del tono", termina en un beep. NUNCA llames marcar_extension para esto — es una persona que no está disponible, no un conmutador. En este caso deja un RECADO de voz: espera a que termine el saludo grabado (y el beep, si lo hay) y di UNA sola vez, con calma y buena dicción, este mensaje: "${voicemailMessage}" — y llama a la función finalizar_llamada en ese mismo turno. Reglas del recado: no menciones montos, saldos, días de atraso ni la palabra "adeudo" (lo puede escuchar otra persona); no hagas preguntas ni esperes respuesta; conserva la frase "le devolvemos la llamada" tal cual.
 
 ESTILO DE VOZ (esto es una llamada real, no un mensaje de texto leído en voz alta):
 - Habla a un ritmo natural de conversación, ni apurada ni robótica — como alguien platicando por teléfono, no leyendo un guion.
@@ -229,12 +344,45 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
   const debtText = `${clientInfo.debt.toLocaleString('es-MX')} pesos`
   const overdueCount = clientInfo.invoices?.overdueCount ?? 0
   const daysOverdue = clientInfo.invoices?.oldestDaysOverdue ?? (clientInfo.agingDays > 0 ? clientInfo.agingDays : null)
+  // Meses de las facturas abiertas (diagrama preventivo, paso 2: "Las facturas corresponden
+  // al mes de Mayo..."). Los NÚMEROS de factura no se dicen en la explicación: son folios
+  // de 12 dígitos y dictarlos no le sirve a nadie (visto en una llamada real: "ciento doce
+  // millones cuatrocientos mil..."). Si el cliente los pide, se dan solo las terminaciones
+  // (invoiceRefs, más abajo) y se ofrece el estado de cuenta.
+  const openInvoices = clientInfo.invoices?.openInvoices ?? []
+  const invoiceMonths = [
+    ...new Set(
+      openInvoices
+        .filter((inv) => inv.issueDate)
+        .map((inv) =>
+          new Date(inv.issueDate as Date).toLocaleDateString('es-MX', { month: 'long', timeZone: 'America/Mexico_City' })
+        )
+    ),
+  ]
+  const monthsText =
+    invoiceMonths.length > 3
+      ? `a varios meses, desde ${invoiceMonths[0]} hasta ${invoiceMonths[invoiceMonths.length - 1]}`
+      : invoiceMonths.length > 1
+        ? `a los meses de ${invoiceMonths.slice(0, -1).join(', ')} y ${invoiceMonths[invoiceMonths.length - 1]}`
+        : invoiceMonths.length === 1
+          ? `al mes de ${invoiceMonths[0]}`
+          : ''
+  const invoiceDetail = monthsText ? ` ${openInvoices.length > 1 ? 'Corresponden' : 'Corresponde'} ${monthsText}.` : ''
+  // Terminaciones (últimos 4 dígitos) de hasta 3 facturas, dichas dígito por dígito:
+  // "seis cuatro cinco ocho" — así se identifica una factura por teléfono.
+  const DIGIT_WORDS = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve']
+  const invoiceRefs = openInvoices
+    .slice(0, 3)
+    .map((inv) => inv.number.replace(/\D/g, '').slice(-4))
+    .filter((digits) => digits.length === 4)
+    .map((digits) => digits.split('').map((d) => DIGIT_WORDS[Number(d)]).join(' '))
   const invoiceExplanation =
-    daysOverdue === null
+    (daysOverdue === null
       ? `Me comunico por la factura correspondiente al mes anterior, que vence próximamente. El monto pendiente es de ${debtText}.`
       : overdueCount > 1
         ? `Me comunico por las facturas pendientes de su cuenta: tiene ${overdueCount} facturas vencidas, y la más antigua ya registra ${daysOverdue} días de atraso. El monto total pendiente es de ${debtText}.`
-        : `Me comunico por la factura correspondiente al mes anterior, la cual ya venció y actualmente registra ${daysOverdue} días de atraso. El monto pendiente es de ${debtText}.`
+        : `Me comunico por la factura correspondiente al mes anterior, la cual ya venció y actualmente registra ${daysOverdue} días de atraso. El monto pendiente es de ${debtText}.`) +
+    invoiceDetail
 
   // Usa el MISMO daysOverdue ya resuelto arriba (prioriza las facturas reales sobre
   // Client.agingDays, que es una foto fija de cuando se importó el cliente y no se
@@ -251,6 +399,56 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
           ? `Tiene entre 16 y 30 días de atraso. Puedes ofrecer una promesa de pago de hasta 15 días naturales.`
           : `Tiene más de 30 días de atraso. Ofrece opciones de convenio o liquidación antes de acordar fecha y monto.`
 
+  // ─── Flujo 1–30 días de atraso (diagrama "Llamada 1–30 días") ───────────────────────
+  // Solo para clientes con 1 a 30 días de atraso; el preventivo (sin vencer) y >30 días
+  // siguen con el flujo de siempre, sin cambios. Decisiones del negocio sobre este
+  // diagrama: la factura NO se identifica por número (folios de 12 dígitos), solo pago
+  // total (igual que el preventivo), doble confirmación en promesas de pago (igual que el
+  // preventivo), y aplican todas las ramas "EN CUALQUIER MOMENTO" + blacklist + buzón.
+  const is1to30 = daysOverdue !== null && daysOverdue >= 1 && daysOverdue <= 30
+  const oldestDueDate = clientInfo.invoices?.oldestDueDate ? new Date(clientInfo.invoices.oldestDueDate) : null
+  // dueDate es "solo día" guardado a medianoche UTC (ver invoiceSummary.service.ts)
+  const dueDateText = oldestDueDate
+    ? `${oldestDueDate.getUTCDate()} de ${oldestDueDate.toLocaleDateString('es-MX', { month: 'long', timeZone: 'UTC' })}`
+    : null
+  const overduePresentation =
+    overdueCount > 1
+      ? `Gracias. Me comunico porque tiene ${overdueCount} facturas vencidas por un total de ${debtText}; la más antigua ${dueDateText ? `venció el ${dueDateText} y ` : ''}actualmente registra ${daysOverdue} días de atraso. ¿Me podría indicar el estatus del pago?`
+      : `Gracias. Me comunico porque su factura por ${debtText} ${dueDateText ? `venció el ${dueDateText} y ` : 'ya venció y '}actualmente registra ${daysOverdue} días de atraso. ¿Me podría indicar el estatus del pago?`
+  const overdue1to30Steps = `3. Presenta el saldo vencido con estas palabras (puedes ajustar el tono, pero conserva los números tal cual): "${overduePresentation}"
+   - Si pregunta de qué factura(s) le hablas → explícaselo con estas palabras: "${invoiceExplanation}" y vuelve a preguntarle por el estatus del pago. NUNCA dictes números de factura completos.${
+     invoiceRefs.length
+       ? ` Si insiste en saber cuáles, dale solo las terminaciones de algunas (${invoiceRefs.map((r) => `terminación ${r}`).join('; ')}${openInvoices.length > invoiceRefs.length ? ', entre otras' : ''}) y ofrécele enviarle su estado de cuenta — si acepta, sigue la regla del ESTADO DE CUENTA (más abajo).`
+       : ''
+   }
+4. Según el estatus del pago que te dé (si su respuesta no es clara, pregúntale cuál es su situación — nunca le leas la lista de opciones):
+   A) YA PAGÓ → NO lo registres como promesa. Obtén, una pregunta por turno y saltándote lo que ya te haya dicho: la fecha en que pagó, el monto y el medio de pago (transferencia, depósito, cheque, etc.). Luego ve al punto 5 (resumen); cuando lo confirme, llama a marcar_saldo_pagado (fecha_pago, monto_pagado, medio_pago) y dile que lo enviarás a verificación. El sistema te dará el resultado; espera a tenerlo antes de seguir al punto 6.
+   B) VA A PAGAR → Obtén una fecha ESPECÍFICA: si dice algo vago ("la próxima semana", "pronto", "a fin de mes"), pídele el día exacto — solo se registra una promesa con fecha específica. Confirma que es por el total: "¿El pago sería por el total del saldo, ${debtText}?".${daysOverdue !== null && daysOverdue > 15 ? ' Puedes ofrecer una promesa de pago de hasta 15 días naturales.' : ''}
+      - Si propone pagar solo una parte → explícale con calidez que no se manejan pagos parciales, que necesitas una fecha en la que pueda cubrir el saldo COMPLETO (${debtText}), y vuelve a preguntar la fecha.
+      - Si no tiene dinero ahora → NUNCA ofrezcas ni aceptes un pago parcial. Pregunta para qué fecha podría tener el pago COMPLETO. La primera vez esto NO es una negativa — busca una fecha con naturalidad.
+      - Si después de preguntarle la fecha 2 veces sigue sin dar NINGUNA (ej. "no tenemos fecha", "no sabemos", "ya le dije que no tenemos efectivo") → NO insistas una tercera vez. Llama a marcar_negativa_pago con un motivo breve (ej. "Sin fecha de pago: no tiene flujo de efectivo"), dile que un agente de cobranza se pondrá en contacto con él o ella para revisar su situación, y ve al punto 7.
+      - Con una fecha específica para el saldo completo → ve al punto 5 (doble confirmación de la promesa).
+   C) EN PROCESO (tesorería, compras, cuentas por pagar, autorización, programación de pagos) → NO lo asumas como pago confirmado. Pregúntale: "¿Tiene una fecha estimada en que saldría el pago?".
+      - Si da una fecha estimada → ve al punto 5 (resumen); cuando lo confirme, llama a marcar_pago_en_proceso (area, fecha_estimada).
+      - Si no tiene fecha estimada → pregúntale qué día y horario le puedes volver a contactar para darle seguimiento. Ve al punto 5 (resumen); cuando lo confirme, llama a marcar_pago_en_proceso (area) y a programar_llamada (fecha, hora, motivo "Seguimiento de pago en proceso").
+      - Toma este camino SOLO si el cliente lo dice por iniciativa propia — NUNCA le sugieras tú que el pago "está en trámite" o "en revisión".
+   D) NO RECIBIÓ LA FACTURA → Confírmale el correo o medio al que se la reenvían (si te dicta un correo, repíteselo para confirmar que lo escuchaste bien) y pregúntale qué día le puedes volver a llamar para confirmar que la recibió. Ve al punto 5 (resumen); cuando lo confirme, llama a solicitar_documentos (documentos ["factura"], medio, detalle) y a programar_llamada (fecha, hora, motivo "Seguimiento de factura reenviada").
+   E) DISPUTA U OTRO PROBLEMA → Pregúntale: "Entiendo. ¿Me podría indicar brevemente cuál es el problema?" e identifica el motivo:
+      - El MONTO no es correcto → pregúntale cuál es el monto que tiene registrado. Ve al punto 5 (resumen); cuando lo confirme, llama a marcar_ticket_aclaracion (tipo "monto", monto_cliente, detalle). En este caso NO llames a requerir_humano.
+      - La factura está incorrecta, un problema con el servicio o el contrato, no reconoce el adeudo, u otro → ve al punto 5 (resumen); cuando lo confirme, llama a marcar_ticket_aclaracion (tipo "factura", "servicio", "contrato", "adeudo" u "otro", con el detalle) y a requerir_humano.
+   F) PAGO DOMICILIADO / CARGO AUTOMÁTICO → pregúntale si el cargo ya se realizó.
+      - Si ya se realizó → trátalo como YA PAGÓ (A).
+      - Si no se realizó o falló → pídele que solicite el reproceso del cargo y pregúntale para qué fecha quedaría. Ve al punto 5 (resumen); cuando lo confirme, llama a marcar_pago_domiciliado (fecha).
+   En cualquier caso:
+   - Si se niega EXPLÍCITAMENTE a pagar (ej. "no voy a pagar", "no pienso pagar eso") → llama a marcar_negativa_pago con el motivo que haya dado, despídete con cortesía sin insistir más, y ve al punto 7.
+   - Si se enoja → empatiza, ofrece contactarlo en otro momento (sigue la regla de LLAMAR DESPUÉS, más abajo).
+   - Si pide que le escriban por WhatsApp → confírmaselo y ve al punto 7.
+5. CONFIRMACIÓN / RESUMEN:
+   - Si es una PROMESA DE PAGO (B): NO llames todavía a registrar_promesa_pago. Repite la intención en tiempo futuro: "Para confirmar, registraré el pago por [monto] pesos para el [fecha]. ¿Es correcta la información?". Si corrige el monto o la fecha, repite la nueva intención y vuelve a preguntar. Cuando confirme, repítelo en tiempo PASADO: "Para confirmar, he registrado el pago por [monto] pesos para el [fecha]. ¿Es correcta esta información?". Si corrige algo, vuelve a repetirlo en pasado hasta que confirme sin cambios. Cuando confirme esa segunda vez, AHORA SÍ llama a registrar_promesa_pago y ve al punto 6.
+   - Para cualquier otro caso (A, C, D, E, F): resume en una frase lo acordado — ej. "Para confirmar, usted realizó el pago el [fecha] por [monto] mediante [medio], y lo enviaremos a verificación. ¿Es correcta la información?", o "Para confirmar, le reenviaremos la factura a [correo] y le llamaremos el [fecha] para dar seguimiento. ¿Es correcta la información?". Si corrige algo, ajústalo y vuelve a preguntar. Cuando confirme, llama a la(s) función(es) de su caso y ve al punto 6.
+6. REGISTRO FINAL: di "Perfecto. He registrado la información en nuestro sistema. Si surge algún cambio, puede responder a nuestros mensajes o comunicarse con nosotros." Si llamaste a requerir_humano, dile además que un agente se pondrá en contacto con él o ella a la brevedad.
+7. CIERRE: despídete con "Muchas gracias por su tiempo. Le atendió Guadalupe Martínez, asistente virtual de HP Financial Services. Que tenga excelente día." y llama a la función finalizar_llamada.`
+
   return `${base}
 
 CLIENTE: ${clientInfo.name}${contactName ? ` | Contacto/responsable: ${contactName}` : ''} | Saldo pendiente: ${clientInfo.debt.toLocaleString('es-MX')} pesos | Días de atraso: ${daysOverdue ?? 0}
@@ -261,22 +459,35 @@ FLUJO A SEGUIR:
    - Si confirma → ${identityConfirmedStep}
    - Si dice que no es él, o da un nombre claramente distinto → pregunta una sola vez más para descartar mala transcripción del audio. Si en ese segundo intento sigue sin coincidir, despídete con cortesía y llama a la función requerir_humano. Nunca hagas más de 2 intentos en total — repetir la pregunta varias veces es peor que escalar rápido.
    - Si pide hablar con una persona en cualquier momento → llama a requerir_humano.
-3. Pregúntale: "Gracias. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?".
+${is1to30 ? overdue1to30Steps : `3. Pregúntale: "Gracias. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?".
    - Si confirma que SÍ las recibió → continúa al punto 4.
-   - Si dice que NO las ha recibido → llama a la función marcar_factura_no_recibida, dile con calidez que en breve se la reenvían por este medio, despídete y llama a finalizar_llamada. No sigas con el saldo ni la fecha de pago en esta llamada.
-   - Si pregunta de qué facturas le hablas, o dice que no sabe a cuáles te refieres (ej. "¿de qué facturas me habla?", "¿cuáles facturas?") → NO escales todavía, ya tienes los datos de su cuenta. Explícaselo con estas palabras (puedes ajustar el tono, pero conserva los números tal cual, no los cambies ni inventes otros): "${invoiceExplanation}" Después pregúntale si ya la recibió o si la reconoce, y continúa al punto 4 según su respuesta.
+   - Si dice que NO las ha recibido → NO cierres todavía. Primero indaga brevemente, UNA pregunta por turno, con naturalidad (no como interrogatorio), y sáltate cualquier pregunta que el cliente ya haya respondido por su cuenta:
+     a) ¿Cuáles no le han llegado? ¿Ninguna, o alguna en particular (de qué mes)?
+     b) ¿A qué correo o medio le gustaría que se las reenvíen? Si te dicta un correo, repíteselo para confirmar que lo escuchaste bien.
+     c) Si comenta el motivo (cambió de correo, le llegan a otra persona o área, se van a spam, etc.), tómalo en cuenta; no se lo preguntes si no lo menciona.
+     Si no sabe o no quiere dar algún dato, no insistas y sigue. Con lo que hayas obtenido, llama a la función solicitar_documentos con documentos ["factura"] (más facturas, medio y detalle), confírmale con calidez que en breve se las reenvían a ese medio, despídete y llama a finalizar_llamada. No sigas con el saldo ni la fecha de pago en esta llamada.
+     Si en esa misma respuesta también dice que le falta el contrato o el estado de cuenta, inclúyelos en la misma llamada a solicitar_documentos (ej. ["factura", "estado_de_cuenta"]).
+   - Si pregunta de qué facturas le hablas, o dice que no sabe a cuáles te refieres (ej. "¿de qué facturas me habla?", "¿cuáles facturas?") → NO escales todavía, ya tienes los datos de su cuenta. Explícaselo con estas palabras (puedes ajustar el tono, pero conserva los números tal cual, no los cambies ni inventes otros): "${invoiceExplanation}" Después pregúntale si ya la recibió o si la reconoce, y continúa al punto 4 según su respuesta. NUNCA dictes números de factura completos.${
+     invoiceRefs.length
+       ? ` Si te pide específicamente cuáles facturas o sus números, dale solo las terminaciones de algunas (${invoiceRefs.map((r) => `terminación ${r}`).join('; ')}${openInvoices.length > invoiceRefs.length ? ', entre otras' : ''}) y ofrécele enviarle su estado de cuenta con el detalle completo — si acepta, sigue la regla del ESTADO DE CUENTA (más abajo).`
+       : ''
+   }
    - Si DESPUÉS de esa explicación sigue sin reconocer la factura o dice que no le corresponde → llama a marcar_ticket_aclaracion y requerir_humano, despídete con cortesía.
+   - Si dice que la FACTURA ESTÁ INCORRECTA (en este punto o en cualquier otro) → primero pregúntale: "Entiendo. ¿Podría indicarme brevemente cuál es la diferencia que detectó?". Con su respuesta, llama a marcar_ticket_aclaracion (tipo "factura", detalle) y a requerir_humano, y despídete con cortesía.
    - Si no está segura o no sabe si las recibió (pero eso no le impide seguir) → no te detengas por esto, continúa al punto 4 igual.
 4. Infórmale su saldo pendiente y pregúntale si reconoce el adeudo. Según su respuesta:
    - Si dice que NO lo reconoce → llama a marcar_ticket_aclaracion y requerir_humano, despídete con cortesía.
-   - Si dice que YA LO PAGÓ → llama a marcar_saldo_pagado y dile que estás verificando; el sistema te dará el resultado, espera a tenerlo antes de continuar.
+   - Si reconoce la deuda pero dice que el MONTO NO ES CORRECTO → dile: "Entiendo. Registraré la diferencia para su revisión. ¿Me puede indicar cuál es el monto que usted tiene registrado?". Con su respuesta, llama a marcar_ticket_aclaracion (tipo "monto", monto_cliente, detalle), confírmale que el área correspondiente revisará la diferencia, despídete y llama a finalizar_llamada. En este caso NO llames a requerir_humano.
+   - Si dice que YA LO PAGÓ → primero pregúntale: "Gracias. ¿Me puede indicar la fecha aproximada en que se realizó el pago?". Con su respuesta (o sin ella, si no la sabe), llama a marcar_saldo_pagado (fecha_pago) y dile que estás verificando; el sistema te dará el resultado, espera a tenerlo antes de continuar.
    - Si dice que el pago YA está en trámite interno de su empresa (tesorería, cuentas por pagar, finanzas, IT, autorización, programación, revisión — no que ya se pagó, sino que está en proceso) → llama a marcar_pago_en_proceso con el área que haya mencionado, confírmale con calidez que quedó registrado, y cierra la llamada. NO le pidas fecha de pago ni llames a registrar_promesa_pago.
    - Si SÍ reconoce el adeudo → continúa al punto 5.
 5. ${agingGuidance}
-   - Si dice que su pago está domiciliado o tiene cargo automático → llama a marcar_pago_domiciliado, confírmale que quedó registrado con calidez, y cierra la llamada. NO le pidas fecha de pago ni llames a registrar_promesa_pago — no es una promesa, es un cargo automático.
+   - Si dice que su pago está domiciliado o tiene cargo automático → pregúntale para qué fecha está programado ese cargo. Con la fecha (o sin ella, si no la sabe), llama a marcar_pago_domiciliado (fecha), confírmale que quedó registrado con calidez, y cierra la llamada. NO llames a registrar_promesa_pago por separado — es el mismo registro.
    - Si dice que el pago YA está en trámite interno de su empresa (mismas áreas del punto 4) → llama a marcar_pago_en_proceso con el área mencionada, confírmale con calidez, y cierra la llamada. NO le pidas fecha de pago.
-   - Si no tiene dinero ahora → NUNCA ofrezcas ni aceptes un pago parcial (no existe esa opción). Pregunta para qué fecha podría tener el pago COMPLETO del saldo. Esto NO es una negativa — sigue buscando una fecha con naturalidad.
-   - Si se niega EXPLÍCITAMENTE a pagar (ej. "no voy a pagar", "no pienso pagar eso", "no me interesa arreglar esto") — distinto de "no tengo dinero ahora", que arriba sigue buscando fecha → llama a marcar_negativa_pago con el motivo que haya dado, despídete con cortesía sin insistir más, y cierra la llamada.
+   - Si no tiene dinero ahora → NUNCA ofrezcas ni aceptes un pago parcial (no existe esa opción). Pregunta para qué fecha podría tener el pago COMPLETO del saldo. La primera vez esto NO es una negativa — busca una fecha con naturalidad.
+   - Si después de preguntarle la fecha 2 veces sigue sin dar NINGUNA (ej. "no tenemos fecha", "no sabemos", "ya le dije que no tenemos efectivo") → NO insistas una tercera vez ni inventes otras salidas. Llama a marcar_negativa_pago con un motivo breve (ej. "Sin fecha de pago: no tiene flujo de efectivo"), dile que un agente de cobranza se pondrá en contacto con él o ella para revisar su situación, despídete y llama a finalizar_llamada.
+   - NUNCA le sugieras tú que el pago "está en trámite" o "en revisión" para sacar una respuesta — solo toma el camino de pago en proceso si el cliente lo dice por iniciativa propia.
+   - Si se niega EXPLÍCITAMENTE a pagar (ej. "no voy a pagar", "no pienso pagar eso", "no me interesa arreglar esto") → llama a marcar_negativa_pago con el motivo que haya dado, despídete con cortesía sin insistir más, y cierra la llamada.
    - Si se enoja → empatiza, ofrece contactarlo en otro momento, cierra la llamada.
    - Si pide que le escriban por WhatsApp → confírmaselo y cierra la llamada.
    - Si propone pagar solo una parte del saldo → explícale con calidez que no se manejan pagos parciales, que necesitas una fecha en la que pueda cubrir el saldo COMPLETO (${clientInfo.debt.toLocaleString('es-MX')} pesos), y vuelve a preguntar la fecha.
@@ -287,7 +498,18 @@ FLUJO A SEGUIR:
 7. Esta es la confirmación FINAL:
    - Si corrige algo → vuelve a repetirlo en pasado y pregunta de nuevo, hasta que confirme sin cambios.
    - Si confirma → AHORA SÍ llama a la función registrar_promesa_pago (una llamada por cada cuota, si acuerdan un plan de pagos, máximo 12 cuotas) y continúa al punto 8.
-8. Cierra siempre con calidez. En cuanto la conversación termine (con o sin acuerdo), despídete y llama a la función finalizar_llamada.`
+8. Cierra siempre con calidez. Si quedó registrado un compromiso de pago, despídete con: "Queda registrado. Muchas gracias por su tiempo. Le atendió Guadalupe Martínez, asistente virtual de HP Financial Services. Que tenga excelente día." En los demás cierres usa la misma despedida, omitiendo "Queda registrado" si no se registró nada. En cuanto la conversación termine (con o sin acuerdo), despídete y llama a la función finalizar_llamada.`}
+
+EN CUALQUIER MOMENTO DE LA LLAMADA — si el cliente pide que le llamen después o necesita revisar antes de responder (ej. "déjame revisarlo", "háblame después", "ahorita no puedo atenderle", "lo tengo que consultar"):
+   - Pregúntale: "Claro. ¿Qué día y horario sería conveniente para volver a contactarle?". Con su respuesta, llama a programar_llamada (fecha, hora, motivo), confírmale el día y la hora en que se le llamará, despídete y llama a finalizar_llamada.
+   - Esto NO es una negativa de pago ni cuenta como intento sin fecha: nunca llames a marcar_negativa_pago en este caso.
+
+EN CUALQUIER MOMENTO DE LA LLAMADA — si quien contesta dice que la cuenta o los pagos los ve OTRA persona (ej. "eso lo ve otra persona", "yo no veo pagos", "tiene que hablar con cuentas por pagar") — distinto de "no soy esa persona" en el saludo, que sigue el punto 2:
+   - Pregúntale: "Entiendo. ¿Me podría indicar quién es la persona responsable de cuentas por pagar?" y, si es posible, un teléfono para contactarla. Llama a actualizar_contacto (nombre, telefono, puesto), agradécele, dile que se comunicarán con esa persona, despídete y llama a finalizar_llamada.
+
+EN CUALQUIER MOMENTO DE LA LLAMADA — si el cliente pide o dice que no tiene su CONTRATO o su ESTADO DE CUENTA (ej. "no tengo el contrato", "mándeme mi estado de cuenta", "necesito el estado de cuenta para pagar"):
+   - Pregúntale a qué correo o medio se lo envían (si te dicta un correo, repíteselo para confirmar), llama a solicitar_documentos con los documentos que pidió, y confírmale que se lo harán llegar.
+   - Después retoma el flujo en el punto en que ibas. Si te dice que no puede dar una fecha de pago hasta tener ese documento, NO lo trates como negativa de pago: agradécele, dile que en cuanto lo reciba lo volverán a contactar, despídete y llama a finalizar_llamada.`
 }
 
 // Vocabulario de dominio para sesgar la TRANSCRIPCIÓN (session.audio.input.transcription.

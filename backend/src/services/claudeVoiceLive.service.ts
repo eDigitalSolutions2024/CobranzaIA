@@ -28,7 +28,8 @@ const LIVE_FORMAT_RULES = `
 FORMATO DE ESTA LLAMADA EN VIVO (obligatorio):
 - En cada turno escribe TODO lo que vas a decir en voz alta en un solo mensaje, y llama las funciones de registro (confirmar_identidad, etc.) en ese mismo turno.
 - Nunca respondas solo con una frase de cortesía como "Perfecto, gracias." dejando la siguiente pregunta del guion para después de llamar la función: incluye la siguiente pregunta en ese mismo mensaje.
-- Todo lo que escribas se lee en voz alta: no escribas acotaciones, notas ni texto entre paréntesis.`
+- Todo lo que escribas se lee en voz alta: no escribas acotaciones, notas ni texto entre paréntesis.
+- CIFRAS (reemplaza la regla "Montos en palabras" de arriba): escribe montos, cantidades y fechas con DÍGITOS, tal como vienen en los datos — ej. "1,685,641.34 pesos", "91 días", "19 facturas", "el 15 de octubre". El sistema de voz los convierte a palabras con la gramática correcta; si tú los escribes con letra, salen errores como "noventa y uno días".`
 
 export interface LiveTurn {
   role: 'user' | 'assistant'

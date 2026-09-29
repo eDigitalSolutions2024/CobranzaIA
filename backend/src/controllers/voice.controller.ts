@@ -8,6 +8,7 @@ import Client from '../models/Client'
 import { findClientByPhone } from '../services/customerLookup.service'
 import { analyzeCallTranscript, ClientInfo } from '../services/claudeVoice.service'
 import { DispositionStatus, nextActionFor } from '../config/disposition'
+import { runAction } from '../services/flowActions.service'
 import { CLIENT_REPORT_FIELDS, buildClientReportFilter } from '../utils/reportFilters'
 import type { VoiceEngine } from '../models/AutomationSettings'
 
@@ -29,13 +30,32 @@ function computeVoiceDisposition(calledFunctions: string[], relevantTurnCount: n
   if (calledFunctions.includes('marcar_negativa_pago')) return 'Payment refused'
   if (calledFunctions.includes('marcar_pago_en_proceso')) return 'Payment in process'
   if (calledFunctions.includes('registrar_promesa_pago')) return 'Payment scheduled'
+  // Domiciliado = pago programado con fecha (ver crm.mark_domiciliado)
+  if (calledFunctions.includes('marcar_pago_domiciliado')) return 'Payment scheduled'
   if (calledFunctions.includes('marcar_saldo_pagado')) return 'Payment received'
-  if (calledFunctions.includes('marcar_factura_no_recibida')) return 'Invoice, statement or contract required'
+  if (calledFunctions.includes('solicitar_documentos') || calledFunctions.includes('marcar_factura_no_recibida')) {
+    return 'Invoice, statement or contract required'
+  }
   if (calledFunctions.includes('requerir_humano') || calledFunctions.includes('marcar_ticket_aclaracion')) {
     return 'Prefers CAS support'
   }
+  if (calledFunctions.includes('programar_llamada')) return 'Follow up'
+  if (calledFunctions.includes('actualizar_contacto')) return 'Phone number updated'
   if (relevantTurnCount < 2) return 'Customer hung up'
   return 'Contact made - No resolution'
+}
+
+// Status del cliente (enum de Client.status) según el resultado de su última llamada.
+// null = no tocarlo: 'Payment received' lo decide crm.mark_payment_reported según si el
+// proveedor de pagos confirma el pago (no basta con que el cliente diga que ya pagó).
+const CLIENT_STATUS_BY_DISPOSITION: Partial<Record<DispositionStatus, string | null>> = {
+  'No answer': 'no_response',
+  'Voice mail': 'no_response',
+  'Customer hung up': 'no_response',
+  'Payment scheduled': 'promised',
+  'Payment in process': 'negotiating',
+  'Extension required': 'negotiating',
+  'Payment received': null,
 }
 
 async function applyDisposition(
@@ -46,7 +66,17 @@ async function applyDisposition(
   const nextAction = nextActionFor(status)
   await Call.findByIdAndUpdate(callId, { disposition: status, nextAction })
   if (clientId) {
-    await Client.findByIdAndUpdate(clientId, { nextAction })
+    // Cualquier otra disposition implica que sí contestó una persona → 'contacted'
+    const clientStatus = status in CLIENT_STATUS_BY_DISPOSITION ? CLIENT_STATUS_BY_DISPOSITION[status] : 'contacted'
+    await Client.findByIdAndUpdate(clientId, {
+      nextAction,
+      lastCallDisposition: status,
+      lastCallAt: new Date(),
+      // Se limpia aquí para no dejar la conclusión de una llamada anterior; si hubo
+      // conversación, processCallStatusUpdate la vuelve a llenar tras el análisis.
+      lastCallConclusion: null,
+      ...(clientStatus ? { status: clientStatus } : {}),
+    })
   }
 }
 
@@ -422,6 +452,34 @@ export async function handleNotifyHuman(req: Request, res: Response): Promise<vo
   }
 }
 
+// Solo se conservan las grabaciones de llamadas de más de 1 minuto en las que hubo
+// negativa de pago (ver tarjeta "[STORY] Transcript habilitar dicha funcionalidad").
+// Twilio graba la llamada completa porque al iniciarla no se sabe cómo va a terminar;
+// al terminar se decide y, si no califica, se borra de Twilio.
+const RECORDING_MIN_DURATION_SECONDS = 60
+
+async function deleteRecording(callId: mongoose.Types.ObjectId, recordingSid: string): Promise<void> {
+  try {
+    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!)
+    await twilioClient.recordings(recordingSid).remove()
+  } catch (err: any) {
+    // 404 = ya no existe en Twilio, igual se limpia la referencia
+    if (err?.status !== 404) {
+      console.error(`[Voice] Error borrando grabación ${recordingSid}:`, err)
+      return
+    }
+  }
+  await Call.findByIdAndUpdate(callId, { recordingSid: null })
+}
+
+// La decisión y el webhook de la grabación (handleRecordingStatus) pueden llegar en
+// cualquier orden: cada uno hace su update atómico y revisa lo que dejó el otro, así la
+// grabación se borra venga primero cual venga.
+async function applyRecordingRetention(callId: mongoose.Types.ObjectId, keep: boolean): Promise<void> {
+  const call = await Call.findByIdAndUpdate(callId, { recordingRetained: keep }, { new: true })
+  if (!keep && call?.recordingSid) await deleteRecording(callId, call.recordingSid)
+}
+
 // Webhook público de Twilio: la grabación (si VOICE_CALL_RECORDING_ENABLED=true) ya
 // terminó y quedó lista para descargar — se guarda solo el SID, el audio se sirve bajo
 // demanda vía getCallRecording (nunca se guarda la URL/credenciales de Twilio en el
@@ -430,7 +488,9 @@ export async function handleRecordingStatus(req: Request, res: Response): Promis
   const { CallSid, RecordingSid, RecordingStatus } = req.body as Record<string, string>
   try {
     if (RecordingStatus === 'completed' && CallSid && RecordingSid) {
-      await Call.findOneAndUpdate({ callSid: CallSid }, { recordingSid: RecordingSid })
+      const call = await Call.findOneAndUpdate({ callSid: CallSid }, { recordingSid: RecordingSid }, { new: true })
+      // Si la llamada ya se evaluó y no califica, la grabación llegó tarde — se borra ya.
+      if (call?.recordingRetained === false) await deleteRecording(call._id as mongoose.Types.ObjectId, RecordingSid)
     }
     res.sendStatus(200)
   } catch (err) {
@@ -572,6 +632,7 @@ export async function processCallStatusUpdate(
     if (call) {
       await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'No answer')
       if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, 'No answer')
+      await applyRecordingRetention(call._id as mongoose.Types.ObjectId, false)
     }
   } else if (callStatus === 'completed') {
     // Marca como completadas las llamadas que se cortaron a media conversación
@@ -600,7 +661,10 @@ export async function processCallStatusUpdate(
     await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, disposition)
     if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, disposition)
 
-    if (relevantTurns.length < 2) return
+    if (relevantTurns.length < 2) {
+      await applyRecordingRetention(call._id as mongoose.Types.ObjectId, false)
+      return
+    }
 
     const populated = call.clientId ? await Client.findById(call.clientId).lean() : null
     const clientInfo: ClientInfo | null = populated
@@ -624,6 +688,44 @@ export async function processCallStatusUpdate(
     }
     await call.save()
     console.log(`[Voice] Resumen post-llamada CallSid ${callSid}: ${analysis.summary}`)
+
+    // Red de seguridad de la Blacklist: si el agente en vivo no marcó la negativa pero la
+    // transcripción muestra que el cliente se negó o no dio ninguna fecha de pago, se marca
+    // aquí. No aplica si la llamada ya terminó en un resultado de pago concreto (promesa,
+    // ya pagó, domiciliado) o si el agente ya la marcó. 'marcar_pago_en_proceso' NO
+    // bloquea: el agente a veces lo marca y el cliente luego lo desmiente.
+    const calledFunctions = call.calledFunctions ?? []
+    // programar_llamada / actualizar_contacto: el cliente pidió que le llamen después o
+    // la cuenta la ve otra persona — no es una negativa aunque no haya dado fecha.
+    const hasPaymentOutcome = ['registrar_promesa_pago', 'marcar_saldo_pagado', 'marcar_pago_domiciliado', 'marcar_negativa_pago', 'programar_llamada', 'actualizar_contacto']
+      .some((fn) => calledFunctions.includes(fn))
+    let finalDisposition: DispositionStatus = disposition
+    if (analysis.paymentRefusal && !hasPaymentOutcome && call.clientId) {
+      const motivo = analysis.refusalReason || 'Sin compromiso de pago'
+      console.log(`[Voice] Negativa de pago detectada post-llamada CallSid ${callSid}: ${motivo}`)
+      await runAction('crm', 'mark_payment_refusal', { motivo }, call)
+      await Call.findByIdAndUpdate(call._id, { $push: { calledFunctions: 'marcar_negativa_pago' } })
+      await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'Payment refused')
+      finalDisposition = 'Payment refused'
+    }
+
+    // Conclusión para la columna Conclusion Call: en una negativa, el motivo que quedó en
+    // la Blacklist (lo haya marcado el agente en vivo o la red de seguridad de arriba) es
+    // más útil que el resumen, que en esos casos suele ser solo "Sin acuerdo".
+    if (call.clientId) {
+      const updatedClient = await Client.findById(call.clientId).select('blacklistReason').lean()
+      const conclusion =
+        finalDisposition === 'Payment refused' && updatedClient?.blacklistReason
+          ? (updatedClient.blacklistReason as string)
+          : analysis.summary || null
+      await Client.findByIdAndUpdate(call.clientId, { lastCallConclusion: conclusion })
+    }
+
+    // La grabación solo se conserva si la llamada duró más de 1 minuto Y terminó en
+    // negativa de pago (marcada en vivo por el agente o por la red de seguridad de arriba).
+    const keepRecording =
+      finalDisposition === 'Payment refused' && (call.durationSeconds ?? 0) > RECORDING_MIN_DURATION_SECONDS
+    await applyRecordingRetention(call._id as mongoose.Types.ObjectId, keepRecording)
   }
 }
 

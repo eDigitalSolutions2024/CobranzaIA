@@ -423,21 +423,39 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
       }
 
       case 'marcar_ticket_aclaracion': {
-        await runAction('crm', 'create_clarification_ticket', {}, call)
+        const { tipo, monto_cliente, detalle } = args
+        await runAction('crm', 'create_clarification_ticket', { tipo, monto_cliente, detalle }, call)
         session.sendFunctionCallOutput(callId, { ok: true })
         requestFollowUpResponse()
         break
       }
 
-      case 'marcar_factura_no_recibida': {
-        await runAction('crm', 'mark_invoice_not_received', {}, call)
+      case 'programar_llamada': {
+        const { fecha = '', hora = '', motivo = '' } = args
+        await runAction('crm', 'schedule_callback', { fecha, hora, motivo }, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        requestFollowUpResponse()
+        break
+      }
+
+      case 'actualizar_contacto': {
+        const { nombre = '', telefono = '', puesto = '' } = args
+        await runAction('crm', 'update_contact', { nombre, telefono, puesto }, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        requestFollowUpResponse()
+        break
+      }
+
+      case 'solicitar_documentos': {
+        const { documentos = [], facturas = '', medio = '', detalle = '' } = args
+        await runAction('crm', 'request_documents', { documentos, facturas, medio, detalle }, call)
         session.sendFunctionCallOutput(callId, { ok: true })
         requestFollowUpResponse()
         break
       }
 
       case 'marcar_pago_domiciliado': {
-        await runAction('crm', 'mark_domiciliado', {}, call)
+        await runAction('crm', 'mark_domiciliado', { fecha: typeof args.fecha === 'string' ? args.fecha : '' }, call)
         session.sendFunctionCallOutput(callId, { ok: true })
         requestFollowUpResponse()
         break
@@ -445,7 +463,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
 
       case 'marcar_pago_en_proceso': {
         const area = typeof args.area === 'string' ? args.area : ''
-        await runAction('crm', 'mark_payment_in_process', { area }, call)
+        await runAction('crm', 'mark_payment_in_process', { area, fecha_estimada: args.fecha_estimada }, call)
         session.sendFunctionCallOutput(callId, { ok: true })
         requestFollowUpResponse()
         break
@@ -488,7 +506,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         // Se excluye del ciclo automático aunque el proveedor no lo haya confirmado
         // todavía — ver tarjeta "Exclusión automática de clientes del ciclo mensual de
         // cobranza": el pago queda pendiente de verificación, nunca se confirma solo.
-        await runAction('crm', 'mark_payment_reported', { paymentExists: exists }, call)
+        await runAction('crm', 'mark_payment_reported', { paymentExists: exists, fechaPago: args.fecha_pago, montoPagado: args.monto_pagado, medioPago: args.medio_pago }, call)
         session.sendFunctionCallOutput(callId, { payment_exists: exists })
         requestFollowUpResponse()
         return

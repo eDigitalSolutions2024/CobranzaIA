@@ -77,6 +77,45 @@ type:String,
 default:null
 },
 
+// El cliente pidió o necesita un documento (factura, contrato, estado de cuenta) en una
+// llamada — acción ADMINISTRATIVA pendiente, independiente de requiresHuman (ver tarjeta
+// "Implementar Needs Admin Label"). Se muestra en amarillo hasta que un administrador
+// lo marca como enviado ("Mark sent", POST /clients/:id/needs-admin/sent).
+needsAdmin:{
+type:Boolean,
+default:false
+},
+
+// Documentos solicitados: "factura" | "contrato" | "estado_de_cuenta"
+needsAdminDocuments:{
+type:[String],
+default:[]
+},
+
+// Detalle para quien envía: qué facturas, a qué correo/medio, contexto que dio el cliente
+needsAdminDetail:{
+type:String,
+default:null
+},
+
+needsAdminAt:{
+type:Date,
+default:null
+},
+
+// Llamada de seguimiento que el cliente pidió ("háblame después", "déjame revisarlo") —
+// la dispara autoCallScheduler.service.ts (dispatchScheduledCallbacks) cuando llega la
+// hora; mientras esté pendiente, el ciclo automático normal no lo llama antes.
+scheduledCallbackAt:{
+type:Date,
+default:null
+},
+
+scheduledCallbackReason:{
+type:String,
+default:null
+},
+
 // Extensión del conmutador de este cliente, una vez detectada (ver marcar_extension en
 // voiceStream.controller.ts) — las llamadas futuras la marcan directo (ver
 // placeOutboundCall en voice.controller.ts), sin tener que redetectarla cada vez.
@@ -146,6 +185,25 @@ default:null
 
 // INTENCION DETECTADA
 lastIntent:{
+type:String,
+default:null
+},
+
+// RESULTADO DE LA ULTIMA LLAMADA (disposition del catálogo, ver config/disposition.ts) —
+// es lo que muestra la columna Classification de la tabla de clientes
+lastCallDisposition:{
+type:String,
+default:null
+},
+
+lastCallAt:{
+type:Date,
+default:null
+},
+
+// Conclusión en texto de la última llamada (columna Conclusion Call) — el motivo de la
+// negativa si terminó en Payment refused, si no el resumen post-llamada.
+lastCallConclusion:{
 type:String,
 default:null
 },

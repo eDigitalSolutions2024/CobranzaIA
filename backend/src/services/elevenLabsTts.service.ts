@@ -9,7 +9,15 @@
 import { EventEmitter } from 'events'
 import WebSocket from 'ws'
 import { randomUUID } from 'crypto'
-import { ELEVENLABS_API_KEY, ELEVENLABS_MODEL, ELEVENLABS_VOICE_ID } from '../config/voicePipeline'
+import {
+  ELEVENLABS_API_KEY,
+  ELEVENLABS_MODEL,
+  ELEVENLABS_SIMILARITY,
+  ELEVENLABS_SPEED,
+  ELEVENLABS_STABILITY,
+  ELEVENLABS_VOICE_ID,
+} from '../config/voicePipeline'
+import { spellOutNumbers } from '../utils/spokenNumbers'
 
 export interface ElevenLabsSessionEvents {
   audio: (base64Payload: string, contextId: string) => void
@@ -92,7 +100,12 @@ export class ElevenLabsTtsSession extends EventEmitter {
       sock.open = true
       ws.send(JSON.stringify({
         text: ' ',
-        voice_settings: { stability: 0.5, similarity_boost: 0.8 },
+        // Configurables desde el .env (ver config/voicePipeline.ts)
+        voice_settings: {
+          stability: ELEVENLABS_STABILITY,
+          similarity_boost: ELEVENLABS_SIMILARITY,
+          ...(ELEVENLABS_SPEED !== null ? { speed: ELEVENLABS_SPEED } : {}),
+        },
         xi_api_key: ELEVENLABS_API_KEY,
       }))
       for (const msg of sock.pending.splice(0)) ws.send(msg)
@@ -163,7 +176,9 @@ export class ElevenLabsTtsSession extends EventEmitter {
   sendText(contextId: string, text: string, flush = false): void {
     const sock = this.active.get(contextId)
     if (!sock || !text) return
-    const clean = text.trimStart()
+    // Cifras a palabras antes de la voz (ver utils/spokenNumbers.ts): Flash v2.5 no sabe
+    // leer montos como "1,685,641.34" y los convertía en ruido o sílabas en otro idioma.
+    const clean = spellOutNumbers(text.trimStart())
     if (!clean) return
     this.send(sock, { text: clean.endsWith(' ') ? clean : `${clean} `, flush })
   }

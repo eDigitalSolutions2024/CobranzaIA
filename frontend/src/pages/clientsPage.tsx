@@ -11,6 +11,18 @@ import AutoCallEngineToggle from "../components/AutoCallEngineToggle"
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
 
+const DOCUMENT_LABEL: Record<string, string> = {
+  factura: "Invoice",
+  contrato: "Contract",
+  estado_de_cuenta: "Account statement",
+}
+
+// Tooltip de Needs admin: qué documentos pidió y a dónde enviarlos
+function needsAdminSummary(client: any): string {
+  const docs = (client.needsAdminDocuments ?? []).map((d: string) => DOCUMENT_LABEL[d] || d).join(", ")
+  return [docs, client.needsAdminDetail].filter(Boolean).join(" — ")
+}
+
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending",
   contacted: "Contacted",
@@ -42,7 +54,7 @@ const RISK_COLOR: Record<string, string> = {
 }
 
 const testingGroup:string [] = [
-  'Ever', 'Alberto', 'Laura', 'Ana', 'Lourdes' 
+  'Ever', 'Alberto', 'Laura', 'Ana', 'Lourdes','Esteban','Gerardo','Leslie' 
 ]
 
 export default function ClientsPage() {
@@ -54,6 +66,7 @@ export default function ClientsPage() {
   const [callingId, setCallingId] = useState<string | null>(null)
   const [callingPilotId, setCallingPilotId] = useState<string | null>(null)
   const [notifyingId, setNotifyingId] = useState<string | null>(null)
+  const [markingSentId, setMarkingSentId] = useState<string | null>(null)
   const [notifyResult, setNotifyResult] = useState<Record<string, { label: string; tone: "success" | "warning" | "error" }>>({})
   const [detailId, setDetailId] = useState<string | null>(null)
   const [expandedClientId, setExpandedClientId] = useState<string | null>(null)
@@ -130,6 +143,22 @@ export default function ClientsPage() {
     }
   }
 
+  // "Mark sent": el administrador ya envió los documentos pedidos — quita Needs Admin
+  // (independiente de Needs agent / requiresHuman)
+  async function handleMarkSent(clientId: string) {
+    setMarkingSentId(clientId)
+    try {
+      await api(`/clients/${clientId}/needs-admin/sent`, { method: "POST" })
+      setClients((prev) =>
+        prev.map((c) => (c._id === clientId ? { ...c, needsAdmin: false, needsAdminDocuments: [], needsAdminDetail: null } : c))
+      )
+    } catch {
+      alert("Error marking the documents as sent")
+    } finally {
+      setMarkingSentId(null)
+    }
+  }
+
   async function handleNotifyHuman(clientId: string) {
     setNotifyingId(clientId)
     try {
@@ -198,12 +227,13 @@ export default function ClientsPage() {
             >
               Import Invoices
             </button>
+            {/* Oculto: los clientes nuevos ya llegan por Import Invoices
             <button
               onClick={() => setMonthMasterOpen(true)}
               className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
             >
               New Client Month Master
-            </button>
+            </button>*/}
             <button
               onClick={() => setExportModalOpen(true)}
               className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
@@ -245,7 +275,9 @@ export default function ClientsPage() {
                     className={`border-b transition-colors ${
                       client.requiresHuman
                         ? "border-red-900/60 bg-red-500/10 hover:bg-red-500/20"
-                        : "border-zinc-800 hover:bg-zinc-800/40"
+                        : client.needsAdmin
+                          ? "border-yellow-900/60 bg-yellow-500/10 hover:bg-yellow-500/20"
+                          : "border-zinc-800 hover:bg-zinc-800/40"
                     }`}
                   >
 
@@ -266,6 +298,14 @@ export default function ClientsPage() {
                         {client.requiresHuman && (
                           <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-400">
                             Needs agent
+                          </span>
+                        )}
+                        {client.needsAdmin && (
+                          <span
+                            title={needsAdminSummary(client)}
+                            className="rounded-full bg-yellow-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-yellow-400"
+                          >
+                            Needs admin
                           </span>
                         )}
                       </div>
@@ -317,10 +357,21 @@ export default function ClientsPage() {
                       )}
                     </td>
                     <td className="py-4">
-                      {client.lastIntent && client.lastIntent !== "general" && (
-                        <span className="rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-300">
-                          {client.lastIntent}
+                      {/* Resultado de la última llamada; si nunca se le ha llamado, la
+                          última intención detectada por WhatsApp */}
+                      {client.lastCallDisposition ? (
+                        <span
+                          title={client.lastCallAt ? `Última llamada: ${new Date(client.lastCallAt).toLocaleString("en-US")}` : undefined}
+                          className="rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-300"
+                        >
+                          {client.lastCallDisposition}
                         </span>
+                      ) : (
+                        client.lastIntent && client.lastIntent !== "general" && (
+                          <span className="rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-300">
+                            {client.lastIntent}
+                          </span>
+                        )
                       )}
                     </td>
                        <td>
@@ -408,6 +459,9 @@ export default function ClientsPage() {
                               <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
                                 Excluded until
                               </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500">
+                                Conclusion Call
+                              </th>
                             </tr>
                           </thead>
 
@@ -481,15 +535,20 @@ export default function ClientsPage() {
 
                               <td className="px-4 py-3">
                                 {client.collectionExcludedUntil && new Date(client.collectionExcludedUntil) > new Date() ? (
-                                  <span title={client.collectionExclusionReason || ""}>
-                                    {new Date(client.collectionExcludedUntil).toLocaleDateString("en-US")}
-                                    {client.collectionExclusionReason && (
-                                      <span className="text-zinc-500"> · {client.collectionExclusionReason}</span>
-                                    )}
-                                  </span>
+                                  new Date(client.collectionExcludedUntil).toLocaleDateString("en-US")
                                 ) : (
                                   "—"
                                 )}
+                              </td>
+
+                              <td className="px-4 py-3 text-white">
+                                {/* Conclusión de la última llamada; para clientes cuya última
+                                    llamada es anterior a este campo, el motivo de exclusión vigente */}
+                                {client.lastCallConclusion ||
+                                  (client.collectionExcludedUntil && new Date(client.collectionExcludedUntil) > new Date()
+                                    ? client.collectionExclusionReason
+                                    : null) ||
+                                  "—"}
                               </td>
                             </tr>
                           </tbody>
@@ -590,6 +649,17 @@ export default function ClientsPage() {
                               </>
                             )}
                           </button>
+
+                          {client.needsAdmin && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleMarkSent(client._id) }}
+                              disabled={markingSentId === client._id}
+                              title={needsAdminSummary(client)}
+                              className="flex items-center gap-1.5 rounded-lg bg-yellow-500/20 px-3 py-1.5 text-xs font-medium text-yellow-400 hover:bg-yellow-500/40 disabled:cursor-not-allowed disabled:opacity-50 transition-colors cursor-pointer"
+                            >
+                              {markingSentId === client._id ? "Saving..." : "Mark sent"}
+                            </button>
+                          )}
 
                           {notifyResult[client._id] && (
                             <span

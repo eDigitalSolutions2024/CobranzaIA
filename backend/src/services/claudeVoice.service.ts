@@ -227,6 +227,11 @@ export interface CallAnalysis {
   hasAgreement: boolean
   promises: PaymentInstallment[]
   summary: string
+  // Red de seguridad para la Blacklist: el agente en vivo a veces no llama a
+  // marcar_negativa_pago (ej. el cliente repite "no tenemos efectivo, no hay fecha" y el
+  // agente sigue dando vueltas) — ver processCallStatusUpdate en voice.controller.ts.
+  paymentRefusal: boolean
+  refusalReason: string
   usage: { inputTokens: number; outputTokens: number }
 }
 
@@ -237,7 +242,7 @@ export async function analyzeCallTranscript(
   const relevant = transcript.filter(t => !t.content.startsWith('['))
 
   if (relevant.length < 2) {
-    return { hasAgreement: false, promises: [], summary: 'Llamada sin conversación útil', usage: { inputTokens: 0, outputTokens: 0 } }
+    return { hasAgreement: false, promises: [], summary: 'Llamada sin conversación útil', paymentRefusal: false, refusalReason: '', usage: { inputTokens: 0, outputTokens: 0 } }
   }
 
   const transcriptText = relevant
@@ -262,14 +267,18 @@ Responde ÚNICAMENTE con JSON válido, sin markdown ni texto adicional:
 {
   "hasAgreement": true,
   "promises": [{"promiseDate": "YYYY-MM-DD", "amount": 1234}],
-  "summary": "descripción breve de lo acordado"
+  "summary": "descripción breve de lo acordado",
+  "paymentRefusal": false,
+  "refusalReason": ""
 }
 
 Reglas:
 - hasAgreement = true solo si el cliente confirmó explícitamente una fecha y monto
 - Para planes de pago recurrentes, incluye una entrada por cuota con su fecha exacta
-- Si no hubo compromiso concreto, devuelve: {"hasAgreement": false, "promises": [], "summary": "Sin acuerdo"}
-- Las fechas deben ser absolutas en formato YYYY-MM-DD`,
+- Si no hubo compromiso concreto: hasAgreement = false, promises = [], summary = "Sin acuerdo"
+- Las fechas deben ser absolutas en formato YYYY-MM-DD
+- paymentRefusal = true si el cliente se negó explícitamente a pagar ("no voy a pagar"), O si dijo que no puede pagar y, cuando se le preguntó por una fecha, no dio NINGUNA fecha ni estimación ("no tenemos fecha", "no sabemos", "no hay flujo"). En refusalReason pon el motivo en pocas palabras (ej. "Sin fecha de pago: no tiene flujo de efectivo").
+- paymentRefusal = false si dio una fecha o estimación de pago (aunque sea aproximada), si dijo que ya pagó, que su pago está domiciliado, que el pago está en trámite interno y lo confirmó, que no reconoce el adeudo, que no recibió la factura, si condicionó el pago a recibir un documento (factura, contrato o estado de cuenta), o si la llamada terminó antes de hablar del pago`,
     messages: [{ role: 'user', content: transcriptText }],
   })
 
@@ -283,13 +292,15 @@ Reglas:
       hasAgreement: Boolean(parsed.hasAgreement),
       promises: Array.isArray(parsed.promises) ? parsed.promises : [],
       summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      paymentRefusal: parsed.paymentRefusal === true,
+      refusalReason: typeof parsed.refusalReason === 'string' ? parsed.refusalReason : '',
       usage,
     }
   } catch {
     console.error('[Voice] Error al parsear análisis post-llamada')
     // La llamada a Claude sí se cobró aunque el parseo del JSON haya fallado — se
     // reporta el uso real para que las métricas de consumo no queden por debajo.
-    return { hasAgreement: false, promises: [], summary: 'Error al analizar transcript', usage }
+    return { hasAgreement: false, promises: [], summary: 'Error al analizar transcript', paymentRefusal: false, refusalReason: '', usage }
   }
 }
 

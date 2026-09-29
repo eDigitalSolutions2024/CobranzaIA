@@ -7,6 +7,13 @@ export interface InvoiceSummary {
   // Días de atraso de la factura vencida más antigua — null si ninguna está vencida
   // (o si ninguna tiene dueDate capturado).
   oldestDaysOverdue: number | null
+  // Facturas abiertas (vencidas o no) con su número y fecha de emisión, más antiguas
+  // primero — para responder "¿a cuáles facturas corresponde?" con el mes y los números
+  // (diagrama "Llamada preventiva al corriente", paso 2).
+  openInvoices?: Array<{ number: string; issueDate: Date | null }>
+  // Fecha de vencimiento de la factura vencida más antigua (la de oldestDaysOverdue) —
+  // diagrama 1–30 días, paso 2: "su factura por $[Monto] venció el [Fecha]".
+  oldestDueDate?: Date | null
 }
 
 // "Hoy" en hora de CDMX como día calendario (UTC medianoche) — las dueDate de factura
@@ -35,16 +42,23 @@ export async function loadInvoiceSummary(clientId: mongoose.Types.ObjectId | str
     status: { $nin: ['paid', 'cancelled'] },
     dueDate: { $ne: null },
   })
-    .select('dueDate')
+    .select('dueDate invoiceNumber issueDate')
+    .sort({ dueDate: 1 })
     .lean()
 
   const today = todayMexicoCityUtc()
   const daysOverdue = open
     .map((inv) => Math.floor((today - new Date(inv.dueDate as Date).getTime()) / 86_400_000))
     .filter((days) => days > 0)
+  // `open` viene ordenado por dueDate ascendente: la primera vencida es la más antigua.
+  const oldestOverdue = open.find((inv) => Math.floor((today - new Date(inv.dueDate as Date).getTime()) / 86_400_000) > 0)
 
   return {
+    oldestDueDate: oldestOverdue ? (oldestOverdue.dueDate as Date) : null,
     overdueCount: daysOverdue.length,
     oldestDaysOverdue: daysOverdue.length > 0 ? Math.max(...daysOverdue) : null,
+    openInvoices: open
+      .filter((inv) => inv.invoiceNumber)
+      .map((inv) => ({ number: String(inv.invoiceNumber), issueDate: (inv.issueDate as Date | null) ?? null })),
   }
 }

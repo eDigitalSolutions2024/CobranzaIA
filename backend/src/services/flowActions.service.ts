@@ -8,6 +8,19 @@ import { prepareWhatsappMessage } from './whatsappService'
 import { verifyPayment } from './paymentsProvider.service'
 import { FlowContext } from '../types/flow'
 import { endOfCurrentMonthMexicoCity } from '../utils/collectionExclusion'
+import { normalizeMexicanPhone } from '../utils/phone'
+
+// "YYYY-MM-DD" + "HH:MM" en hora del centro de México (UTC-6, sin horario de verano desde
+// 2022) → instante UTC. Sin hora, se agenda a las 10:00. null si la fecha no es válida.
+function mexicoCityDateTimeToUtc(fecha: string, hora?: string): Date | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fecha.trim())
+  if (!d) return null
+  const t = /^(\d{1,2}):(\d{2})$/.exec((hora ?? '').trim())
+  const hours = t ? Math.min(23, Number(t[1])) : 10
+  const minutes = t ? Math.min(59, Number(t[2])) : 0
+  const result = new Date(Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), hours + 6, minutes))
+  return Number.isNaN(result.getTime()) ? null : result
+}
 
 type ActionFn = (ctx: FlowContext, call: HydratedDocument<ICall>) => Promise<Partial<FlowContext> | void>
 
@@ -25,6 +38,12 @@ async function excludeFromCollection(clientId: Types.ObjectId | null | undefined
     collectionExclusionReason: reason,
     collectionExcludedAt: new Date(),
   })
+}
+
+const DOCUMENT_LABEL: Record<string, string> = {
+  factura: 'Factura',
+  contrato: 'Contrato',
+  estado_de_cuenta: 'Estado de cuenta',
 }
 
 // Registro service.action -> implementación real. Cada handler recibe el contexto
@@ -99,26 +118,123 @@ const registry: Record<string, ActionFn> = {
     await Client.findByIdAndUpdate(call.clientId, { status: 'paid' })
   },
 
-  'crm.create_clarification_ticket': async (_ctx, call) => {
+  // Sin `tipo` (o tipo "adeudo") se comporta exactamente como siempre (deny_debt). "monto"
+  // y "factura" usan los mismos reasons que el flujo de WhatsApp (dispute_amount /
+  // dispute_invoice) — diagrama preventivo: "El monto no es correcto" / "La factura está
+  // incorrecta".
+  'crm.create_clarification_ticket': async (ctx, call) => {
+    // servicio / contrato / otro: disputas del diagrama 1–30 días (paso 3E)
+    const KNOWN = ['monto', 'factura', 'servicio', 'contrato', 'otro']
+    const tipo: string = KNOWN.includes(ctx.tipo) ? ctx.tipo : 'adeudo'
+    const detalle = typeof ctx.detalle === 'string' && ctx.detalle.trim() ? ` Detalle: ${ctx.detalle.trim()}.` : ''
+    const montoCliente =
+      typeof ctx.monto_cliente === 'number' ? ` Monto que el cliente tiene registrado: ${ctx.monto_cliente.toLocaleString('es-MX')} pesos.` : ''
+    const BASE_BY_TIPO: Record<string, string> = {
+      monto: 'Cliente reconoce el adeudo pero indicó que el monto no es correcto durante la llamada.',
+      factura: 'Cliente indicó que la factura está incorrecta durante la llamada.',
+      servicio: 'Cliente reportó un problema con el servicio durante la llamada.',
+      contrato: 'Cliente reportó un problema con el contrato durante la llamada.',
+      otro: 'Cliente reportó un problema durante la llamada.',
+      adeudo: 'Cliente no reconoció el adeudo durante la llamada.',
+    }
+    const REASON_BY_TIPO: Record<string, string> = {
+      monto: 'dispute_amount',
+      factura: 'dispute_invoice',
+      servicio: 'dispute_service',
+      contrato: 'dispute_contract',
+      otro: 'dispute_other',
+      adeudo: 'deny_debt',
+    }
+    const base = BASE_BY_TIPO[tipo]
     await Ticket.create({
       clientId: call.clientId ?? null,
       callId: call._id,
       phone: call.phone,
-      reason: 'deny_debt',
+      reason: REASON_BY_TIPO[tipo],
       status: 'open',
-      notes: `Cliente no reconoció el adeudo durante la llamada. CallSid: ${call.callSid}`,
+      notes: `${base}${montoCliente}${detalle} CallSid: ${call.callSid}`,
     })
   },
 
-  'crm.mark_invoice_not_received': async (_ctx, call) => {
+  // "Háblame después" / "Déjame revisarlo" (diagrama preventivo) — agenda la llamada que
+  // pidió el cliente; la dispara dispatchScheduledCallbacks en autoCallScheduler.service.ts.
+  'crm.schedule_callback': async (ctx, call) => {
+    const at = typeof ctx.fecha === 'string' ? mexicoCityDateTimeToUtc(ctx.fecha, ctx.hora) : null
+    const motivo = typeof ctx.motivo === 'string' && ctx.motivo.trim() ? ctx.motivo.trim() : 'El cliente pidió que se le llame después'
     await Ticket.create({
       clientId: call.clientId ?? null,
       callId: call._id,
       phone: call.phone,
-      reason: 'resend_invoice',
+      reason: 'callback_requested',
       status: 'open',
-      notes: `Cliente indicó que no ha recibido su factura del mes durante la llamada. CallSid: ${call.callSid}`,
+      notes: `Cliente pidió que se le vuelva a llamar${at ? ` el ${ctx.fecha}${ctx.hora ? ` a las ${ctx.hora}` : ''}` : ` (fecha no válida: "${ctx.fecha}")`}. Motivo: ${motivo}. CallSid: ${call.callSid}`,
     })
+    if (call.clientId && at) {
+      await Client.findByIdAndUpdate(call.clientId, { scheduledCallbackAt: at, scheduledCallbackReason: motivo })
+    }
+  },
+
+  // "Lo ve otra persona" (diagrama preventivo) — la persona responsable pasa a ser el
+  // contacto del cliente (el saludo de la siguiente llamada se dirige a ella); el
+  // contacto anterior queda en las notas del Ticket. El teléfono, si lo dio, se agrega a
+  // alternatePhones — el principal no se toca.
+  'crm.update_contact': async (ctx, call) => {
+    const nombre = typeof ctx.nombre === 'string' ? ctx.nombre.trim() : ''
+    if (!nombre) return
+    const telefono = typeof ctx.telefono === 'string' && ctx.telefono.replace(/\D/g, '').length >= 10
+      ? normalizeMexicanPhone(ctx.telefono)
+      : null
+    const puesto = typeof ctx.puesto === 'string' && ctx.puesto.trim() ? ctx.puesto.trim() : null
+    const before = call.clientId ? await Client.findById(call.clientId).select('contact').lean() : null
+    await Ticket.create({
+      clientId: call.clientId ?? null,
+      callId: call._id,
+      phone: call.phone,
+      reason: 'contact_update',
+      status: 'closed',
+      notes: `Nuevo contacto responsable: ${nombre}${puesto ? ` (${puesto})` : ''}${telefono ? `, tel. ${telefono}` : ''}. Contacto anterior: ${before?.contact ?? 'sin contacto'}. CallSid: ${call.callSid}`,
+    })
+    if (call.clientId) {
+      await Client.findByIdAndUpdate(call.clientId, {
+        contact: nombre,
+        ...(telefono ? { $addToSet: { alternatePhones: telefono } } : {}),
+      })
+    }
+  },
+
+  // El cliente no tiene / pide factura, contrato o estado de cuenta — ver tarjeta
+  // "Implementar Needs Admin Label". Crea el Ticket y marca al cliente como Needs Admin
+  // (independiente de requiresHuman) hasta que un administrador lo marque como enviado.
+  'crm.request_documents': async (ctx, call) => {
+    const documents = (Array.isArray(ctx.documentos) ? ctx.documentos : [])
+      .filter((d: unknown): d is string => typeof d === 'string' && d in DOCUMENT_LABEL)
+    if (documents.length === 0) documents.push('factura')
+    // Lo que el agente indagó (qué facturas, a dónde enviarlas) — va en las notas y en el
+    // cliente para que quien envíe no tenga que volver a llamar a preguntarlo.
+    const details = [
+      ctx.facturas ? `Facturas: ${ctx.facturas}` : null,
+      ctx.medio ? `Enviar a: ${ctx.medio}` : null,
+      ctx.detalle ? `Detalle: ${ctx.detalle}` : null,
+    ].filter(Boolean) as string[]
+    const labels = documents.map((d: string) => DOCUMENT_LABEL[d]).join(', ')
+    await Ticket.create({
+      clientId: call.clientId ?? null,
+      callId: call._id,
+      phone: call.phone,
+      // Solo factura conserva el reason de siempre (reportes/filtros existentes)
+      reason: documents.length === 1 && documents[0] === 'factura' ? 'resend_invoice' : 'document_request',
+      status: 'open',
+      notes: `Cliente solicitó durante la llamada: ${labels}.${details.length ? ` ${details.join('. ')}.` : ''} CallSid: ${call.callSid}`,
+    })
+    if (call.clientId) {
+      // $addToSet: si ya tenía una solicitud pendiente, se suman los documentos nuevos
+      await Client.findByIdAndUpdate(call.clientId, {
+        needsAdmin: true,
+        needsAdminDetail: details.length ? details.join('. ') : null,
+        needsAdminAt: new Date(),
+        $addToSet: { needsAdminDocuments: { $each: documents } },
+      })
+    }
   },
 
   // Negativa EXPLÍCITA de pago ("no voy a pagar", "me niego"), distinta de "no tengo
@@ -137,10 +253,17 @@ const registry: Record<string, ActionFn> = {
       notes: `Negativa de pago detectada durante la llamada: "${reason}". CallSid: ${call.callSid}`,
     })
     if (call.clientId) {
+      // Si en esta misma llamada se marcó "pago en proceso" (ej. el agente lo sugirió y
+      // luego el cliente lo desmintió), esa exclusión contradice la negativa — se quita
+      // para que la tabla no muestre "Pago en proceso" en un cliente que no va a pagar.
+      const contradictsExclusion = (call.calledFunctions ?? []).includes('marcar_pago_en_proceso')
       await Client.findByIdAndUpdate(call.clientId, {
         blacklistStatus: 'candidate',
         blacklistReason: reason,
         blacklistMarkedAt: new Date(),
+        ...(contradictsExclusion
+          ? { collectionExcludedUntil: null, collectionExclusionReason: null, collectionExcludedAt: null }
+          : {}),
       })
     }
   },
@@ -148,18 +271,29 @@ const registry: Record<string, ActionFn> = {
   // A diferencia de los demás Ticket ("open" — necesitan que alguien actúe),
   // este se guarda cerrado: es solo un registro informativo, el pago ya está
   // resuelto vía cargo automático y no requiere seguimiento de un cobrador.
-  'crm.mark_domiciliado': async (_ctx, call) => {
+  'crm.mark_domiciliado': async (ctx, call) => {
+    const fecha = typeof ctx.fecha === 'string' && ctx.fecha.trim() ? ctx.fecha.trim() : null
     await Ticket.create({
       clientId: call.clientId ?? null,
       callId: call._id,
       phone: call.phone,
       reason: 'domiciliado',
       status: 'closed',
-      notes: `Cliente reportó pago domiciliado/cargo automático durante la llamada. CallSid: ${call.callSid}`,
+      notes: `Cliente reportó pago domiciliado/cargo automático durante la llamada${fecha ? ` para el ${fecha}` : ''}. CallSid: ${call.callSid}`,
     })
     if (call.clientId) {
       await Client.findByIdAndUpdate(call.clientId, { lastIntent: 'domiciliado' })
       await excludeFromCollection(call.clientId, 'Pago domiciliado')
+      // El cargo domiciliado SÍ es un compromiso de pago con fecha (corrección #4 del
+      // diagrama "Llamada preventiva al corriente") — se registra igual que una promesa
+      // manual, con el saldo actual del cliente como monto. Reutiliza los mismos handlers
+      // que registrar_promesa_pago en vez de duplicar la lógica de PaymentPromise/Reminder.
+      if (fecha) {
+        const client = await Client.findById(call.clientId).select('debt').lean()
+        const promiseCtx = { amount: client?.debt ?? 0, payment_date: fecha }
+        await registry['crm.create_payment_commitment'](promiseCtx, call)
+        await registry['crm.schedule_reminder'](promiseCtx, call)
+      }
     }
   },
 
@@ -179,7 +313,7 @@ const registry: Record<string, ActionFn> = {
       phone: call.phone,
       reason: 'payment_reported',
       status: 'open',
-      notes: `Cliente reportó haber pagado durante la llamada${confirmed ? ' (el proveedor de pagos lo confirmó)' : ' (pendiente de confirmar con el proveedor de pagos)'}. CallSid: ${call.callSid}`,
+      notes: `Cliente reportó haber pagado durante la llamada${confirmed ? ' (el proveedor de pagos lo confirmó)' : ' (pendiente de confirmar con el proveedor de pagos)'}.${typeof ctx.fechaPago === 'string' && ctx.fechaPago.trim() ? ` Fecha aproximada del pago según el cliente: ${ctx.fechaPago.trim()}.` : ''}${typeof ctx.montoPagado === 'number' ? ` Monto que dice haber pagado: ${ctx.montoPagado.toLocaleString('es-MX')} pesos.` : ''}${typeof ctx.medioPago === 'string' && ctx.medioPago.trim() ? ` Medio de pago: ${ctx.medioPago.trim()}.` : ''} CallSid: ${call.callSid}`,
     })
     await excludeFromCollection(call.clientId, 'Pago reportado')
   },
@@ -196,7 +330,7 @@ const registry: Record<string, ActionFn> = {
       phone: call.phone,
       reason: 'payment_in_process',
       status: 'open',
-      notes: `Cliente indicó que el pago está en trámite interno (${area}) durante la llamada. CallSid: ${call.callSid}`,
+      notes: `Cliente indicó que el pago está en trámite interno (${area}) durante la llamada.${typeof ctx.fecha_estimada === 'string' && ctx.fecha_estimada.trim() ? ` Fecha estimada de pago según el cliente: ${ctx.fecha_estimada.trim()} (no confirmada).` : ''} CallSid: ${call.callSid}`,
     })
     await excludeFromCollection(call.clientId, `Pago en proceso — ${area}`)
   },
