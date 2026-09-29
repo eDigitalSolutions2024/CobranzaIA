@@ -64,7 +64,7 @@ export async function generateLiveVoiceTurn(
   onText?: (delta: string) => void,
   executeTool?: (call: LiveToolCall) => Promise<ToolOutcome>
 ): Promise<LiveTurnResult> {
-  const systemPrompt = buildVoiceSystemPrompt(clientInfo, phone) + LIVE_FORMAT_RULES
+  const system = buildCachedSystem(clientInfo, phone)
 
   const messages: Anthropic.MessageParam[] =
     history.length > 0 ? history.map((t) => ({ role: t.role, content: t.content })) : []
@@ -89,15 +89,23 @@ export async function generateLiveVoiceTurn(
     const stream = anthropic.messages.stream({
       model: CLAUDE_VOICE_MODEL,
       max_tokens: 300,
-      system: systemPrompt,
+      system,
       tools: CLAUDE_VOICE_TOOLS,
       tool_choice: { type: 'auto' },
       messages,
     })
     if (onText) stream.on('text', (delta) => onText(delta))
     const response = await stream.finalMessage()
-    usage.inputTokens += response.usage.input_tokens
+    // claudeUsage solo tiene input/output y el dashboard de uso los cobra a precio normal —
+    // los tokens de caché se suman como su equivalente en precio (escritura 1.25x, lectura
+    // 0.1x) para que el costo mostrado siga cuadrando con la factura.
+    const cacheWrite = response.usage.cache_creation_input_tokens ?? 0
+    const cacheRead = response.usage.cache_read_input_tokens ?? 0
+    usage.inputTokens += response.usage.input_tokens + Math.round(cacheWrite * 1.25) + Math.round(cacheRead * 0.1)
     usage.outputTokens += response.usage.output_tokens
+    console.log(
+      `[ClaudeVoiceLive] tokens: ${response.usage.input_tokens} nuevos · ${cacheRead} desde caché · ${cacheWrite} escritos en caché`
+    )
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -137,16 +145,34 @@ export async function generateLiveVoiceTurn(
   return { message, toolCalls, usage }
 }
 
+// Guion + reglas de formato como un solo bloque con cache_control: las herramientas y el
+// guion son idénticos en todos los turnos de una llamada (render order: tools → system →
+// messages), así que desde el segundo turno Claude los lee del caché en vez de
+// reprocesar ~10k tokens cada vez — eso era la mayor parte de la espera entre frases.
+// Lo que sigue al breakpoint (el historial de la conversación) se procesa normal.
+function buildCachedSystem(clientInfo: ClientInfo | null, phone: string): Anthropic.TextBlockParam[] {
+  return [
+    {
+      type: 'text',
+      text: buildVoiceSystemPrompt(clientInfo, phone) + LIVE_FORMAT_RULES,
+      cache_control: { type: 'ephemeral' },
+    },
+  ]
+}
+
 // Abre la conexión con Anthropic (TLS + HTTP keep-alive) antes del primer turno real —
 // sin esto, el primer turno del cliente pagaba ~600ms extra de handshake (medido en la
-// primera prueba: primer texto a 1240ms vs ~600ms en los turnos siguientes).
+// primera prueba: primer texto a 1240ms vs ~600ms en los turnos siguientes). Usa EXACTAMENTE
+// el mismo system que los turnos reales (buildCachedSystem), así que además deja el caché
+// de prompts escrito mientras suena el saludo — el primer turno del cliente ya lo lee.
 export async function warmUpClaude(clientInfo: ClientInfo | null, phone: string): Promise<void> {
   try {
     await anthropic.messages.create({
       model: CLAUDE_VOICE_MODEL,
       max_tokens: 1,
-      system: buildVoiceSystemPrompt(clientInfo, phone),
+      system: buildCachedSystem(clientInfo, phone),
       tools: CLAUDE_VOICE_TOOLS,
+      tool_choice: { type: 'auto' },
       messages: [{ role: 'user', content: '[INICIO_LLAMADA]' }],
     })
   } catch {

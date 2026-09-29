@@ -8,6 +8,7 @@ import ImportClientsModal from "../components/ImportClientsModal"
 import ExportClientsModal from "../components/ExportClientsModal"
 import AutoCallToggle from "../components/AutoCallToggle"
 import AutoCallEngineToggle from "../components/AutoCallEngineToggle"
+import ManualCallFlowSelect from "../components/ManualCallFlowSelect"
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
 
@@ -221,6 +222,7 @@ export default function ClientsPage() {
           <div className="flex items-center gap-3">
             <AutoCallToggle />
             <AutoCallEngineToggle />
+            <ManualCallFlowSelect />
             <button
               onClick={() => setImportInvoicesOpen(true)}
               className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"

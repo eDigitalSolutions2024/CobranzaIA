@@ -11,8 +11,20 @@ export const updateExchangeRate = (currencyCode: string, rateToMxn: number, pass
 
 export type VoiceEngine = "openai" | "elevenlabs"
 
-export const getAutomationSettings = (): Promise<{ autoCallsEnabled: boolean; voiceEngine: VoiceEngine }> =>
-  api("/settings/automation")
+// Guion de las llamadas manuales: "auto" = según días de atraso del cliente
+export type ManualCallFlow = "auto" | "preventive" | "overdue_1_30"
+
+export const getAutomationSettings = (): Promise<{
+  autoCallsEnabled: boolean
+  voiceEngine: VoiceEngine
+  manualCallFlow: ManualCallFlow
+}> => api("/settings/automation")
+
+export const updateManualCallFlow = (manualCallFlow: ManualCallFlow): Promise<{ manualCallFlow: ManualCallFlow }> =>
+  api("/settings/manual-call-flow", {
+    method: "PUT",
+    body: JSON.stringify({ manualCallFlow }),
+  })
 
 export const updateAutomationSettings = (autoCallsEnabled: boolean, password: string) =>
   api("/settings/automation", {

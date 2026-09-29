@@ -27,7 +27,7 @@ import { ElevenLabsTtsSession } from '../services/elevenLabsTts.service'
 import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { warmUpClaude, generateLiveVoiceTurn, LiveTurn, LiveToolCall, ToolOutcome } from '../services/claudeVoiceLive.service'
-import { ClientInfo, buildVoicemailMessage } from '../services/voiceConversation.service'
+import { ClientInfo, buildVoicemailMessage, loadManualFlowOverride } from '../services/voiceConversation.service'
 import { placeOutboundCall } from './voice.controller'
 
 const { VoiceResponse } = twilio.twiml
@@ -787,6 +787,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
           rfc: (client.rfc as string) ?? null,
           contact: (client.contact as string) ?? null,
           invoices,
+          flowOverride: await loadManualFlowOverride(call.triggeredBy),
         }
       : null
 

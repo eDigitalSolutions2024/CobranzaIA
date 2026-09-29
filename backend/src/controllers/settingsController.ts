@@ -74,10 +74,33 @@ export async function getAutomationSettings(req: AuthedRequest, res: Response) {
     res.json({
       autoCallsEnabled: settings?.autoCallsEnabled ?? false,
       voiceEngine: settings?.voiceEngine ?? "openai",
+      manualCallFlow: settings?.manualCallFlow ?? "auto",
     })
   } catch (error) {
     console.error("Error getAutomationSettings:", error)
     res.status(500).json({ message: "Error obteniendo la configuración de automatización" })
+  }
+}
+
+// Guion de las llamadas MANUALES (ver ManualCallFlow en AutomationSettings.ts). Sin
+// contraseña a diferencia de updateAutomationSettings: no cambia nada de lo que corre
+// solo contra clientes reales — únicamente las llamadas que el propio usuario dispara con
+// el botón, y se cambia seguido mientras se prueban los diagramas.
+export async function updateManualCallFlow(req: AuthedRequest, res: Response) {
+  try {
+    const { manualCallFlow } = req.body as { manualCallFlow?: string }
+    if (manualCallFlow !== "auto" && manualCallFlow !== "preventive" && manualCallFlow !== "overdue_1_30") {
+      return res.status(400).json({ message: "manualCallFlow debe ser 'auto', 'preventive' u 'overdue_1_30'" })
+    }
+    const settings = await AutomationSettings.findByIdAndUpdate(
+      "global",
+      { manualCallFlow, updatedBy: req.user?.id ?? null },
+      { upsert: true, new: true }
+    )
+    res.json({ manualCallFlow: settings.manualCallFlow })
+  } catch (error) {
+    console.error("Error updateManualCallFlow:", error)
+    res.status(500).json({ message: "Error actualizando el guion de llamadas manuales" })
   }
 }
 

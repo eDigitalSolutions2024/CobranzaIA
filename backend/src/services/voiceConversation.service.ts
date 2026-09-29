@@ -12,6 +12,7 @@
 // que el modelo "escriba bien" un texto mágico en medio de su respuesta hablada.
 
 import type { InvoiceSummary } from './invoiceSummary.service'
+import AutomationSettings from '../models/AutomationSettings'
 
 export interface ClientInfo {
   name: string
@@ -32,6 +33,11 @@ export interface ClientInfo {
   // Resumen de sus facturas abiertas (ver invoiceSummary.service.ts) — permite explicarle
   // de qué facturas se le habla si pregunta, en vez de escalar a un humano.
   invoices?: InvoiceSummary | null
+  // Fuerza el guion en llamadas MANUALES (selector "Manual script" del dashboard, ver
+  // ManualCallFlow en AutomationSettings.ts). Sin valor = según los días de atraso. Solo
+  // cambia la estructura del guion: los datos (saldo, días, facturas) siguen siendo los
+  // reales del cliente.
+  flowOverride?: 'preventive' | 'overdue_1_30' | null
 }
 
 // Definición de tools en formato Realtime API (session.tools). Los nombres y parámetros
@@ -277,6 +283,18 @@ export function buildVoicemailMessage(clientInfo: ClientInfo | null): string {
   return `Buen día, le habla Guadalupe Martínez, asistente virtual de HP Financial Services${recipient ? `, con un mensaje para ${recipient}` : ''}. Le llamamos para dar seguimiento a su cuenta; le devolvemos la llamada en otro momento. Que tenga excelente día.`
 }
 
+// Guion forzado para llamadas MANUALES según el selector del dashboard (ver ManualCallFlow
+// en AutomationSettings.ts). Las automáticas nunca se fuerzan: siempre van por días de
+// atraso. Si falla la lectura de la configuración, la llamada sigue en automático.
+export async function loadManualFlowOverride(
+  triggeredBy: string | undefined | null
+): Promise<ClientInfo['flowOverride']> {
+  if (triggeredBy !== 'manual') return null
+  const settings = await AutomationSettings.findById('global').select('manualCallFlow').lean().catch(() => null)
+  const flow = settings?.manualCallFlow
+  return flow === 'preventive' || flow === 'overdue_1_30' ? flow : null
+}
+
 export function buildVoiceSystemPrompt(clientInfo: ClientInfo | null, phone: string): string {
   const fechaHoy = new Date().toLocaleDateString('es-MX', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -405,14 +423,23 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
   // diagrama: la factura NO se identifica por número (folios de 12 dígitos), solo pago
   // total (igual que el preventivo), doble confirmación en promesas de pago (igual que el
   // preventivo), y aplican todas las ramas "EN CUALQUIER MOMENTO" + blacklist + buzón.
-  const is1to30 = daysOverdue !== null && daysOverdue >= 1 && daysOverdue <= 30
+  const is1to30 =
+    clientInfo.flowOverride === 'overdue_1_30'
+      ? true
+      : clientInfo.flowOverride === 'preventive'
+        ? false
+        : daysOverdue !== null && daysOverdue >= 1 && daysOverdue <= 30
   const oldestDueDate = clientInfo.invoices?.oldestDueDate ? new Date(clientInfo.invoices.oldestDueDate) : null
   // dueDate es "solo día" guardado a medianoche UTC (ver invoiceSummary.service.ts)
   const dueDateText = oldestDueDate
     ? `${oldestDueDate.getUTCDate()} de ${oldestDueDate.toLocaleDateString('es-MX', { month: 'long', timeZone: 'UTC' })}`
     : null
+  // daysOverdue null solo pasa si el guion 1–30 se forzó (llamada manual) sobre un cliente
+  // que todavía no vence — no se inventan días de atraso.
   const overduePresentation =
-    overdueCount > 1
+    daysOverdue === null
+      ? `Gracias. Me comunico por su factura por ${debtText}. ¿Me podría indicar el estatus del pago?`
+      : overdueCount > 1
       ? `Gracias. Me comunico porque tiene ${overdueCount} facturas vencidas por un total de ${debtText}; la más antigua ${dueDateText ? `venció el ${dueDateText} y ` : ''}actualmente registra ${daysOverdue} días de atraso. ¿Me podría indicar el estatus del pago?`
       : `Gracias. Me comunico porque su factura por ${debtText} ${dueDateText ? `venció el ${dueDateText} y ` : 'ya venció y '}actualmente registra ${daysOverdue} días de atraso. ¿Me podría indicar el estatus del pago?`
   const overdue1to30Steps = `3. Presenta el saldo vencido con estas palabras (puedes ajustar el tono, pero conserva los números tal cual): "${overduePresentation}"

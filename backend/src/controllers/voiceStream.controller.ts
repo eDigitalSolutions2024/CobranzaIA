@@ -5,7 +5,7 @@ import Call from '../models/Call'
 import Client from '../models/Client'
 import { runAction } from '../services/flowActions.service'
 import { OpenAIRealtimeSession, RealtimeFunctionCall, RealtimeUsage } from '../services/openaiRealtime.service'
-import { buildVoiceSystemPrompt, buildTranscriptionPrompt, ClientInfo } from '../services/voiceConversation.service'
+import { buildVoiceSystemPrompt, buildTranscriptionPrompt, ClientInfo, loadManualFlowOverride } from '../services/voiceConversation.service'
 import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { placeOutboundCall } from './voice.controller'
@@ -595,6 +595,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
           rfc: (client.rfc as string) ?? null,
           contact: (client.contact as string) ?? null,
           invoices,
+          flowOverride: await loadManualFlowOverride(call.triggeredBy),
         }
       : null
 

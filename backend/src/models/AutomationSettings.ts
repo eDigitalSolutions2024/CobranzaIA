@@ -9,9 +9,17 @@ import mongoose, { Schema, Document } from 'mongoose'
 // El botón "Call" manual siempre usa OpenAI; "Test ElevenLabs" siempre usa ElevenLabs.
 export type VoiceEngine = 'openai' | 'elevenlabs'
 
+// Qué guion usan las llamadas MANUALES (botón "Call" / "Test ElevenLabs"), para probar
+// cada diagrama con cualquier cliente: 'auto' = según los días de atraso del cliente (lo
+// mismo que las automáticas); 'preventive' = guion preventivo 0 días; 'overdue_1_30' =
+// guion 1–30 días. Las llamadas automáticas SIEMPRE usan 'auto'. Ver
+// buildVoiceSystemPrompt (ClientInfo.flowOverride).
+export type ManualCallFlow = 'auto' | 'preventive' | 'overdue_1_30'
+
 export interface IAutomationSettings extends Document {
   autoCallsEnabled: boolean
   voiceEngine: VoiceEngine
+  manualCallFlow: ManualCallFlow
   updatedBy?: mongoose.Types.ObjectId | null
   updatedAt: Date
 }
@@ -25,6 +33,7 @@ const AutomationSettingsSchema = new Schema(
     _id: { type: String, default: 'global' },
     autoCallsEnabled: { type: Boolean, default: false },
     voiceEngine: { type: String, enum: ['openai', 'elevenlabs'], default: 'openai' },
+    manualCallFlow: { type: String, enum: ['auto', 'preventive', 'overdue_1_30'], default: 'auto' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },
   { timestamps: true }
