@@ -216,7 +216,7 @@ export default function ClientsPage() {
 
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-4xl font-bold">Clients</h1>
+            <h1 className="text-4xl font-bold">Customer</h1>
             <p className="mt-2 text-zinc-400">Smart collection management</p>
           </div>
           <div className="flex items-center gap-3">

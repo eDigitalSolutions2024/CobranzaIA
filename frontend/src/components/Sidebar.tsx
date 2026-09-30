@@ -18,7 +18,7 @@ interface Props {
 
 const menu = [
   { id: "dashboard", name: "Dashboard", icon: LayoutDashboard },
-  { id: "clients", name: "Clients", icon: Users },
+  { id: "clients", name: "Customer", icon: Users },
   { id: "calls", name: "Calls", icon: Phone },
   //{ id: "conversations", name: "Conversations", icon: MessageCircle },
   //{ id: "messages", name: "Send WhatsApp", icon: MessageSquare },
@@ -53,7 +53,7 @@ export default function Sidebar({ page, setPage, collapsed, onToggleCollapse }: 
         {!collapsed && (
           <>
             <img src={logo} alt="Logo" className="mb-3 h-10 w-auto object-contain" />
-            <h1 className="text-2xl font-bold whitespace-nowrap">Cobranza<span className="text-[var(--brand-main)]">AI</span></h1>
+            <h1 className="text-2xl font-bold whitespace-nowrap"><span className="text-[var(--brand-main)]">Collection</span></h1>
             <p className="mt-1 text-sm text-white whitespace-nowrap">Smart Collection Platform</p>
           </>
         )}
