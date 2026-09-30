@@ -98,6 +98,7 @@ export async function handleIncomingCartesia(req: Request, res: Response): Promi
         status: 'in_progress',
         requiresHuman: false,
         triggeredBy: 'manual',
+        voiceEngine: 'elevenlabs',
       })
     }
 

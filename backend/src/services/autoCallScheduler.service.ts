@@ -17,6 +17,7 @@ import Call from '../models/Call'
 import AutomationSettings from '../models/AutomationSettings'
 import { placeOutboundCall } from '../controllers/voice.controller'
 import { prepareWhatsappMessage } from './whatsappService'
+import { AUTO_CYCLE_STEPS } from '../config/autoCall'
 
 const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 12
 
@@ -140,6 +141,9 @@ async function runAutoCallCycle(): Promise<void> {
 
     const isNewCycle = !client.autoCallCycleStartAt || (client.autoCallCycleStartAt as Date) <= cycleThreshold
     const attemptNumber = isNewCycle ? 1 : ((client.autoCallAttempt as number) + 1)
+    // Ciclo recortado (AUTO_CYCLE_STEPS, ej. 1 en la semana de prueba): nunca se dispara un
+    // paso más allá del último configurado.
+    if (attemptNumber > AUTO_CYCLE_STEPS) continue
 
     if (attemptNumber <= 2) {
       // Pasos 1 y 2: llamada — el resultado (respuesta o no) llega después por el
@@ -161,7 +165,7 @@ async function runAutoCallCycle(): Promise<void> {
       try {
         await placeOutboundCall(String(client._id), publicUrl, 'auto', settings.voiceEngine ?? 'openai')
         dispatched++
-        console.log(`[AutoCall] Intento ${attemptNumber}/4 (llamada, motor ${settings.voiceEngine ?? 'openai'}) disparado: ${client.name} (${client.phone})`)
+        console.log(`[AutoCall] Intento ${attemptNumber}/${AUTO_CYCLE_STEPS} (llamada, motor ${settings.voiceEngine ?? 'openai'}) disparado: ${client.name} (${client.phone})`)
       } catch (err) {
         console.error(`[AutoCall] Error llamando a ${client.name} (${client._id}):`, err)
       }
@@ -183,11 +187,11 @@ async function runAutoCallCycle(): Promise<void> {
       })
       await Client.findByIdAndUpdate(client._id, {
         autoCallAttempt: attemptNumber,
-        autoCallNextAttemptAt: attemptNumber === 4 ? null : new Date(now.getTime() + MESSAGE_STEP_GAP_MS),
-        ...(attemptNumber === 4 ? { autoCycleExhausted: true } : {}),
+        autoCallNextAttemptAt: attemptNumber >= AUTO_CYCLE_STEPS ? null : new Date(now.getTime() + MESSAGE_STEP_GAP_MS),
+        ...(attemptNumber >= AUTO_CYCLE_STEPS ? { autoCycleExhausted: true } : {}),
       })
       dispatched++
-      console.log(`[AutoCall] Intento ${attemptNumber}/4 (WhatsApp '${template}') disparado: ${client.name} (${client.phone})`)
+      console.log(`[AutoCall] Intento ${attemptNumber}/${AUTO_CYCLE_STEPS} (WhatsApp '${template}') disparado: ${client.name} (${client.phone})`)
     } catch (err) {
       // No se avanza el ciclo si el envío falló — se vuelve a intentar en la próxima
       // corrida del cron en vez de darlo por hecho.

@@ -3,6 +3,7 @@ import {
   Users,
   Phone,
   ShieldCheck,
+  Gauge,
   ChevronsLeft,
   ChevronsRight,
 } from "lucide-react"
@@ -23,6 +24,10 @@ const menu = [
   //{ id: "conversations", name: "Conversations", icon: MessageCircle },
   //{ id: "messages", name: "Send WhatsApp", icon: MessageSquare },
   { id: "security", name: "Security", icon: ShieldCheck },
+  // Panel de consumo/costos: solo en desarrollo (npm run dev), nunca en el build de
+  // producción. Para ver lo que gasta producción, el frontend local se apunta al backend
+  // de producción (VITE_API_URL en frontend/.env).
+  ...(import.meta.env.DEV ? [{ id: "usage", name: "Resources", icon: Gauge }] : []),
 ]
 
 export default function Sidebar({ page, setPage, collapsed, onToggleCollapse }: Props) {

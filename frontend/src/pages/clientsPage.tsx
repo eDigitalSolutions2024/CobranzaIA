@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { getClients, deleteClient, type ClientSort } from "../services/clients"
 import { api } from "../services/api"
+import { getAutomationSettings } from "../services/settings"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
 import ImportInvoicesModal from "../components/ImportInvoicesModal"
@@ -61,6 +62,13 @@ const testingGroup:string [] = [
 export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
   const [debtSort, setDebtSort] = useState<ClientSort>("debt_desc")
+  // Pasos del ciclo automático (AUTO_CYCLE_STEPS del backend) — Auto Outreach se muestra "x/N"
+  const [autoCycleSteps, setAutoCycleSteps] = useState(4)
+  useEffect(() => {
+    getAutomationSettings()
+      .then((d) => setAutoCycleSteps(d.autoCycleSteps ?? 4))
+      .catch(() => {})
+  }, [])
   const [openModal, setOpenModal] = useState(false)
   const [importInvoicesOpen, setImportInvoicesOpen] = useState(false)
   const [monthMasterOpen, setMonthMasterOpen] = useState(false)
@@ -350,10 +358,10 @@ export default function ClientsPage() {
                         : "—"}
                     </td>
                     <td className="py-4">
-                      <span className="text-zinc-300">{client.autoCallAttempt ?? 0}/4</span>
+                      <span className="text-zinc-300">{client.autoCallAttempt ?? 0}/{autoCycleSteps}</span>
                       {client.autoCycleExhausted && (
                         <span
-                          title="Se completaron los 4 pasos del ciclo (2 llamadas + 2 mensajes) sin respuesta"
+                          title={`Se completaron los ${autoCycleSteps} paso(s) del ciclo automático sin respuesta`}
                           className="ml-2 rounded-full bg-yellow-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-yellow-400"
                         >
                           No response

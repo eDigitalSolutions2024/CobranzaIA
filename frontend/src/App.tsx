@@ -39,7 +39,7 @@ export default function App() {
 
       {page === "messages" && <MessagesPage />}
 
-      {page === "usage" && <UsagePage />}
+      {import.meta.env.DEV && page === "usage" && <UsagePage />}
 
       {page === "security" && <SecurityPage />}
 

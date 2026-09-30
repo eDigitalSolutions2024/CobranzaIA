@@ -418,6 +418,29 @@ export async function importInvoices(req: Request, res: Response) {
 
       const touchedClientIds = [...new Set(ops.map((op) => String(op.updateOne.update.$set.clientId)))]
       await Promise.all(touchedClientIds.map((clientId) => syncClientFromInvoices(clientId)))
+
+      // La columna "Collector" del Excel es la persona a la que hay que contactar — se
+      // usa como Contact del cliente (el saludo del agente de voz se dirige a ella). Solo
+      // se llena si el cliente no tiene Contact todavía: no pisa un contacto corregido a
+      // mano ni el que actualizó el agente en una llamada (actualizar_contacto).
+      const contactByClientId = new Map<string, string>()
+      for (const row of rows) {
+        const clientId = clientIdByCustomerId.get(row.customerId)
+        if (clientId && row.collector && !contactByClientId.has(String(clientId))) {
+          contactByClientId.set(String(clientId), row.collector)
+        }
+      }
+      if (contactByClientId.size > 0) {
+        await Client.bulkWrite(
+          [...contactByClientId.entries()].map(([clientId, contact]) => ({
+            updateOne: {
+              filter: { _id: clientId, $or: [{ contact: null }, { contact: "" }, { contact: { $exists: false } }] },
+              update: { $set: { contact } },
+            },
+          })),
+          { ordered: false }
+        )
+      }
     }
 
     res.json({

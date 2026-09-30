@@ -59,6 +59,9 @@ export interface ICall extends Document {
   // saludo grabado del buzón se transcribe como "user" y hacía que se contara como
   // conversación real — ver bug de 2026-09-19 en voice.controller.ts).
   detectedVoicemail: boolean
+  // Motor de voz de la llamada (para el panel de Recursos: Deepgram/ElevenLabs solo se
+  // consumen con "elevenlabs"). null en llamadas anteriores a este campo.
+  voiceEngine?: 'openai' | 'elevenlabs' | null
   flowStateId?: string | null
   flowContext?: Record<string, any>
   summary?: string | null
@@ -123,6 +126,7 @@ const CallSchema = new Schema<ICall>(
     callSid: { type: String, required: true, unique: true },
     triggeredBy: { type: String, enum: ['manual', 'auto'], default: 'manual' },
     detectedVoicemail: { type: Boolean, default: false },
+    voiceEngine: { type: String, enum: ['openai', 'elevenlabs', null], default: null },
     // Estado y variables de la máquina de estados (backend/src/flows/cobranza_ai_v1.json)
     flowStateId: { type: String, default: null },
     flowContext: { type: Schema.Types.Mixed, default: {} },

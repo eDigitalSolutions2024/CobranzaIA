@@ -7,6 +7,7 @@ import {
   YAxis,
   Tooltip,
   CartesianGrid,
+  Legend,
 } from "recharts"
 import { getUsage } from "../services/usage"
 
@@ -16,6 +17,42 @@ const RANGES = [
   { label: "30 days", value: 30 },
   { label: "90 days", value: 90 },
   { label: "All", value: "all" as const },
+]
+
+// Proveedores del panel — mismo orden en las tarjetas y en la gráfica diaria apilada.
+// Deepgram y ElevenLabs solo se consumen en llamadas con el motor ElevenLabs.
+const PROVIDERS = [
+  {
+    key: "openai", label: "OpenAI (voice)", color: "#3b82f6", dailyKey: "openaiCostUsd",
+    cost: (d: any) => d?.calls?.openai?.costUsd ?? 0,
+    detail: (d: any) => `${Number(d.calls.openai.totalTokens ?? 0).toLocaleString("en-US")} tokens`,
+  },
+  {
+    key: "claude", label: "Claude", color: "#f59e0b", dailyKey: "claudeCostUsd",
+    cost: (d: any) => d?.calls?.claude?.costUsd ?? 0,
+    detail: (d: any) =>
+      `${Number((d.calls.claude.inputTokens ?? 0) + (d.calls.claude.outputTokens ?? 0)).toLocaleString("en-US")} tokens`,
+  },
+  {
+    key: "deepgram", label: "Deepgram (STT)", color: "#14b8a6", dailyKey: "deepgramCostUsd",
+    cost: (d: any) => d?.calls?.deepgram?.costUsd ?? 0,
+    detail: (d: any) => `${d.calls.deepgram?.minutes ?? 0} min`,
+  },
+  {
+    key: "elevenlabs", label: "ElevenLabs (voice)", color: "#a855f7", dailyKey: "elevenlabsCostUsd",
+    cost: (d: any) => d?.calls?.elevenlabs?.costUsd ?? 0,
+    detail: (d: any) => `${Number(d.calls.elevenlabs?.characters ?? 0).toLocaleString("en-US")} chars`,
+  },
+  {
+    key: "twilio", label: "Twilio (calls)", color: "#ef4444", dailyKey: "twilioCostUsd",
+    cost: (d: any) => d?.calls?.twilioCostUsd ?? 0,
+    detail: (d: any) => minutes(d.calls.totalDurationSeconds ?? 0),
+  },
+  {
+    key: "whatsapp", label: "WhatsApp", color: "#22c55e", dailyKey: "whatsappCostUsd",
+    cost: (d: any) => d?.whatsapp?.costUsd ?? 0,
+    detail: (d: any) => `${d.whatsapp.outboundCount ?? 0} sent`,
+  },
 ]
 
 function minutes(seconds: number): string {
@@ -54,7 +91,8 @@ export default function UsagePage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-4xl font-bold">Resources</h1>
-          <p className="mt-2 text-zinc-400">System usage — calls and WhatsApp messages.</p>
+          <p className="mt-2 text-zinc-400">System usage and estimated cost by provider — development only.</p>
+          <p className="mt-1 text-xs text-zinc-500">Data comes from the backend this app is connected to ({import.meta.env.VITE_API_URL || "http://localhost:3003/api"}).</p>
         </div>
 
         <div className="flex gap-2">
@@ -102,29 +140,29 @@ export default function UsagePage() {
           <h2 className="mt-4 text-3xl font-bold text-emerald-400">
             {loading ? "..." : usd(data?.totalCostUsd ?? 0)}
           </h2>
+          <p className="mt-1 text-xs text-zinc-400">
+            {loading || !data?.calls?.total ? "" : `${usd((data.totalCostUsd ?? 0) / data.calls.total)} per call`}
+          </p>
         </div>
       </div>
 
       {/* Costo por proveedor */}
       <div className="mt-8">
         <h2 className="text-sm font-medium text-white mb-3 uppercase tracking-wider">Cost by provider (estimated)</h2>
-        <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
-            <p className="text-sm text-white">OpenAI (voice)</p>
-            <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : usd(data?.calls?.openai?.costUsd ?? 0)}</p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
-            <p className="text-sm text-white">Claude (summaries)</p>
-            <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : usd(data?.calls?.claude?.costUsd ?? 0)}</p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
-            <p className="text-sm text-white">Twilio (calls)</p>
-            <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : usd(data?.calls?.twilioCostUsd ?? 0)}</p>
-          </div>
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
-            <p className="text-sm text-white">WhatsApp</p>
-            <p className="text-2xl font-bold text-white mt-1">{loading ? "..." : usd(data?.whatsapp?.costUsd ?? 0)}</p>
-          </div>
+        <p className="text-xs text-zinc-400 mb-3">
+          Calls by voice engine: OpenAI {loading ? "..." : data?.calls?.byEngine?.openai ?? 0} · ElevenLabs{" "}
+          {loading ? "..." : data?.calls?.byEngine?.elevenlabs ?? 0}
+        </p>
+        <div className="grid gap-4 grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+          {PROVIDERS.map((provider) => (
+            <div key={provider.key} className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+              <p className="text-sm text-white">{provider.label}</p>
+              <p className="text-2xl font-bold mt-1" style={{ color: provider.color }}>
+                {loading ? "..." : usd(provider.cost(data))}
+              </p>
+              <p className="text-xs text-zinc-400 mt-1">{loading || !data ? "" : provider.detail(data)}</p>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -175,7 +213,7 @@ export default function UsagePage() {
       <div className="mt-8 rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
         <div className="mb-6">
           <h2 className="text-lg font-semibold">Estimated cost per day</h2>
-          <p className="text-sm text-zinc-400">OpenAI + Claude + Twilio + WhatsApp combined</p>
+          <p className="text-sm text-zinc-400">Stacked by provider</p>
         </div>
 
         <div className="h-80">
@@ -186,9 +224,12 @@ export default function UsagePage() {
               <YAxis stroke="#71717a" fontSize={12} tickFormatter={(v) => usd(v)} />
               <Tooltip
                 contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
-                formatter={(value: any) => [usd(Number(value)), "Cost"]}
+                formatter={(value: any, name: any) => [usd(Number(value)), name]}
               />
-              <Bar dataKey="totalCostUsd" name="Cost" fill="#10b981" radius={[4, 4, 0, 0]} />
+              <Legend />
+              {PROVIDERS.map((provider) => (
+                <Bar key={provider.key} dataKey={provider.dailyKey} name={provider.label} stackId="cost" fill={provider.color} />
+              ))}
             </BarChart>
           </ResponsiveContainer>
         </div>

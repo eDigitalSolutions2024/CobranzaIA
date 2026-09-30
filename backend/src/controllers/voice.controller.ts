@@ -12,6 +12,7 @@ import { runAction } from '../services/flowActions.service'
 import { CLIENT_REPORT_FIELDS, buildClientReportFilter } from '../utils/reportFilters'
 import { CALL_EXPORT_COLUMNS, CLIENT_EXPORT_COLUMNS, toCallExportRow, toClientExportRow } from '../utils/clientExport'
 import type { VoiceEngine } from '../models/AutomationSettings'
+import { AUTO_CYCLE_STEPS } from '../config/autoCall'
 
 
 // Traduce lo que ya pasó en la llamada (qué function tool disparó el agente, o si
@@ -107,6 +108,16 @@ async function advanceAutoCallCycle(
   if (!AUTO_CALL_NO_RESPONSE_DISPOSITIONS.has(disposition)) {
     // Contestó una persona real — se detiene el ciclo automático de esta semana.
     client.autoCallNextAttemptAt = null
+    await client.save()
+    return
+  }
+
+  // Ya se hizo el último paso configurado (AUTO_CYCLE_STEPS, ej. 1 en la semana de prueba):
+  // no hay siguiente paso — el cliente queda como ciclo terminado sin respuesta hasta que
+  // arranque el ciclo de la semana siguiente.
+  if ((client.autoCallAttempt as number) >= AUTO_CYCLE_STEPS) {
+    client.autoCallNextAttemptAt = null
+    client.autoCycleExhausted = true
     await client.save()
     return
   }
@@ -348,6 +359,7 @@ export async function placeOutboundCall(
     status: 'in_progress',
     requiresHuman: false,
     triggeredBy,
+    voiceEngine: engine,
   })
 
   return { callSid: call.sid, status: call.status }
@@ -546,6 +558,7 @@ export async function handleIncoming(req: Request, res: Response): Promise<void>
         status: 'in_progress',
         requiresHuman: false,
         triggeredBy: 'manual',
+        voiceEngine: 'openai',
       })
     }
 

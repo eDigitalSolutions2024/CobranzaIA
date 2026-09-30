@@ -18,6 +18,7 @@ export const getAutomationSettings = (): Promise<{
   autoCallsEnabled: boolean
   voiceEngine: VoiceEngine
   manualCallFlow: ManualCallFlow
+  autoCycleSteps?: number
 }> => api("/settings/automation")
 
 export const updateManualCallFlow = (manualCallFlow: ManualCallFlow): Promise<{ manualCallFlow: ManualCallFlow }> =>

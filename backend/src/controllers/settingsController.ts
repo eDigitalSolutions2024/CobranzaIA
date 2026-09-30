@@ -4,6 +4,7 @@ import ExchangeRate from "../models/ExchangeRate"
 import AutomationSettings from "../models/AutomationSettings"
 import User from "../models/User"
 import { AuthedRequest } from "../middleware/auth"
+import { AUTO_CYCLE_STEPS } from "../config/autoCall"
 
 // Confirmación de contraseña compartida por los toggles sensibles de Settings (tipo de
 // cambio, llamadas automáticas) — ambos pueden generar cargos/llamadas reales, así que
@@ -75,6 +76,9 @@ export async function getAutomationSettings(req: AuthedRequest, res: Response) {
       autoCallsEnabled: settings?.autoCallsEnabled ?? false,
       voiceEngine: settings?.voiceEngine ?? "openai",
       manualCallFlow: settings?.manualCallFlow ?? "auto",
+      // Pasos del ciclo automático (AUTO_CYCLE_STEPS en el .env) — la tabla de clientes
+      // muestra el avance como "x/N" con este N.
+      autoCycleSteps: AUTO_CYCLE_STEPS,
     })
   } catch (error) {
     console.error("Error getAutomationSettings:", error)
