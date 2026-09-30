@@ -10,14 +10,9 @@ import { analyzeCallTranscript, ClientInfo } from '../services/claudeVoice.servi
 import { DispositionStatus, nextActionFor } from '../config/disposition'
 import { runAction } from '../services/flowActions.service'
 import { CLIENT_REPORT_FIELDS, buildClientReportFilter } from '../utils/reportFilters'
+import { CALL_EXPORT_COLUMNS, CLIENT_EXPORT_COLUMNS, toCallExportRow, toClientExportRow } from '../utils/clientExport'
 import type { VoiceEngine } from '../models/AutomationSettings'
 
-const CALL_STATUS_LABEL: Record<string, string> = {
-  in_progress: 'En curso',
-  completed: 'Completada',
-  failed: 'Fallida',
-  requires_human: 'Requiere asesor',
-}
 
 // Traduce lo que ya pasó en la llamada (qué function tool disparó el agente, o si
 // nunca hubo conversación real) a un Status del catálogo fijo — no se le pregunta
@@ -250,8 +245,10 @@ export async function exportCalls(req: Request, res: Response): Promise<void> {
     const status = String(req.query.status ?? '')
     if (status && status !== 'all') callFilter.status = status
 
+    // Cliente completo (no solo los campos de filtro): cada fila del reporte lleva toda la
+    // información del cliente, igual que la hoja "Clientes" de GET /clients/export.
     let calls = await Call.find(callFilter)
-      .populate('clientId', CLIENT_REPORT_FIELDS)
+      .populate('clientId')
       .sort({ createdAt: -1 })
       .lean()
 
@@ -268,61 +265,25 @@ export async function exportCalls(req: Request, res: Response): Promise<void> {
     }
 
     const workbook = new ExcelJS.Workbook()
-    const sheet = workbook.addWorksheet('Llamadas')
-    sheet.columns = [
-      { header: 'Country', key: 'country', width: 12 },
-      { header: 'CollectorID', key: 'collectorId', width: 12 },
-      { header: 'Team', key: 'team', width: 14 },
-      { header: 'TeamLeader', key: 'teamLeader', width: 16 },
-      { header: 'Collector', key: 'collector', width: 16 },
-      { header: 'Cliente', key: 'name', width: 25 },
-      { header: 'Teléfono', key: 'phone', width: 15 },
-      { header: 'Fecha', key: 'createdAt', width: 18 },
-      { header: 'Duración (min)', key: 'durationMin', width: 14 },
-      { header: 'Tipo', key: 'triggeredBy', width: 12 },
-      { header: 'Estado', key: 'status', width: 15 },
-      { header: 'Disposition', key: 'disposition', width: 24 },
-      { header: 'Next Action', key: 'nextAction', width: 18 },
-      { header: 'Monto promesa', key: 'amount', width: 14 },
-      { header: 'Fecha promesa', key: 'promiseDate', width: 16 },
-      { header: 'Requiere asesor', key: 'requiresHuman', width: 16 },
-      { header: 'Buzón de voz', key: 'detectedVoicemail', width: 14 },
-      { header: 'Resumen', key: 'summary', width: 40 },
-      { header: 'Transcript', key: 'transcript', width: 60 },
-    ]
+    const sheet = workbook.addWorksheet('Calls')
+    // Primero TODAS las columnas del cliente (las mismas de la hoja "Customers" de Export
+    // Clients) y después las de la llamada — ambas definidas en utils/clientExport.ts.
+    sheet.columns = [...CLIENT_EXPORT_COLUMNS, ...CALL_EXPORT_COLUMNS]
     sheet.addRows(
       calls.map((call: any) => {
         const client = call.clientId
-        const transcriptText = (call.transcript || [])
-          .map((t: any) => `${t.role === 'assistant' ? 'IA' : 'Cliente'}: ${t.content}`)
-          .join(' | ')
         return {
-          country: client?.country || '',
-          collectorId: client?.collectorId ?? '',
-          team: client?.team || '',
-          teamLeader: client?.teamLeader || '',
-          collector: client?.collector || '',
-          name: client?.name || '—',
-          phone: call.phone || client?.phone || '—',
-          createdAt: call.createdAt ? new Date(call.createdAt) : null,
-          durationMin: call.durationSeconds != null ? Math.round((call.durationSeconds / 60) * 10) / 10 : '',
-          triggeredBy: call.triggeredBy === 'auto' ? 'Automática' : 'Manual',
-          status: CALL_STATUS_LABEL[call.status as string] || call.status,
-          disposition: call.disposition || '',
-          nextAction: call.nextAction || '',
-          amount: call.amount || '',
-          promiseDate: call.promiseDate ? new Date(call.promiseDate) : '',
-          requiresHuman: call.requiresHuman ? 'Sí' : 'No',
-          detectedVoicemail: call.detectedVoicemail ? 'Sí' : 'No',
-          summary: call.summary || '',
-          transcript: transcriptText,
+          // Llamada de un número sin cliente registrado: columnas del cliente vacías,
+          // salvo el nombre, que queda como "—".
+          ...(client ? toClientExportRow(client) : { name: '—' }),
+          ...toCallExportRow(call, client),
         }
       })
     )
     sheet.getRow(1).font = { bold: true }
 
     const buffer = await workbook.xlsx.writeBuffer()
-    const filename = `cobranzaia-llamadas-${new Date().toISOString().slice(0, 10)}.xlsx`
+    const filename = `cobranzaia-calls-${new Date().toISOString().slice(0, 10)}.xlsx`
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
     res.send(Buffer.from(buffer))

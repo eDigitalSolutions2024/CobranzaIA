@@ -40,9 +40,16 @@ app.set("trust proxy", 1)
 // que el navegador exponga qué servidor corre, HSTS, etc.)
 app.use(helmet())
 
+// FRONTEND_URL acepta varios orígenes separados por coma (ej. dos puertos locales de Vite:
+// "http://localhost:5173,http://localhost:5174"). Con un solo valor funciona igual que antes.
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: allowedOrigins,
   })
 )
 

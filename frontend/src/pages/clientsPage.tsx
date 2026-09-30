@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getClients, deleteClient } from "../services/clients"
+import { getClients, deleteClient, type ClientSort } from "../services/clients"
 import { api } from "../services/api"
 import NewClientModal from "../components/NewClientModal"
 import ClientDetailModal from "../components/ClientDetailModal"
@@ -9,7 +9,7 @@ import ExportClientsModal from "../components/ExportClientsModal"
 import AutoCallToggle from "../components/AutoCallToggle"
 import AutoCallEngineToggle from "../components/AutoCallEngineToggle"
 import ManualCallFlowSelect from "../components/ManualCallFlowSelect"
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
 
 const DOCUMENT_LABEL: Record<string, string> = {
@@ -60,6 +60,7 @@ const testingGroup:string [] = [
 
 export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
+  const [debtSort, setDebtSort] = useState<ClientSort>("debt_desc")
   const [openModal, setOpenModal] = useState(false)
   const [importInvoicesOpen, setImportInvoicesOpen] = useState(false)
   const [monthMasterOpen, setMonthMasterOpen] = useState(false)
@@ -196,11 +197,11 @@ export default function ClientsPage() {
 
   useEffect(() => {
     loadClients()
-  }, [])
+  }, [debtSort])
 
   async function loadClients() {
     try {
-      const data = await getClients()
+      const data = await getClients(debtSort)
       setClients(data)
     } catch (error) {
       console.log(error)
@@ -258,7 +259,18 @@ export default function ClientsPage() {
                 <tr className="border-b border-zinc-800 text-left">
                   <th className="pb-4 text-sm text-zinc-500">Customer Name</th>
                   <th className="pb-4 text-sm text-zinc-500">Phone</th>
-                  <th className="pb-4 text-sm text-zinc-500">USD Amount</th>
+                  <th className="pb-4 text-sm text-zinc-500">
+                    {/* Orden por deuda (del lado del servidor, para que abarque todas las
+                        páginas y no solo los clientes cargados) — por defecto mayor a menor */}
+                    <button
+                      onClick={() => setDebtSort((prev) => (prev === "debt_desc" ? "debt_asc" : "debt_desc"))}
+                      title={debtSort === "debt_desc" ? "Sorted by debt: highest first (click for lowest first)" : "Sorted by debt: lowest first (click for highest first)"}
+                      className="flex items-center gap-1 text-zinc-300 hover:text-white cursor-pointer"
+                    >
+                      USD Amount
+                      {debtSort === "debt_desc" ? <ArrowDown size={14} /> : <ArrowUp size={14} />}
+                    </button>
+                  </th>
                   <th className="pb-4 text-sm text-zinc-500">Risk</th>
                   <th className="pb-4 text-sm text-zinc-500">Last contact</th>
                   <th className="pb-4 text-sm text-zinc-500">Payment Promise</th>

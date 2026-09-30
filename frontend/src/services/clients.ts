@@ -1,8 +1,11 @@
 import { api, apiDownload, apiUpload } from "./api"
 import type { ReportFilterValue } from "../components/ReportFilters"
 
-export const getClients = () =>
-  api("/clients").then((data) => data.clients)
+// Sin sort: el orden de siempre (más recientes primero)
+export type ClientSort = "debt_desc" | "debt_asc"
+
+export const getClients = (sort?: ClientSort) =>
+  api(sort ? `/clients?sort=${sort}` : "/clients").then((data) => data.clients)
 
 export const getClientDetail = (id: string) =>
   api(`/clients/${id}/detail`)

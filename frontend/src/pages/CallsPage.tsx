@@ -92,7 +92,7 @@ export default function CallsPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-zinc-800 text-left">
-                <th className="pb-4 text-sm text-zinc-500">Client</th>
+                <th className="pb-4 text-sm text-zinc-500">Customer</th>
                 <th className="pb-4 text-sm text-zinc-500">Phone</th>
                 <th className="pb-4 text-sm text-zinc-500">Date</th>
                 <th className="pb-4 text-sm text-zinc-500">Duration</th>

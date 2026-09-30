@@ -202,7 +202,7 @@ export default function BlacklistSection() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-xl font-bold text-white">Blacklist</h2>
-          <p className="text-sm text-zinc-400 mt-0.5">Clients with a payment refusal detected by the AI or added manually</p>
+          <p className="text-sm text-zinc-400 mt-0.5">Customers with a payment refusal detected by the AI or added manually</p>
         </div>
         <button
           onClick={() => setAddModalOpen(true)}
@@ -245,7 +245,7 @@ export default function BlacklistSection() {
         <table className="w-full">
           <thead>
             <tr className="border-b border-zinc-800 text-left">
-              <th className="pb-3 text-xs text-zinc-500">Client</th>
+              <th className="pb-3 text-xs text-zinc-500">Customer</th>
               <th className="pb-3 text-xs text-zinc-500">ID</th>
               <th className="pb-3 text-xs text-zinc-500">Amount owed</th>
               <th className="pb-3 text-xs text-zinc-500">Days overdue</th>

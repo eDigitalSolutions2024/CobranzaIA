@@ -47,7 +47,7 @@ export default function ClientsTable({ clients }: Props) {
     <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
 
       <div className="mb-6">
-        <h2 className="text-xl font-semibold">Recent clients</h2>
+        <h2 className="text-xl font-semibold">Recent customers</h2>
         <p className="text-sm text-white">Smart collection tracking</p>
       </div>
 
@@ -55,7 +55,7 @@ export default function ClientsTable({ clients }: Props) {
         <table className="w-full">
           <thead>
             <tr className="border-b border-zinc-800 text-left">
-              <th className="pb-4 text-sm text-zinc-500">Client</th>
+              <th className="pb-4 text-sm text-zinc-500">Customer</th>
               <th className="pb-4 text-sm text-zinc-500">Debt</th>
               <th className="pb-4 text-sm text-zinc-500">Status</th>
               <th className="pb-4 text-sm text-zinc-500">AI Risk</th>

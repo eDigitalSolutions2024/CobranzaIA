@@ -8,30 +8,13 @@ import Ticket from "../models/Ticket"
 import { isValidRFC, normalizeRFC } from "../utils/rfc"
 import { normalizeMexicanPhone } from "../utils/phone"
 import { buildClientReportFilter } from "../utils/reportFilters"
-
-const STATUS_LABEL: Record<string, string> = {
-  pending: "Pendiente",
-  contacted: "Contactado",
-  negotiating: "Negociando",
-  promised: "Promesa",
-  paid: "Pagado",
-  no_response: "Sin respuesta",
-}
-
-const RISK_LABEL: Record<string, string> = { low: "Bajo", medium: "Medio", high: "Alto" }
+import { CALL_EXPORT_COLUMNS, CLIENT_EXPORT_COLUMNS, toCallExportRow, toClientExportRow } from "../utils/clientExport"
 
 const PROMISE_STATUS_LABEL: Record<string, string> = {
-  pending: "Pendiente",
-  completed: "Cumplida",
-  broken: "Incumplida",
-  cancelled: "Cancelada",
-}
-
-const CALL_STATUS_LABEL: Record<string, string> = {
-  in_progress: "En curso",
-  completed: "Completada",
-  failed: "Fallida",
-  requires_human: "Requiere asesor",
+  pending: "Pending",
+  completed: "Kept",
+  broken: "Broken",
+  cancelled: "Cancelled",
 }
 
 const RISK_FROM_LABEL: Record<string, string> = {
@@ -156,9 +139,18 @@ export async function getClients(req: Request, res: Response) {
     // (BlacklistSection.tsx) para encontrar un cliente sin tener que hojear páginas.
     const search = String(req.query.search ?? "").trim()
     const filter = search ? { name: { $regex: search, $options: "i" } } : {}
+    // Orden opcional (tarjeta "Filtrado en página de clientes automáticamente de deuda mayor
+    // a menor"): la tabla de clientes pide debt_desc; sin parámetro se mantiene el orden de
+    // siempre (más recientes primero), que usan el dashboard y otras pantallas. _id como
+    // desempate para que la paginación sea estable entre clientes con la misma deuda.
+    const SORTS: Record<string, Record<string, 1 | -1>> = {
+      debt_desc: { debt: -1, _id: 1 },
+      debt_asc: { debt: 1, _id: 1 },
+    }
+    const sort = SORTS[String(req.query.sort ?? "")] ?? { createdAt: -1 }
 
     const [clients, total] = await Promise.all([
-      Client.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Client.find(filter).sort(sort).skip(skip).limit(limit).lean(),
       Client.countDocuments(filter),
     ])
 
@@ -477,87 +469,20 @@ export async function exportClients(req: Request, res: Response) {
 
     const workbook = new ExcelJS.Workbook()
 
-    const clientSheet = workbook.addWorksheet("Clientes")
-    clientSheet.columns = [
-      { header: "Country", key: "country", width: 12 },
-      { header: "CustomerID", key: "customerId", width: 12 },
-      { header: "CustomerName", key: "name", width: 25 },
-      { header: "Teléfono", key: "phone", width: 15 },
-      { header: "RFC", key: "rfc", width: 16 },
-      { header: "CollectorID", key: "collectorId", width: 12 },
-      { header: "Team", key: "team", width: 14 },
-      { header: "TeamLeader", key: "teamLeader", width: 16 },
-      { header: "Collector", key: "collector", width: 16 },
-      { header: "Invoice Number", key: "invoiceNumber", width: 16 },
-      { header: "Create Date", key: "createDate", width: 16 },
-      { header: "Due Date", key: "dueDate", width: 16 },
-      { header: "Aging Days", key: "agingDays", width: 12 },
-      { header: "Aging Target", key: "agingTarget", width: 12 },
-      { header: "Loan/Lease", key: "loanLease", width: 12 },
-      { header: "Deuda", key: "debt", width: 12 },
-      { header: "USD Amount", key: "usdAmount", width: 14 },
-      { header: "Estado", key: "status", width: 15 },
-      { header: "Riesgo IA", key: "risk", width: 12 },
-      { header: "Canal", key: "channel", width: 12 },
-      { header: "Contact", key: "contact", width: 18 },
-      { header: "Último contacto", key: "lastContactAt", width: 18 },
-      { header: "Next Action", key: "nextAction", width: 18 },
-      { header: "Payment Promise", key: "paymentPromiseAmount", width: 16 },
-      { header: "Date Promise", key: "datePromise", width: 16 },
-      { header: "Score", key: "score", width: 10 },
-      { header: "Última respuesta", key: "lastReplyAt", width: 18 },
-      { header: "Última intención", key: "lastIntent", width: 18 },
-      { header: "Total mensajes", key: "totalMessages", width: 14 },
-      { header: "Total respuestas", key: "totalReplies", width: 14 },
-      { header: "Notas", key: "notes", width: 30 },
-      { header: "Alta", key: "createdAt", width: 18 },
-    ]
-    clientSheet.addRows(
-      clients.map((c) => ({
-        country: c.country || "",
-        customerId: c.customerId ?? "",
-        name: c.name,
-        phone: c.phone,
-        rfc: c.rfc || "",
-        collectorId: c.collectorId ?? "",
-        team: c.team || "",
-        teamLeader: c.teamLeader || "",
-        collector: c.collector || "",
-        invoiceNumber: c.invoiceNumber || "",
-        createDate: c.createDate ? new Date(c.createDate as unknown as string) : null,
-        dueDate: c.dueDate ? new Date(c.dueDate as unknown as string) : null,
-        agingDays: c.agingDays ?? "",
-        agingTarget: c.agingTarget || "",
-        loanLease: c.loanLease || "",
-        debt: c.debt,
-        usdAmount: c.usdAmount ?? "",
-        status: STATUS_LABEL[c.status as string] || c.status,
-        risk: RISK_LABEL[c.risk as string] || c.risk,
-        channel: c.channel,
-        contact: c.contact || "",
-        lastContactAt: c.lastContactAt ? new Date(c.lastContactAt as unknown as string) : null,
-        nextAction: c.nextAction || "",
-        paymentPromiseAmount: c.paymentPromiseAmount ?? "",
-        datePromise: c.datePromise ? new Date(c.datePromise as unknown as string) : null,
-        score: c.score,
-        lastReplyAt: c.lastReplyAt ? new Date(c.lastReplyAt as unknown as string) : null,
-        lastIntent: c.lastIntent || "",
-        totalMessages: c.totalMessages,
-        totalReplies: c.totalReplies,
-        notes: c.notes || "",
-        createdAt: c.createdAt ? new Date(c.createdAt as unknown as string) : null,
-      }))
-    )
+    const clientSheet = workbook.addWorksheet("Customers")
+    // Mismas columnas que la descarga de llamadas (ver utils/clientExport.ts)
+    clientSheet.columns = CLIENT_EXPORT_COLUMNS
+    clientSheet.addRows(clients.map((c) => toClientExportRow(c)))
 
-    const promiseSheet = workbook.addWorksheet("Promesas de pago")
+    const promiseSheet = workbook.addWorksheet("Payment Promises")
     promiseSheet.columns = [
-      { header: "Cliente", key: "name", width: 25 },
-      { header: "Teléfono", key: "phone", width: 15 },
-      { header: "Monto", key: "amount", width: 12 },
-      { header: "Fecha compromiso", key: "promisedDate", width: 18 },
-      { header: "Estado", key: "status", width: 15 },
-      { header: "Detectada por IA", key: "detectedByAI", width: 16 },
-      { header: "Notas", key: "notes", width: 30 },
+      { header: "Customer Name", key: "name", width: 25 },
+      { header: "Phone", key: "phone", width: 15 },
+      { header: "Amount", key: "amount", width: 12 },
+      { header: "Promised Date", key: "promisedDate", width: 18 },
+      { header: "Status", key: "status", width: 15 },
+      { header: "Detected by AI", key: "detectedByAI", width: 16 },
+      { header: "Notes", key: "notes", width: 30 },
     ]
     promiseSheet.addRows(
       promises.map((p) => {
@@ -568,45 +493,33 @@ export async function exportClients(req: Request, res: Response) {
           amount: p.amount,
           promisedDate: p.promisedDate ? new Date(p.promisedDate as unknown as string) : null,
           status: PROMISE_STATUS_LABEL[p.status as string] || p.status,
-          detectedByAI: p.detectedByAI ? "Sí" : "No",
+          detectedByAI: p.detectedByAI ? "Yes" : "No",
           notes: p.notes || "",
         }
       })
     )
 
-    const callSheet = workbook.addWorksheet("Llamadas")
+    // Mismas columnas de llamada que GET /calls/export (ver utils/clientExport.ts)
+    const callSheet = workbook.addWorksheet("Calls")
     callSheet.columns = [
-      { header: "Cliente", key: "name", width: 25 },
-      { header: "Teléfono", key: "phone", width: 15 },
-      { header: "Fecha", key: "createdAt", width: 18 },
-      { header: "Estado", key: "status", width: 15 },
-      { header: "Monto promesa", key: "amount", width: 14 },
-      { header: "Fecha promesa", key: "promiseDate", width: 16 },
-      { header: "Requiere asesor", key: "requiresHuman", width: 16 },
-      { header: "Transcript", key: "transcript", width: 60 },
+      { header: "Customer Name", key: "name", width: 25 },
+      { header: "Customer ID", key: "customerId", width: 12 },
+      ...CALL_EXPORT_COLUMNS,
     ]
     callSheet.addRows(
       calls.map((call) => {
         const client = call.clientId ? clientById.get(String(call.clientId)) : undefined
-        const transcriptText = (call.transcript || [])
-          .map((t) => `${t.role === "assistant" ? "IA" : "Cliente"}: ${t.content}`)
-          .join(" | ")
         return {
           name: client?.name || "—",
-          phone: call.phone || client?.phone || "—",
-          createdAt: call.createdAt ? new Date(call.createdAt as unknown as string) : null,
-          status: CALL_STATUS_LABEL[call.status as string] || call.status,
-          amount: call.amount || "",
-          promiseDate: call.promiseDate ? new Date(call.promiseDate as unknown as string) : "",
-          requiresHuman: call.requiresHuman ? "Sí" : "No",
-          transcript: transcriptText,
+          customerId: client?.customerId ?? "",
+          ...toCallExportRow(call, client),
         }
       })
     )
 
     // Mismo layout que el import unificado (ver invoiceController.importInvoices)
     // — permite exportar, editar, y reimportar sin tener que reacomodar columnas.
-    const invoiceSheet = workbook.addWorksheet("Facturas")
+    const invoiceSheet = workbook.addWorksheet("Invoices")
     invoiceSheet.columns = [
       { header: "Customer Country", key: "customerCountry", width: 14 },
       { header: "Currency Code", key: "currencyCode", width: 12 },
@@ -661,7 +574,7 @@ export async function exportClients(req: Request, res: Response) {
     }
 
     const buffer = await workbook.xlsx.writeBuffer()
-    const filename = `cobranzaia-clientes-${new Date().toISOString().slice(0, 10)}.xlsx`
+    const filename = `cobranzaia-customers-${new Date().toISOString().slice(0, 10)}.xlsx`
     res.setHeader(
       "Content-Type",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
