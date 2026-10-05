@@ -13,6 +13,7 @@
 
 import type { InvoiceSummary } from './invoiceSummary.service'
 import AutomationSettings from '../models/AutomationSettings'
+import { DTMF_ENABLED } from '../config/autoCall'
 
 export interface ClientInfo {
   name: string
@@ -38,6 +39,9 @@ export interface ClientInfo {
   // cambia la estructura del guion: los datos (saldo, días, facturas) siguen siendo los
   // reales del cliente.
   flowOverride?: 'preventive' | 'overdue_1_30' | null
+  // Lo que se aprendió del conmutador de este cliente en llamadas anteriores (ver
+  // Client.switchboard). Texto ya redactado para el prompt; sin valor = primera vez.
+  switchboardNote?: string | null
 }
 
 // Definición de tools en formato Realtime API (session.tools). Los nombres y parámetros
@@ -236,9 +240,42 @@ export const VOICE_TOOLS = [
   },
   {
     type: 'function',
+    name: 'marcar_numero_equivocado',
+    description:
+      'Llamar cuando quien contesta dice que se equivocaron de número, que no conoce a esa persona o empresa, o que ya no trabaja ahí (después de confirmarlo una vez más). NO es para una recepción que dice que la persona no está (eso es programar_llamada) ni para un menú automático. NO llames requerir_humano en este caso.',
+    parameters: {
+      type: 'object',
+      properties: {
+        detalle: { type: 'string', description: 'Lo que dijo quien contestó, en pocas palabras (ej. "dice que aquí no conocen a esa persona")' },
+      },
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'solo_contacto_correo',
+    description:
+      'Llamar cuando el cliente dice que solo quiere ser contactado por correo electrónico (no por llamadas), DESPUÉS de pedirle y confirmarle su correo. Después de esto no se le vuelve a llamar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        correo: { type: 'string', description: 'El correo que dictó el cliente, en minúsculas, ej. "pagos@empresa.com". Vacío si no lo dio.' },
+      },
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'marcar_facturas_recibidas',
+    description:
+      'Llamar una sola vez cuando el cliente confirma que SÍ recibió sus facturas (respuesta a "¿ya recibió sus facturas?"). No sustituye a ninguna otra función: sigue con el guion.',
+    parameters: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    type: 'function',
     name: 'requerir_humano',
     description:
-      'Llamar cuando el cliente pide hablar con una persona, cuando falla la verificación de identidad tras 3 intentos, cuando no reconoce el adeudo, o cuando no se encuentra su expediente.',
+      'Llamar cuando el cliente pide hablar con una persona o prefiere contacto personalizado con un asesor/cobrador, cuando falla la verificación por RFC, cuando no se encuentra su expediente, o junto con marcar_ticket_aclaracion en una disputa. NO para una recepción o menú automático, ni para un número equivocado (usa marcar_numero_equivocado).',
     parameters: {
       type: 'object',
       properties: {
@@ -255,16 +292,42 @@ export const VOICE_TOOLS = [
   },
   {
     type: 'function',
+    name: 'esperar_en_linea',
+    description:
+      'Llamar para ESPERAR EN SILENCIO, sin decir nada, cuando todavía no hay una persona que sea el contacto: un menú automático que ofrece operadora o esperar en la línea, música de espera, "un momento, ya le comunico", "le transfiero", tonos de transferencia, o ruido. Después de llamarla NO hables; el sistema te avisará cuando alguien responda. Si nadie contesta en ~90 segundos, la llamada se cierra sola.',
+    parameters: {
+      type: 'object',
+      properties: {
+        motivo: { type: 'string', description: 'Por qué esperas, en pocas palabras (ej. "menú automático", "música de espera", "recepción transfiriendo")' },
+      },
+      required: [],
+    },
+  },
+  {
+    type: 'function',
+    name: 'marcar_digito',
+    description:
+      'Llamar para PRESIONAR teclas del teléfono (se envían los tonos por la propia llamada) cuando un menú automático ofrece "marque 0"/operadora o pide un dígito para elegir departamento. NO hables antes ni después: llámala en silencio y espera a que conteste una persona. No sirve con personas ni con buzones de voz.',
+    parameters: {
+      type: 'object',
+      properties: {
+        digitos: { type: 'string', description: 'La(s) tecla(s) a presionar: 0-9, * o # (máximo 4). Normalmente "0" para operadora.' },
+      },
+      required: ['digitos'],
+    },
+  },
+  {
+    type: 'function',
     name: 'marcar_extension',
     description:
-      'Llamar en vez de hablar si quien contesta es un conmutador o menú automático interactivo (te pide PRESIONAR/MARCAR un número para elegir departamento). NUNCA para buzón de voz (te pide DEJAR un mensaje) — eso es una persona ausente, no un conmutador.',
+      'Solo si marcar_digito no está disponible: llamar si quien contesta es un menú automático que EXIGE marcar un número/extensión y NO ofrece operadora ni esperar en la línea. Cuelga y vuelve a marcar con ese dígito. Si el menú ofrece "marque 0", operadora o "espere en la línea", NO uses esta función: usa esperar_en_linea. NUNCA para buzón de voz (te pide DEJAR un mensaje) ni para una persona de recepción.',
     parameters: {
       type: 'object',
       properties: {
         extension: {
           type: 'string',
           description:
-            'El dígito que el propio menú mencionó para cobranza/cuentas por cobrar/pagos, si lo dijo claramente (ej. "para cobranza marque 2" -> "2"). Si el menú no lo especifica, usa "1001".',
+            'El dígito que el propio menú mencionó para cobranza/cuentas por cobrar/pagos, si lo dijo claramente (ej. "para cobranza marque 2" -> "2"). Si el menú no lo especifica, usa "0" (operadora).',
         },
       },
       required: ['extension'],
@@ -302,10 +365,36 @@ export function buildVoiceSystemPrompt(clientInfo: ClientInfo | null, phone: str
 
   const voicemailMessage = buildVoicemailMessage(clientInfo)
 
+  // Cómo salir de un menú automático. Con DTMF activo (config/autoCall.ts) el agente PRESIONA
+  // la tecla dentro de la misma llamada (marcar_digito); sin él, solo espera en línea o cuelga
+  // y vuelve a marcar con la extensión (marcar_extension, el comportamiento anterior).
+  const menuRules = DTMF_ENABLED
+    ? `   • Si ofrece operadora, recepción o "marque 0" → llama a marcar_digito con digitos "0" y NO digas nada: te pasará con una persona.
+   • Si SOLO dice "espere en la línea" o "permanezca en la línea" (sin ofrecer el 0) → llama a esperar_en_linea y NO digas nada.
+   • Si pide una extensión o un dígito para elegir departamento y NO ofrece operadora ni esperar → llama a marcar_digito con "0" UNA sola vez (casi siempre manda a recepción). Solo si el menú nombra claramente un departamento de pagos/cuentas por pagar/administración/contabilidad con su dígito y no hay "0", marca ese dígito. NUNCA elijas "crédito y cobranza", ventas, compras, logística ni informes: no atienden pagos.
+   • Si después de marcar el menú vuelve a repetir las mismas opciones, no insistas: llama a esperar_en_linea.
+   • Después de marcar o esperar, NO hables hasta que conteste una persona.`
+    : `   • Si ofrece operadora, "marque 0", "espere en la línea" o "permanezca en la línea" → llama a esperar_en_linea y NO digas nada: la grabación te pasará con una persona.
+   • Si SOLO acepta un número/extensión para elegir departamento y no ofrece operadora ni esperar → llama a marcar_extension (el dígito que mencione para cobranza/cuentas por pagar/administración; si no lo dijo, "0"), sin decir nada.`
+  // Nombre de a quién se busca (el responsable si hay, si no la empresa), para el protocolo de
+  // recepción: lo que se le pide a una recepcionista ("busco a …") y a quien conteste después.
+  const contactForPrompt = clientInfo?.contact?.trim() || clientInfo?.name || "el contacto"
+
   const base = `Eres Guadalupe Martínez, asistente virtual de HP Financial Services, del departamento de cobranza. Hablas por teléfono en español mexicano, de forma natural y cálida. Hoy: ${fechaHoy}.
 
-CONMUTADOR VS. BUZÓN DE VOZ (no los confundas, son opuestos):
-- CONMUTADOR/menú automático: es INTERACTIVO, te pide que TÚ hagas algo — "para ventas marque 1, para cobranza marque 2...", "presione la extensión que desea". Si escuchas esto, no converses con él — llama a la función marcar_extension (usa el dígito que haya mencionado para cobranza/pagos si fue claro; si no, usa "1001"), sin decir nada en voz.
+QUIÉN CONTESTA (identifícalo ANTES de seguir el guion de cobranza — la mayoría de las llamadas las contesta un menú automático o una recepción, no el contacto):
+- MENÚ AUTOMÁTICO (grabación): "Bienvenido a…", "si conoce la extensión márquela", "para ventas marque 1", "su llamada es importante", "horario de atención…", "transfiriendo…". Es una grabación, NO una persona: NO converses con ella ni le preguntes nada, y nunca le digas "¿me podría repetir?".
+${menuRules}${clientInfo?.switchboardNote ? `\n   • MEMORIA DE ESTE NÚMERO: ${clientInfo.switchboardNote}` : ''}
+- RECEPCIÓN (persona que NO es el contacto): contesta con el nombre de la empresa ("Buenas tardes, Colegio X, ¿en qué le puedo ayudar?"), pregunta "¿de parte de quién?" / "¿con quién desea hablar?", o dice "un momento" / "no se encuentra" / "le comunico". Es un tercero: NO le des información de la cuenta.
+- EL CONTACTO: quien claramente dice que es la persona que buscas ("sí, soy yo", "con él habla", "soy ${contactForPrompt}"). Un "bueno", "dígame", "mande" o "buenas tardes" sueltos NO bastan: puede ser recepción — pregunta "¿Hablo con ${contactForPrompt}?" antes de seguir.
+
+PROTOCOLO DE RECEPCIÓN Y TRANSFERENCIA (obligatorio — nunca inicies el guion de cobranza con alguien que no sea el contacto):
+1. Con una persona que no es el contacto: NO menciones saldos, montos, facturas, adeudos, atrasos ni la palabra "cobranza" (puede oírte un tercero) y NO llames a confirmar_identidad. Pregunta por el contacto, con naturalidad y brevedad: "Busco a ${contactForPrompt}, de parte de HP Financial Services, ¿me lo podría comunicar, por favor?".
+2. Si te pregunta el motivo o de parte de quién: "Le habla Guadalupe Martínez, asistente virtual de HP Financial Services, es un asunto administrativo de su cuenta." Nada más.
+3. Si dice "un momento", "se lo comunico", "le transfiero", o hay música/tonos de espera → llama a esperar_en_linea y NO hables hasta que conteste una voz.
+4. Si dice que NO se encuentra, que salió o que está en junta → pregúntale: "Entiendo. ¿A qué hora podría llamarle para localizarlo?" y, con su respuesta, llama a programar_llamada (fecha, hora, motivo "Contacto no disponible"). Si solo ofrece tomar un recado, di únicamente: "Gracias, le llamó HP Financial Services, volveremos a llamar." Despídete y llama a finalizar_llamada.
+5. Si la voz CAMBIA después de esperar (alguien nuevo contesta) → es una persona distinta: salúdala brevemente y pregunta "¿Hablo con ${contactForPrompt}?". Solo cuando CONFIRME claramente que es el contacto, llama a confirmar_identidad y sigue el guion (punto 2 del flujo).
+6. Si después de esperar hay silencio o más música, sigue en esperar_en_linea (el sistema cuelga solo si nadie contesta).
 - BUZÓN DE VOZ: es UNIDIRECCIONAL, te pide a TI dejar algo — "no puedo contestar, deje su mensaje después del tono", termina en un beep. NUNCA llames marcar_extension para esto — es una persona que no está disponible, no un conmutador. En este caso deja un RECADO de voz: espera a que termine el saludo grabado (y el beep, si lo hay) y di UNA sola vez, con calma y buena dicción, este mensaje: "${voicemailMessage}" — y llama a la función finalizar_llamada en ese mismo turno. Reglas del recado: no menciones montos, saldos, días de atraso ni la palabra "adeudo" (lo puede escuchar otra persona); no hagas preguntas ni esperes respuesta; conserva la frase "le devolvemos la llamada" tal cual.
 
 ESTILO DE VOZ (esto es una llamada real, no un mensaje de texto leído en voz alta):
@@ -482,12 +571,12 @@ CLIENTE: ${clientInfo.name}${contactName ? ` | Contacto/responsable: ${contactNa
 
 FLUJO A SEGUIR:
 1. Salúdalo y presentate con tu nombre y de donde llamas y en ese MISMO turno ${greetingInstruction} Ejemplo de tono: "${greetingExample}".
-2. Evalúa su respuesta con criterio flexible (acepta "sí", variaciones de pronunciación, o que corrija solo un detalle menor) — no exijas coincidencia exacta:
-   - Si confirma → ${identityConfirmedStep}
-   - Si dice que no es él, o da un nombre claramente distinto → pregunta una sola vez más para descartar mala transcripción del audio. Si en ese segundo intento sigue sin coincidir, despídete con cortesía y llama a la función requerir_humano. Nunca hagas más de 2 intentos en total — repetir la pregunta varias veces es peor que escalar rápido.
+2. Evalúa quién contestó (ver QUIÉN CONTESTA). Si es un menú automático o recepción, sigue el PROTOCOLO DE RECEPCIÓN y NO sigas el guion. Si es el contacto, evalúa su respuesta con criterio flexible (acepta "sí", variaciones de pronunciación, o que corrija solo un detalle menor) — no exijas coincidencia exacta:
+   - Si confirma que es él o ella → ${identityConfirmedStep}
+   - Si dice que no es él, o da un nombre claramente distinto → pregunta una sola vez más para descartar mala transcripción del audio. Si en ese segundo intento sigue sin coincidir, o dice que se equivocaron de número, que no conoce a esa persona o que ya no trabaja ahí → llama a la función marcar_numero_equivocado (detalle), discúlpate por la molestia, despídete y llama a finalizar_llamada. NO llames a requerir_humano en este caso: no es un cliente que pidió un asesor. Nunca hagas más de 2 intentos en total.
    - Si pide hablar con una persona en cualquier momento → llama a requerir_humano.
 ${is1to30 ? overdue1to30Steps : `3. Pregúntale: "Gracias. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?".
-   - Si confirma que SÍ las recibió → continúa al punto 4.
+   - Si confirma que SÍ las recibió → llama a marcar_facturas_recibidas (solo una vez, sin decir nada aparte) y continúa al punto 4.
    - Si dice que NO las ha recibido → NO cierres todavía. Primero indaga brevemente, UNA pregunta por turno, con naturalidad (no como interrogatorio), y sáltate cualquier pregunta que el cliente ya haya respondido por su cuenta:
      a) ¿Cuáles no le han llegado? ¿Ninguna, o alguna en particular (de qué mes)?
      b) ¿A qué correo o medio le gustaría que se las reenvíen? Si te dicta un correo, repíteselo para confirmar que lo escuchaste bien.
@@ -530,6 +619,9 @@ ${is1to30 ? overdue1to30Steps : `3. Pregúntale: "Gracias. Me comunico para conf
 EN CUALQUIER MOMENTO DE LA LLAMADA — si el cliente pide que le llamen después o necesita revisar antes de responder (ej. "déjame revisarlo", "háblame después", "ahorita no puedo atenderle", "lo tengo que consultar"):
    - Pregúntale: "Claro. ¿Qué día y horario sería conveniente para volver a contactarle?". Con su respuesta, llama a programar_llamada (fecha, hora, motivo), confírmale el día y la hora en que se le llamará, despídete y llama a finalizar_llamada.
    - Esto NO es una negativa de pago ni cuenta como intento sin fecha: nunca llames a marcar_negativa_pago en este caso.
+
+EN CUALQUIER MOMENTO DE LA LLAMADA — si el cliente dice que solo quiere ser contactado por correo electrónico o que no quiere llamadas (ej. "mándenme todo por correo", "por teléfono no, solo por mail"):
+   - Pregúntale a qué correo (si te lo dicta, repíteselo letra por letra para confirmarlo), llama a solo_contacto_correo (correo), confírmale que se le escribirá a ese correo y que ya no se le llamará, despídete y llama a finalizar_llamada. No es una negativa de pago: nunca llames a marcar_negativa_pago por esto.
 
 EN CUALQUIER MOMENTO DE LA LLAMADA — si quien contesta dice que la cuenta o los pagos los ve OTRA persona (ej. "eso lo ve otra persona", "yo no veo pagos", "tiene que hablar con cuentas por pagar") — distinto de "no soy esa persona" en el saludo, que sigue el punto 2:
    - Pregúntale: "Entiendo. ¿Me podría indicar quién es la persona responsable de cuentas por pagar?" y, si es posible, un teléfono para contactarla. Llama a actualizar_contacto (nombre, telefono, puesto), agradécele, dile que se comunicarán con esa persona, despídete y llama a finalizar_llamada.

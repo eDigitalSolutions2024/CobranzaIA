@@ -8,15 +8,18 @@ import {
   getNotifyHumanStatus,
   getCalls,
   exportCalls,
+  getCallCounts,
   handleRecordingStatus,
   getCallRecording,
 } from '../controllers/voice.controller'
 import { requireAuth } from '../middleware/auth'
+import { validateTwilioSignature } from '../middleware/twilioSignature'
 import { handleOutboundCartesia, handleIncomingCartesia } from '../controllers/voiceStreamCartesia.controller'
 
 const router = Router()
 
 router.get('/calls', requireAuth, getCalls)
+router.get('/calls/counts', requireAuth, getCallCounts)
 router.get('/calls/export', requireAuth, exportCalls)
 router.post('/voice/outbound', requireAuth, handleOutbound)
 router.post('/voice/notify-human', requireAuth, handleNotifyHuman)
@@ -27,11 +30,12 @@ router.get('/voice/:id/recording', requireAuth, getCallRecording)
 // — aislado del camino de producción de arriba, solo para pruebas puntuales.
 router.post('/voice/outbound-cartesia', requireAuth, handleOutboundCartesia)
 
-// Twilio webhooks — Twilio no puede mandar un token de sesión, deben quedar públicos
-router.post('/voice/incoming', handleIncoming)
-router.post('/voice/incoming-cartesia', handleIncomingCartesia)
-router.post('/voice/status', handleStatus)
-router.post('/voice/notify-human-status', handleNotifyHumanStatus)
-router.post('/voice/recording-status', handleRecordingStatus)
+// Twilio webhooks — Twilio no puede mandar un token de sesión, deben quedar públicos; en su lugar
+// se verifica la firma de Twilio (WEBHOOK_SIGNATURE_MODE: 'log' registra, 'enforce' bloquea)
+router.post('/voice/incoming', validateTwilioSignature, handleIncoming)
+router.post('/voice/incoming-cartesia', validateTwilioSignature, handleIncomingCartesia)
+router.post('/voice/status', validateTwilioSignature, handleStatus)
+router.post('/voice/notify-human-status', validateTwilioSignature, handleNotifyHumanStatus)
+router.post('/voice/recording-status', validateTwilioSignature, handleRecordingStatus)
 
 export default router

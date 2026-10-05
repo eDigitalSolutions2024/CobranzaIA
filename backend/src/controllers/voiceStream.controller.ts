@@ -6,6 +6,7 @@ import Client from '../models/Client'
 import { runAction } from '../services/flowActions.service'
 import { OpenAIRealtimeSession, RealtimeFunctionCall, RealtimeUsage } from '../services/openaiRealtime.service'
 import { buildVoiceSystemPrompt, buildTranscriptionPrompt, ClientInfo, loadManualFlowOverride } from '../services/voiceConversation.service'
+import { HOLD_MAX_SECONDS } from '../config/autoCall'
 import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { placeOutboundCall } from './voice.controller'
@@ -140,9 +141,31 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
     return Math.max(0, queueDrainCompleteAt - Date.now())
   }
 
+  // Espera en silencio (esperar_en_linea): menú automático, música, "un momento, le
+  // comunico". Si nadie vuelve a hablar en HOLD_MAX_SECONDS se cuelga solo — antes una
+  // llamada atorada en un menú duraba hasta el límite de Twilio. Se reinicia cuando el
+  // agente habla (ver 'agentTranscript'), porque entonces ya hay una persona.
+  let holdTimer: NodeJS.Timeout | null = null
+
+  function enterHold(): void {
+    if (holdTimer || closed) return
+    holdTimer = setTimeout(() => {
+      if (closed) return
+      console.log(`[VoiceStream] Sin persona después de ${HOLD_MAX_SECONDS}s en espera, colgando`)
+      shouldHangup = true
+      closeAll()
+    }, HOLD_MAX_SECONDS * 1000)
+  }
+
+  function leaveHold(): void {
+    if (holdTimer) clearTimeout(holdTimer)
+    holdTimer = null
+  }
+
   function closeAll(): void {
     if (closed) return
     closed = true
+    leaveHold()
     if (hangupMarkTimeout) {
       clearTimeout(hangupMarkTimeout)
       hangupMarkTimeout = null
@@ -358,6 +381,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
 
   session.on('agentTranscript', (text) => {
     if (!text || !callDocId) return
+    leaveHold()
     hangupFarewellSpoken = true
     lastAgentTranscript = text
     console.log(`[VoiceStream] agente dijo: "${text}"`)
@@ -419,6 +443,45 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         await call.save()
         session.sendFunctionCallOutput(callId, { ok: true })
         requestFollowUpResponse()
+        break
+      }
+
+      case 'marcar_numero_equivocado': {
+        const detalle = typeof args.detalle === 'string' ? args.detalle : ''
+        await runAction('crm', 'mark_wrong_number', { detalle }, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        requestFollowUpResponse()
+        break
+      }
+
+      case 'solo_contacto_correo': {
+        const correo = typeof args.correo === 'string' ? args.correo : ''
+        await runAction('crm', 'set_email_only', { correo }, call)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        requestFollowUpResponse()
+        break
+      }
+
+      case 'marcar_facturas_recibidas': {
+        // Sin acción de negocio: solo queda en calledFunctions (ver computeVoiceDisposition)
+        session.sendFunctionCallOutput(callId, { ok: true })
+        requestFollowUpResponse()
+        break
+      }
+
+      case 'marcar_digito': {
+        // El envío de tonos DTMF solo está en el motor ElevenLabs (ver voiceStreamCartesia
+        // .controller.ts); aquí se espera en línea, igual que esperar_en_linea.
+        enterHold()
+        session.sendFunctionCallOutput(callId, { ok: true })
+        break
+      }
+
+      case 'esperar_en_linea': {
+        // Silencio a propósito: se confirma la función pero NO se pide otra respuesta, así el
+        // modelo no dice nada hasta que vuelva a hablar una voz (ver enterHold).
+        enterHold()
+        session.sendFunctionCallOutput(callId, { ok: true })
         break
       }
 
@@ -540,7 +603,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
         // despedida y de inmediato se vuelve a marcar, esta vez con la extensión ya
         // integrada en el número (ver placeOutboundCall en voice.controller.ts, que
         // detecta Client.knownExtension y arma el "número,,,,ext#" para Twilio).
-        const extension = typeof args.extension === 'string' && args.extension.trim() ? args.extension.trim() : '1001'
+        const extension = typeof args.extension === 'string' && args.extension.trim() ? args.extension.trim() : '0'
         const clientBefore = call.clientId ? await Client.findById(call.clientId).lean() : null
         const alreadyHadExtension = Boolean(clientBefore?.knownExtension)
 

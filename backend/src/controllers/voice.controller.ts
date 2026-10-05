@@ -12,31 +12,50 @@ import { runAction } from '../services/flowActions.service'
 import { CLIENT_REPORT_FIELDS, buildClientReportFilter } from '../utils/reportFilters'
 import { CALL_EXPORT_COLUMNS, CLIENT_EXPORT_COLUMNS, toCallExportRow, toClientExportRow } from '../utils/clientExport'
 import type { VoiceEngine } from '../models/AutomationSettings'
-import { AUTO_CYCLE_STEPS } from '../config/autoCall'
+import { AUTO_CYCLE_STEPS, VOICE_MAX_CALL_SECONDS, PREDIAL_EXTENSION } from '../config/autoCall'
 
 
 // Traduce lo que ya pasó en la llamada (qué function tool disparó el agente, o si
 // nunca hubo conversación real) a un Status del catálogo fijo — no se le pregunta
 // a una IA, se deriva de decisiones que la IA ya tomó en vivo durante la llamada
-// (ver voiceStream.controller.ts, calledFunctions). "Prefers CAS support" se usa
-// como el status más cercano a "se escaló a un humano" — el catálogo no tiene uno
-// literal para eso.
-function computeVoiceDisposition(calledFunctions: string[], relevantTurnCount: number): DispositionStatus {
-  if (calledFunctions.includes('marcar_extension')) return 'Extension required'
-  if (calledFunctions.includes('marcar_negativa_pago')) return 'Payment refused'
-  if (calledFunctions.includes('marcar_pago_en_proceso')) return 'Payment in process'
-  if (calledFunctions.includes('registrar_promesa_pago')) return 'Payment scheduled'
+// (ver voiceStream.controller.ts, calledFunctions).
+//
+// Definiciones del negocio de cada estado (las usa esta función):
+//  - Extension required: es necesaria una extensión (menú automático / no se llegó a la persona).
+//  - Follow up: seguimiento a CUALQUIER tema o requerimiento (llamada agendada, aclaración o
+//    disputa con ticket, nuevo responsable de la cuenta sin teléfono).
+//  - Prefers CAS support: el cliente pide/prefiere contacto personalizado con un asesor o
+//    cobrador. NO es una disputa ni un número equivocado.
+//  - Wrong number: número equivocado.  Phone number updated: se obtuvo un teléfono nuevo.
+//  - Email contact only: el cliente pide ser contactado solo por correo.
+//  - Invoices received: el cliente confirmó que recibió sus facturas (sin un resultado mayor).
+export function computeVoiceDisposition(calledFunctions: string[], relevantTurnCount: number): DispositionStatus {
+  const called = (fn: string) => calledFunctions.includes(fn)
+  if (called('marcar_extension')) return 'Extension required'
+  if (called('marcar_negativa_pago')) return 'Payment refused'
+  if (called('marcar_pago_en_proceso')) return 'Payment in process'
   // Domiciliado = pago programado con fecha (ver crm.mark_domiciliado)
-  if (calledFunctions.includes('marcar_pago_domiciliado')) return 'Payment scheduled'
-  if (calledFunctions.includes('marcar_saldo_pagado')) return 'Payment received'
-  if (calledFunctions.includes('solicitar_documentos') || calledFunctions.includes('marcar_factura_no_recibida')) {
+  if (called('registrar_promesa_pago') || called('marcar_pago_domiciliado')) return 'Payment scheduled'
+  if (called('marcar_saldo_pagado')) return 'Payment received'
+  if (called('marcar_numero_equivocado')) return 'Wrong number'
+  if (called('solo_contacto_correo')) return 'Email contact only'
+  if (called('solicitar_documentos') || called('marcar_factura_no_recibida')) {
     return 'Invoice, statement or contract required'
   }
-  if (calledFunctions.includes('requerir_humano') || calledFunctions.includes('marcar_ticket_aclaracion')) {
-    return 'Prefers CAS support'
+  if (called('telefono_actualizado')) return 'Phone number updated'
+  // Disputa/aclaración (no reconoce el adeudo, monto o factura incorrectos...), llamada
+  // agendada o nuevo responsable sin teléfono: seguimiento a un tema. Va antes que
+  // requerir_humano porque las disputas llaman a las dos.
+  if (called('marcar_ticket_aclaracion') || called('programar_llamada') || called('actualizar_contacto')) {
+    return 'Follow up'
   }
-  if (calledFunctions.includes('programar_llamada')) return 'Follow up'
-  if (calledFunctions.includes('actualizar_contacto')) return 'Phone number updated'
+  if (called('requerir_humano')) return 'Prefers CAS support'
+  // Esperó en línea (menú automático / recepción) y nunca confirmó a la persona: no hubo
+  // contacto con quien se buscaba — es el mismo caso que 'Extension required'.
+  if ((called('esperar_en_linea') || called('marcar_digito')) && !called('confirmar_identidad')) {
+    return 'Extension required'
+  }
+  if (called('marcar_facturas_recibidas')) return 'Invoices received'
   if (relevantTurnCount < 2) return 'Customer hung up'
   return 'Contact made - No resolution'
 }
@@ -50,7 +69,10 @@ const CLIENT_STATUS_BY_DISPOSITION: Partial<Record<DispositionStatus, string | n
   'Customer hung up': 'no_response',
   'Payment scheduled': 'promised',
   'Payment in process': 'negotiating',
-  'Extension required': 'negotiating',
+  // Llegar a un menú o recepción NO es negociar: el status del cliente no se toca (antes
+  // quedaba en 'negotiating' y la tabla mostraba Negotiating para clientes que nunca hablaron)
+  'Extension required': null,
+  'Wrong number': null,
   'Payment received': null,
 }
 
@@ -95,7 +117,8 @@ const AUTO_MESSAGE_GAP_MS = AUTO_CALL_TEST_MODE ? 30 * 1000 : 1 * 24 * 60 * 60 *
 // necesitar activar detección de máquina de Twilio y meterle latencia a la llamada real).
 // Cualquier OTRA disposition significa que sí hubo una persona real en la línea — ahí se
 // detiene el ciclo automático de la semana, ya hubo contacto.
-const AUTO_CALL_NO_RESPONSE_DISPOSITIONS = new Set<DispositionStatus>(['No answer', 'Customer hung up', 'Voice mail'])
+// 'Extension required' = solo se llegó a un menú automático o recepción, nunca a la persona.
+const AUTO_CALL_NO_RESPONSE_DISPOSITIONS = new Set<DispositionStatus>(['No answer', 'Customer hung up', 'Voice mail', 'Extension required'])
 
 async function advanceAutoCallCycle(
   clientId: mongoose.Types.ObjectId | undefined | null,
@@ -217,6 +240,53 @@ function connectStream(baseUrl: string): string {
   return twiml.toString()
 }
 
+const CALL_STATUSES = ['in_progress', 'completed', 'requires_human', 'failed'] as const
+
+// Filtro de Mongo para la vista Calls: los 5 filtros de Reporte (país/collector/team...) y
+// el buscador por nombre o teléfono — los mismos que aplica la tabla en pantalla. El
+// estado se maneja aparte (lo piden la tabla y los contadores por separado).
+async function buildCallsViewFilter(query: Record<string, any>): Promise<Record<string, any>> {
+  const conditions: Record<string, any>[] = []
+
+  const clientFilter = buildClientReportFilter(query)
+  // Solo restringe por cliente si de verdad se mandó algún filtro — evita un $in: []
+  // (que traería 0 resultados) cuando no hay ningún filtro de Country/Team/etc activo.
+  if (Object.keys(clientFilter).length > 0) {
+    const matchingClients = await Client.find(clientFilter).select('_id').lean()
+    conditions.push({ clientId: { $in: matchingClients.map((c) => c._id) } })
+  }
+
+  const search = String(query.search ?? '').trim()
+  if (search) {
+    const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+    const byName = await Client.find({ name: regex }).select('_id').lean()
+    conditions.push({ $or: [{ clientId: { $in: byName.map((c) => c._id) } }, { phone: regex }] })
+  }
+
+  return conditions.length > 0 ? { $and: conditions } : {}
+}
+
+// Contadores de la vista Calls (tarjeta "Agregar contador de llamadas en vista Calls"):
+// cuántas llamadas hay por estado, respetando los filtros activos y el buscador pero SIN
+// el estado seleccionado — así cada botón (All / In progress / Completed / Requires agent /
+// Failed) muestra cuántas llamadas traería al elegirlo. Se calcula en el servidor sobre
+// todas las llamadas; la tabla solo carga las últimas 100.
+export async function getCallCounts(req: Request, res: Response): Promise<void> {
+  try {
+    const filter = await buildCallsViewFilter(req.query)
+    const grouped = await Call.aggregate([{ $match: filter }, { $group: { _id: '$status', count: { $sum: 1 } } }])
+    const counts: Record<string, number> = { all: 0, in_progress: 0, completed: 0, requires_human: 0, failed: 0 }
+    for (const g of grouped) {
+      counts.all += g.count
+      if ((CALL_STATUSES as readonly string[]).includes(g._id)) counts[g._id] = g.count
+    }
+    res.json(counts)
+  } catch (err) {
+    console.error('[Voice] getCallCounts error:', err)
+    res.status(500).json({ error: 'Error al contar llamadas' })
+  }
+}
+
 export async function getCalls(req: Request, res: Response): Promise<void> {
   try {
     const clientFilter = buildClientReportFilter(req.query)
@@ -227,6 +297,10 @@ export async function getCalls(req: Request, res: Response): Promise<void> {
       const matchingClients = await Client.find(clientFilter).select('_id').lean()
       callFilter.clientId = { $in: matchingClients.map((c) => c._id) }
     }
+    // Estado pedido por la tabla (All = sin filtro): se filtra aquí y no en pantalla para
+    // que "Failed (25)" muestre esas 25 y no solo las que caen en las últimas 100 llamadas.
+    const status = String(req.query.status ?? '')
+    if ((CALL_STATUSES as readonly string[]).includes(status)) callFilter.status = status
 
     const calls = await Call.find(callFilter)
       .populate('clientId', `debt status ${CLIENT_REPORT_FIELDS}`)
@@ -325,13 +399,18 @@ export async function placeOutboundCall(
 
   // Si ya sabemos (de una llamada anterior, ver marcar_extension en
   // voiceStream.controller.ts) que este cliente tiene conmutador, marcamos directo con
-  // la extensión incluida — cada coma es ~2s de pausa en Twilio, dándole tiempo al
-  // conmutador de terminar su saludo antes de que "presionemos" el número. El "#" cierra
-  // la marcación en conmutadores que lo requieren para confirmar la extensión.
-  const toPhone = client.knownExtension ? `${basePhone},,,,${client.knownExtension}#` : basePhone
+  // la extensión incluida. La extensión va en `sendDigits` (teclas que Twilio presiona al
+  // contestar), NO pegada al número en `to`: la API de Twilio no entiende "número,,,,ext#" ahí
+  // y marcaba el número con la extensión concatenada ("…7332" + "2" = número inexistente,
+  // error 32016 "Carrier PDD timeout") — por eso TODA llamada a un cliente con extensión
+  // fallaba. Cada "w" es 0.5 s de pausa (16 = 8 s) para dejar terminar el saludo del
+  // conmutador antes de presionar; el "#" cierra la marcación donde se requiere.
+  const extension = PREDIAL_EXTENSION ? String(client.knownExtension ?? '').replace(/[^0-9*#]/g, '') : ''
+  const toPhone = basePhone
 
   const call = await twilioClient.calls.create({
     to: toPhone,
+    ...(extension ? { sendDigits: `${'w'.repeat(16)}${extension}#` } : {}),
     from: process.env.TWILIO_PHONE_NUMBER!,
     url: `${publicUrl}/api/voice/${engine === 'elevenlabs' ? 'incoming-cartesia' : 'incoming'}?clientId=${clientId}`,
     statusCallback: `${publicUrl}/api/voice/status`,
@@ -340,8 +419,8 @@ export async function placeOutboundCall(
     // dice una frase de cierre nueva que looksLikeHangupIntent() todavía no cubre (ya
     // pasó en producción — se quedó una llamada conectada indefinidamente porque dijo
     // "le devolvemos la llamada" sin llamar a finalizar_llamada), Twilio corta solo a
-    // los 10 minutos. Ninguna llamada real de este proyecto ha pasado de ~2 minutos.
-    timeLimit: 600,
+    // el límite de VOICE_MAX_CALL_SECONDS (config/autoCall.ts, 6 min por defecto).
+    timeLimit: VOICE_MAX_CALL_SECONDS,
     ...recordingParams(publicUrl),
   })
 
@@ -651,7 +730,13 @@ export async function processCallStatusUpdate(
         }
       : null
 
-    const analysis = await analyzeCallTranscript(call.transcript, clientInfo)
+    // Si el análisis falla (sin saldo en Anthropic, red, límite de tasa) la llamada no debe
+    // quedarse a medias: la disposición y el ciclo ya se guardaron arriba, y sin esto el error
+    // cortaba aquí el resumen, la conclusión y la política de grabación, y devolvía 500.
+    const analysis = await analyzeCallTranscript(call.transcript, clientInfo).catch((err) => {
+      console.error(`[Voice] No se pudo analizar la llamada ${callSid} (se guarda sin resumen):`, err?.message ?? err)
+      return { summary: 'Summary unavailable (AI analysis failed)', usage: { inputTokens: 0, outputTokens: 0 }, paymentRefusal: false, refusalReason: '' }
+    })
     call.summary = analysis.summary
     // Suma (no sobrescribe): en llamadas por ElevenLabs Claude ya consumió tokens durante
     // la conversación (ver voiceStreamCartesia.controller.ts). En llamadas de OpenAI esto
@@ -671,7 +756,7 @@ export async function processCallStatusUpdate(
     const calledFunctions = call.calledFunctions ?? []
     // programar_llamada / actualizar_contacto: el cliente pidió que le llamen después o
     // la cuenta la ve otra persona — no es una negativa aunque no haya dado fecha.
-    const hasPaymentOutcome = ['registrar_promesa_pago', 'marcar_saldo_pagado', 'marcar_pago_domiciliado', 'marcar_negativa_pago', 'programar_llamada', 'actualizar_contacto']
+    const hasPaymentOutcome = ['registrar_promesa_pago', 'marcar_saldo_pagado', 'marcar_pago_domiciliado', 'marcar_negativa_pago', 'programar_llamada', 'actualizar_contacto', 'marcar_numero_equivocado', 'solo_contacto_correo']
       .some((fn) => calledFunctions.includes(fn))
     let finalDisposition: DispositionStatus = disposition
     if (analysis.paymentRefusal && !hasPaymentOutcome && call.clientId) {

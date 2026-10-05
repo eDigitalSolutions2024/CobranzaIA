@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { getCalls } from "../services/calls"
+import { getCalls, getCallCounts, type CallCounts } from "../services/calls"
 import CallDetailModal from "../components/CallDetailModal"
 import ExportCallsModal from "../components/ExportCallsModal"
 import { CALL_STATUS_COLOR, CALL_STATUS_LABEL, formatDuration } from "../components/CallTimeline"
@@ -14,17 +14,30 @@ export default function CallsPage() {
   const [search, setSearch] = useState("")
   const [reportFilters, setReportFilters] = useState<ReportFilterValue>(EMPTY_REPORT_FILTERS)
   const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [counts, setCounts] = useState<CallCounts | null>(null)
 
+  // Filtros que entienden el backend (estado, 5 filtros de reporte y buscador): la tabla
+  // y los contadores se piden con ellos, así que los números cuadran con lo que se ve.
+  const serverFilters = useMemo(
+    () => ({ ...reportFilters, status: statusFilter, search: search.trim() }),
+    [reportFilters, statusFilter, search]
+  )
+
+  // Con debounce al teclear en el buscador; y cada 15 s para ver llamadas nuevas en vivo
   useEffect(() => {
-    load()
-    const t = setInterval(load, 15000)
-    return () => clearInterval(t)
-  }, [])
+    const timer = setTimeout(load, 250)
+    const interval = setInterval(load, 15000)
+    return () => {
+      clearTimeout(timer)
+      clearInterval(interval)
+    }
+  }, [serverFilters])
 
   async function load() {
     try {
-      const data = await getCalls()
+      const [data, countData] = await Promise.all([getCalls(serverFilters), getCallCounts(serverFilters)])
       setCalls(data)
+      setCounts(countData)
     } catch {}
   }
 
@@ -80,6 +93,9 @@ export default function CallsPage() {
               }`}
             >
               {s === "all" ? "All" : CALL_STATUS_LABEL[s] ?? s}
+              <span className={`ml-1.5 ${statusFilter === s ? "text-blue-200" : "text-zinc-500"}`}>
+                {counts ? counts[s].toLocaleString("en-US") : "…"}
+              </span>
             </button>
           ))}
         </div>

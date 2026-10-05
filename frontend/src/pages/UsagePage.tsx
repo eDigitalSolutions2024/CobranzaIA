@@ -9,7 +9,7 @@ import {
   CartesianGrid,
   Legend,
 } from "recharts"
-import { getUsage } from "../services/usage"
+import { getUsage, getAnthropicUsage } from "../services/usage"
 
 const RANGES = [
   { label: "Today", value: "today" as const },
@@ -21,35 +21,43 @@ const RANGES = [
 
 // Proveedores del panel — mismo orden en las tarjetas y en la gráfica diaria apilada.
 // Deepgram y ElevenLabs solo se consumen en llamadas con el motor ElevenLabs.
+// consoleUrl: página del proveedor donde se ve el gasto REAL (el de esta pantalla es estimado).
+// Los enlaces pueden cambiar si el proveedor reorganiza su consola; entonces entrar por su menú.
 const PROVIDERS = [
   {
     key: "openai", label: "OpenAI (voice)", color: "#3b82f6", dailyKey: "openaiCostUsd",
+    consoleUrl: "https://platform.openai.com/usage",
     cost: (d: any) => d?.calls?.openai?.costUsd ?? 0,
     detail: (d: any) => `${Number(d.calls.openai.totalTokens ?? 0).toLocaleString("en-US")} tokens`,
   },
   {
     key: "claude", label: "Claude", color: "#f59e0b", dailyKey: "claudeCostUsd",
+    consoleUrl: "https://console.anthropic.com/settings/cost",
     cost: (d: any) => d?.calls?.claude?.costUsd ?? 0,
     detail: (d: any) =>
       `${Number((d.calls.claude.inputTokens ?? 0) + (d.calls.claude.outputTokens ?? 0)).toLocaleString("en-US")} tokens`,
   },
   {
     key: "deepgram", label: "Deepgram (STT)", color: "#14b8a6", dailyKey: "deepgramCostUsd",
+    consoleUrl: "https://console.deepgram.com/",
     cost: (d: any) => d?.calls?.deepgram?.costUsd ?? 0,
     detail: (d: any) => `${d.calls.deepgram?.minutes ?? 0} min`,
   },
   {
     key: "elevenlabs", label: "ElevenLabs (voice)", color: "#a855f7", dailyKey: "elevenlabsCostUsd",
+    consoleUrl: "https://elevenlabs.io/app/subscription",
     cost: (d: any) => d?.calls?.elevenlabs?.costUsd ?? 0,
     detail: (d: any) => `${Number(d.calls.elevenlabs?.characters ?? 0).toLocaleString("en-US")} chars`,
   },
   {
     key: "twilio", label: "Twilio (calls)", color: "#ef4444", dailyKey: "twilioCostUsd",
+    consoleUrl: "https://console.twilio.com/us1/billing/manage-billing/billing-overview",
     cost: (d: any) => d?.calls?.twilioCostUsd ?? 0,
     detail: (d: any) => minutes(d.calls.totalDurationSeconds ?? 0),
   },
   {
     key: "whatsapp", label: "WhatsApp", color: "#22c55e", dailyKey: "whatsappCostUsd",
+    consoleUrl: "https://business.facebook.com/billing_hub/",
     cost: (d: any) => d?.whatsapp?.costUsd ?? 0,
     detail: (d: any) => `${d.whatsapp.outboundCount ?? 0} sent`,
   },
@@ -67,12 +75,18 @@ export default function UsagePage() {
   const [range, setRange] = useState<number | "all" | "today">(30)
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<any>(null)
+  // Gasto real de Anthropic (consola). Se carga aparte: si falla no debe tumbar el resto del panel.
+  const [anthropic, setAnthropic] = useState<any>(null)
 
   async function load() {
     try {
       setLoading(true)
-      const usage = await getUsage(range)
+      const [usage, real] = await Promise.all([
+        getUsage(range),
+        getAnthropicUsage(range).catch((error) => ({ configured: true, error: String(error?.message ?? error) })),
+      ])
       setData(usage)
+      setAnthropic(real)
     } catch (error) {
       console.log(error)
     } finally {
@@ -161,9 +175,98 @@ export default function UsagePage() {
                 {loading ? "..." : usd(provider.cost(data))}
               </p>
               <p className="text-xs text-zinc-400 mt-1">{loading || !data ? "" : provider.detail(data)}</p>
+              <a
+                href={provider.consoleUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 inline-block text-xs text-blue-400 hover:text-blue-300"
+              >
+                Real cost ↗
+              </a>
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Gasto REAL de Claude según la consola de Anthropic, comparado con el estimado */}
+      <div className="mt-8 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">
+        <h2 className="text-sm font-medium text-white uppercase tracking-wider">Claude — real spend (Anthropic console)</h2>
+        <p className="mt-2 text-xs text-zinc-400">
+          Open in the console:{" "}
+          <a href="https://console.anthropic.com/settings/cost" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">Cost ↗</a>
+          {" · "}
+          <a href="https://console.anthropic.com/settings/usage" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">Usage ↗</a>
+          {" · "}
+          <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">Billing / add credits ↗</a>
+          {" · "}
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">API keys ↗</a>
+        </p>
+
+        {!anthropic && <p className="mt-3 text-sm text-zinc-400">Loading...</p>}
+
+        {anthropic && anthropic.configured === false && (
+          <p className="mt-3 text-sm text-zinc-300">
+            Not connected. Create an <b>Admin key</b> in the Anthropic console (Organization settings → Admin keys) and add it
+            to the backend <code className="rounded bg-zinc-800 px-1">.env</code> as <code className="rounded bg-zinc-800 px-1">ANTHROPIC_ADMIN_KEY</code>,
+            then restart the backend. Never put it in the frontend.
+          </p>
+        )}
+
+        {anthropic?.error && (
+          <p className="mt-3 text-sm text-red-400">Could not read the Anthropic billing API: {anthropic.error}</p>
+        )}
+
+        {anthropic?.configured && !anthropic.error && (() => {
+          const real = Number(anthropic.totalCostUsd ?? 0)
+          const estimated = Number(data?.calls?.claude?.costUsd ?? 0)
+          const diff = real - estimated
+          return (
+            <>
+              <div className="mt-4 grid gap-4 grid-cols-2 md:grid-cols-4">
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+                  <p className="text-sm text-white">Real cost</p>
+                  <p className="text-2xl font-bold mt-1 text-amber-400">{usd(real)}</p>
+                  <p className="text-xs text-zinc-400 mt-1">per Anthropic, UTC days</p>
+                </div>
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+                  <p className="text-sm text-white">Estimated by this app</p>
+                  <p className="text-2xl font-bold mt-1 text-white">{usd(estimated)}</p>
+                  <p className="text-xs text-zinc-400 mt-1">from tokens saved per call</p>
+                </div>
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+                  <p className="text-sm text-white">Not tracked per call</p>
+                  <p className={`text-2xl font-bold mt-1 ${diff > Math.max(0.05, real * 0.1) ? "text-red-400" : "text-green-400"}`}>{usd(diff)}</p>
+                  <p className="text-xs text-zinc-400 mt-1">tests, post-call analysis, WhatsApp…</p>
+                </div>
+                <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-main)] p-4 text-center">
+                  <p className="text-sm text-white">Tokens</p>
+                  <p className="text-sm font-semibold mt-1 text-white">
+                    {Number(anthropic.totals?.inputTokens ?? 0).toLocaleString("en-US")} in ·{" "}
+                    {Number(anthropic.totals?.outputTokens ?? 0).toLocaleString("en-US")} out
+                  </p>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    {Number(anthropic.totals?.cacheReadTokens ?? 0).toLocaleString("en-US")} read from cache
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={anthropic.days ?? []}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                    <XAxis dataKey="date" stroke="#71717a" fontSize={12} />
+                    <YAxis stroke="#71717a" fontSize={12} tickFormatter={(v) => usd(v)} />
+                    <Tooltip
+                      contentStyle={{ background: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
+                      formatter={(value: any) => [usd(Number(value)), "Real cost"]}
+                    />
+                    <Bar dataKey="costUsd" name="Real cost" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </>
+          )
+        })()}
       </div>
 
       {/* Estado de llamadas */}

@@ -3,7 +3,7 @@ import Client from '../models/Client'
 import PaymentPromise from '../models/PaymentPromise'
 import Reminder from '../models/Reminder'
 import Ticket from '../models/Ticket'
-import { ICall } from '../models/Call'
+import Call, { ICall } from '../models/Call'
 import { prepareWhatsappMessage } from './whatsappService'
 import { verifyPayment } from './paymentsProvider.service'
 import { FlowContext } from '../types/flow'
@@ -156,6 +156,45 @@ const registry: Record<string, ActionFn> = {
     })
   },
 
+  // Estado "Wrong number" — quien contestó dice que se equivocaron de número, que no conoce a
+  // esa persona/empresa o que ya no trabaja ahí. NO es una escalación a un agente humano
+  // (antes se marcaba Needs Agent y el cliente salía del ciclo automático). Se pausa el
+  // ciclo hasta fin de mes para no seguir llamando a un tercero, y queda un ticket abierto
+  // para que alguien consiga el número correcto.
+  'crm.mark_wrong_number': async (ctx, call) => {
+    const detalle = typeof ctx.detalle === 'string' && ctx.detalle.trim() ? ` Detalle: ${ctx.detalle.trim()}.` : ''
+    await Ticket.create({
+      clientId: call.clientId ?? null,
+      callId: call._id,
+      phone: call.phone,
+      reason: 'wrong_number',
+      status: 'open',
+      notes: `Quien contestó indicó que el número es incorrecto.${detalle} Número marcado: ${call.phone}. CallSid: ${call.callSid}`,
+    })
+    await excludeFromCollection(call.clientId, 'Número equivocado')
+  },
+
+  // Estado "Email contact only" — el cliente pide ser contactado solo por correo. Se guarda
+  // el correo, se marca la preferencia (el ciclo de llamadas lo salta) y queda un ticket.
+  'crm.set_email_only': async (ctx, call) => {
+    const correo = typeof ctx.correo === 'string' ? ctx.correo.trim().toLowerCase() : ''
+    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo) ? correo : null
+    await Ticket.create({
+      clientId: call.clientId ?? null,
+      callId: call._id,
+      phone: call.phone,
+      reason: 'email_only',
+      status: 'open',
+      notes: `El cliente pidió ser contactado solo por correo.${validEmail ? ` Correo: ${validEmail}.` : correo ? ` Correo dictado (sin validar): ${correo}.` : ' No dio correo.'} CallSid: ${call.callSid}`,
+    })
+    if (call.clientId) {
+      await Client.findByIdAndUpdate(call.clientId, {
+        emailOnly: true,
+        ...(validEmail ? { contactEmail: validEmail } : {}),
+      })
+    }
+  },
+
   // "Háblame después" / "Déjame revisarlo" (diagrama preventivo) — agenda la llamada que
   // pidió el cliente; la dispara dispatchScheduledCallbacks en autoCallScheduler.service.ts.
   'crm.schedule_callback': async (ctx, call) => {
@@ -200,6 +239,9 @@ const registry: Record<string, ActionFn> = {
         ...(telefono ? { $addToSet: { alternatePhones: telefono } } : {}),
       })
     }
+    // Estado "Phone number updated" solo si de verdad se obtuvo un teléfono; con solo el nombre
+    // del nuevo responsable la llamada queda como "Follow up" (ver computeVoiceDisposition).
+    if (telefono) await Call.findByIdAndUpdate(call._id, { $push: { calledFunctions: 'telefono_actualizado' } })
   },
 
   // El cliente no tiene / pide factura, contrato o estado de cuenta — ver tarjeta

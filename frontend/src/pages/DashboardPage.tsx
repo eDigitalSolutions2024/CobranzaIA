@@ -6,28 +6,36 @@ import ClientsTable from "../components/ClientsTable"
 import NewClientModal from "../components/NewClientModal"
 import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
 import BlacklistSection from "../components/BlacklistSection"
-import { getClients } from "../services/clients"
+import { getClientsPage } from "../services/clients"
 import { getMetrics } from "../services/metrics"
 import { CircleDollarSign, UsersRound, CircleCheckBig,
         ArrowUpNarrowWide, TriangleAlert, Siren,SquareCheckBig } from "lucide-react"
 import VoiceViewCall from "../components/VoiceViewCall"
 
+const PAGE_SIZE = 25
+
 export default function DashboardPage() {
   const [openModal, setOpenModal] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(1)
+  const [pages, setPages] = useState(1)
+  const [totalClients, setTotalClients] = useState(0)
   const [rawClients, setRawClients] = useState<any[]>([])
   const [metrics, setMetrics] = useState<any>(null)
   const [reportFilters, setReportFilters] = useState<ReportFilterValue>(EMPTY_REPORT_FILTERS)
 
+  // KPIs y gráficas vienen agregados del servidor sobre TODOS los clientes (con los filtros
+  // aplicados); la tabla pide una página a la vez — nada se recorta a un número fijo.
   async function loadAll() {
     try {
-      setLoading(true)
-      const [clientsData, metricsData] = await Promise.all([
-        getClients(),
-        getMetrics(),
+      const [pageData, metricsData] = await Promise.all([
+        getClientsPage("recent", page, PAGE_SIZE, reportFilters),
+        getMetrics(reportFilters),
       ])
 
-      setRawClients(clientsData)
+      setRawClients(pageData.clients)
+      setTotalClients(pageData.total)
+      setPages(pageData.pages)
       setMetrics(metricsData)
     } catch (error) {
       console.log(error)
@@ -38,14 +46,6 @@ export default function DashboardPage() {
 
   const clients = useMemo(() => {
     return rawClients
-      .filter((client) => {
-        if (reportFilters.country && client.country !== reportFilters.country) return false
-        if (reportFilters.collectorId && String(client.collectorId ?? "") !== reportFilters.collectorId) return false
-        if (reportFilters.team && client.team !== reportFilters.team) return false
-        if (reportFilters.teamLeader && client.teamLeader !== reportFilters.teamLeader) return false
-        if (reportFilters.collector && client.collector !== reportFilters.collector) return false
-        return true
-      })
       .map((client: any) => ({
         nombre: client.name,
         needsAdmin: Boolean(client.needsAdmin),
@@ -57,12 +57,20 @@ export default function DashboardPage() {
           ? new Date(client.lastContactAt).toLocaleDateString("en-US")
           : "—",
       }))
-  }, [rawClients, reportFilters])
+  }, [rawClients])
+
+  // Al cambiar filtros se vuelve a la primera página
+  function changeFilters(value: ReportFilterValue) {
+    setReportFilters(value)
+    setPage(1)
+  }
+
   useEffect(() => {
     loadAll()
     const interval = setInterval(loadAll, 30000)
     return () => clearInterval(interval)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, reportFilters])
 
   async function handleSaveClient() {
     await loadAll()
@@ -128,7 +136,7 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold text-white">High Risk</h2>
               <h2 className="text-3xl font-bold text-[var(--danger)] mt-1">
-                {metrics.riskBreakdown?.risk ?? 0}
+                {metrics.riskBreakdown?.high ?? 0}
               </h2>
               <Siren color="var(--danger)" size={50} />
             </div>
@@ -174,7 +182,7 @@ export default function DashboardPage() {
             bg-[var(--bg-card)]
             p-5
           ">
-            <RecoveryChart />
+            <RecoveryChart weeks={metrics.promiseWeekly ?? []} />
 
           </div>
       </div>
@@ -184,9 +192,33 @@ export default function DashboardPage() {
           <div className="mt-6">
 
         <div className="mb-4">
-          <ReportFilters value={reportFilters} onChange={setReportFilters} />
+          <ReportFilters value={reportFilters} onChange={changeFilters} />
         </div>
         <ClientsTable clients={clients} />
+        <div className="mt-3 flex items-center justify-between text-sm text-zinc-400">
+          <span>
+            {totalClients === 0
+              ? "0 customers"
+              : `${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalClients)} of ${totalClients} customers`}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="rounded-lg border border-[var(--border)] px-3 py-1 disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span>Page {page} of {pages}</span>
+            <button
+              onClick={() => setPage((p) => Math.min(pages, p + 1))}
+              disabled={page >= pages}
+              className="rounded-lg border border-[var(--border)] px-3 py-1 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
         <div className="flex justify-end mb-4">
           <button
             onClick={() => setOpenModal(true)}

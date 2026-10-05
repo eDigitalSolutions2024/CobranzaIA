@@ -103,6 +103,20 @@ type:Date,
 default:null
 },
 
+// El cliente pidió que SOLO lo contacten por correo (estado "Email contact only") — el ciclo
+// automático de llamadas no lo vuelve a llamar (autoCallScheduler.service.ts). Es una
+// preferencia permanente, a diferencia de collectionExcludedUntil que vence a fin de mes.
+emailOnly:{
+type:Boolean,
+default:false
+},
+
+// Correo que dio el cliente para ser contactado (lo captura el agente en la llamada)
+contactEmail:{
+type:String,
+default:null
+},
+
 // Llamada de seguimiento que el cliente pidió ("háblame después", "déjame revisarlo") —
 // la dispara autoCallScheduler.service.ts (dispatchScheduledCallbacks) cuando llega la
 // hora; mientras esté pendiente, el ciclo automático normal no lo llama antes.
@@ -122,6 +136,42 @@ default:null
 knownExtension:{
 type:String,
 default:null
+},
+
+// Memoria del conmutador de este cliente: qué contestó la última vez y qué camino funcionó, para
+// usarlo en la siguiente llamada (ver handleAutomatedMenu en voiceStreamCartesia.controller.ts).
+// kind: 'ivr' = menú automático. path: 'press:0' (tecla que se presionó) o 'wait' (esperar en
+// línea). outcome: 'contact' (se llegó a la persona buscada), 'person' (contestó alguien más,
+// ej. recepción) o 'none' (no se llegó a nadie). menuText = muestra del menú, para análisis.
+switchboard:{
+kind:{
+type:String,
+default:null
+},
+path:{
+type:String,
+default:null
+},
+outcome:{
+type:String,
+default:null
+},
+menuText:{
+type:String,
+default:null
+},
+hits:{
+type:Number,
+default:0
+},
+failures:{
+type:Number,
+default:0
+},
+lastSeenAt:{
+type:Date,
+default:null
+}
 },
 
 risk:{

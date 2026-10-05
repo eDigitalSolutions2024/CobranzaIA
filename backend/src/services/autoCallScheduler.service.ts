@@ -20,6 +20,11 @@ import { prepareWhatsappMessage } from './whatsappService'
 import { AUTO_CYCLE_STEPS } from '../config/autoCall'
 
 const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 12
+// Pausa entre un disparo y el siguiente dentro del mismo lote (default 120 s: 12 llamadas
+// en ~22 min). AUTO_CALL_SPACING_SECONDS=0 las lanza todas juntas como antes. Sin pausa en
+// modo prueba, que ya corre acelerado.
+const SPACING_MS =
+  process.env.AUTO_CALL_TEST_MODE === 'true' ? 0 : Math.max(0, Number(process.env.AUTO_CALL_SPACING_SECONDS ?? 120) || 0) * 1000
 
 // Modo de prueba: con AUTO_CALL_TEST_MODE=true, TODOS los tiempos del ciclo (gaps entre
 // pasos, duración del ciclo semanal, y qué tan seguido corre el cron) se acortan a
@@ -50,6 +55,16 @@ const CYCLE_MS = TEST_MODE ? 30 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
 // ver AUTO_CALL_RETRY_GAP_MS en voice.controller.ts) porque mandar un WhatsApp no
 // necesita el mismo margen que esperar a que alguien note una llamada perdida.
 const MESSAGE_STEP_GAP_MS = TEST_MODE ? 30 * 1000 : 1 * 24 * 60 * 60 * 1000
+
+// Lunes 00:00 de la semana actual en hora de CDMX, como instante UTC. Se obtiene la hora de
+// pared de CDMX, se retrocede hasta el lunes y se vuelve a aplicar el desfase con UTC.
+function startOfWeekMexico(now: Date): Date {
+  const wall = new Date(now.toLocaleString('en-US', { timeZone: 'America/Mexico_City' }))
+  const offset = now.getTime() - wall.getTime()
+  wall.setHours(0, 0, 0, 0)
+  wall.setDate(wall.getDate() - ((wall.getDay() + 6) % 7))
+  return new Date(wall.getTime() + offset)
+}
 
 // Plantillas YA existentes y aprobadas — el usuario pidió usar lo que ya hay por ahora,
 // con el entendido de que se van a afinar/cambiar más adelante. 'cobranza_recordatorio'
@@ -94,7 +109,10 @@ async function runAutoCallCycle(): Promise<void> {
   }
 
   const now = new Date()
-  const cycleThreshold = new Date(now.getTime() - CYCLE_MS)
+  // El ciclo es por semana calendario: arranca el lunes 00:00 (CDMX) y todos los clientes
+  // vuelven a ser elegibles a partir de ahí, sin importar qué día se les llamó la semana
+  // pasada. En modo prueba se mantiene la ventana corta de minutos.
+  const cycleThreshold = TEST_MODE ? new Date(now.getTime() - CYCLE_MS) : startOfWeekMexico(now)
 
   // Elegibles: o nunca han tenido ciclo (o su ciclo ya lleva 7+ días, arranca uno
   // nuevo desde el paso 1), o están a la mitad de un ciclo esperando su siguiente paso
@@ -103,6 +121,12 @@ async function runAutoCallCycle(): Promise<void> {
     debt: { $gt: 0 },
     phone: { $exists: true, $nin: [null, ''] },
     requiresHuman: { $ne: true },
+    // En la Blacklist confirmada (negativa de pago): ya lo atiende cobranza, no se le vuelve a
+    // llamar ni escribir en automático. Los 'candidate' (solo sugeridos por la IA, sin revisar)
+    // siguen en el ciclo hasta que un administrador los confirme.
+    blacklistStatus: { $ne: 'confirmed' },
+    // Pidió ser contactado solo por correo (estado 'Email contact only'): no se le vuelve a llamar
+    emailOnly: { $ne: true },
     // Pago reportado/en proceso/domiciliado detectado por la IA (voz o WhatsApp) — ver
     // tarjeta "Exclusión automática de clientes del ciclo mensual de cobranza". Pausa
     // SOLO el ciclo automático, no toca debt/status — si la deuda sigue abierta el mes
@@ -121,7 +145,7 @@ async function runAutoCallCycle(): Promise<void> {
     // Pool generoso (no solo BATCH_SIZE*margen) para que el shuffle de abajo elija de
     // verdad entre todos los elegibles de esta corrida, no solo entre los primeros que
     // Mongo regresó en su orden por defecto.
-    .limit(Math.max(BATCH_SIZE * 20, 200))
+    .limit(Math.max(BATCH_SIZE * 100, 1000))
     .lean()
 
   // Aleatoriza qué candidatos entran en este lote — pedido explícito: no siempre llamar
@@ -136,8 +160,18 @@ async function runAutoCallCycle(): Promise<void> {
   }
 
   let dispatched = 0
+  let spacedAt = 0
   for (const client of candidates) {
     if (dispatched >= BATCH_SIZE) break
+
+    // Las llamadas del lote salen escalonadas (una cada SPACING, no las 12 juntas): evita el
+    // pico de 12 conversaciones simultáneas contra Claude/Deepgram/ElevenLabs. Si el servidor
+    // se reinicia a mitad del lote no se pierde nada: lo que no salió no se marcó y entra al
+    // siguiente cron.
+    if (dispatched > spacedAt && SPACING_MS > 0) {
+      spacedAt = dispatched
+      await new Promise((resolve) => setTimeout(resolve, SPACING_MS))
+    }
 
     const isNewCycle = !client.autoCallCycleStartAt || (client.autoCallCycleStartAt as Date) <= cycleThreshold
     const attemptNumber = isNewCycle ? 1 : ((client.autoCallAttempt as number) + 1)
@@ -216,7 +250,10 @@ async function dispatchScheduledCallbacks(): Promise<void> {
   if (!publicUrl) return
 
   const now = new Date()
-  const due = await Client.find({ scheduledCallbackAt: { $ne: null, $lte: now } }).limit(BATCH_SIZE).lean()
+  const due = await Client.find({
+    scheduledCallbackAt: { $ne: null, $lte: now },
+    blacklistStatus: { $ne: 'confirmed' },
+  }).limit(BATCH_SIZE).lean()
 
   for (const client of due) {
     // Se limpia ANTES de llamar, con la misma fecha como condición, para que otra corrida

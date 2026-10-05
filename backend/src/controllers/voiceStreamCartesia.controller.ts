@@ -28,6 +28,9 @@ import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { warmUpClaude, generateLiveVoiceTurn, LiveTurn, LiveToolCall, ToolOutcome } from '../services/claudeVoiceLive.service'
 import { ClientInfo, buildVoicemailMessage, loadManualFlowOverride } from '../services/voiceConversation.service'
+import { HOLD_MAX_SECONDS, SILENCE_HANGUP_SECONDS, DTMF_ENABLED, DTMF_MAX_PRESSES, PREDIAL_EXTENSION } from '../config/autoCall'
+import { dtmfFrames, sanitizeDigits } from '../utils/dtmf'
+import { decideMenuAction, isAutomatedPrompt, SwitchboardHint } from '../utils/ivrMenu'
 import { placeOutboundCall } from './voice.controller'
 
 const { VoiceResponse } = twilio.twiml
@@ -109,7 +112,7 @@ export async function handleIncomingCartesia(req: Request, res: Response): Promi
   }
 }
 
-const VOICEMAIL_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono|no est[aá] disponible|fuera del [aá]rea de servicio|el n[uú]mero que usted marc[oó]/i
+const VOICEMAIL_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono|(?:usuario|abonado|suscriptor|extensi[oó]n|n[uú]mero|l[ií]nea)\b[^.?]{0,40}no est[aá] disponible|no est[aá] disponible[^.?]{0,25}(?:deje|despu[eé]s del tono)|fuera del [aá]rea de servicio|el n[uú]mero que usted marc[oó]/i
 // Subconjunto de VOICEMAIL_PATTERN que sí es un buzón que graba (se deja recado); el resto
 // son avisos del operador que no graban nada.
 const VOICEMAIL_RECORDS_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono/i
@@ -128,6 +131,15 @@ function buildGreeting(name: string, contact?: string | null): string {
   return `Hola, ${salutation}, soy Guadalupe Martínez, asistente virtual de HP Financial Services. ¿Tengo el gusto de hablar con ${who}?`
 }
 
+// Texto para el prompt con lo aprendido del conmutador de este cliente (ver Client.switchboard)
+function describeSwitchboard(sb?: { kind?: string | null; path?: string | null; outcome?: string | null } | null): string | null {
+  if (!sb?.kind || !sb.path) return null
+  const how = sb.path.startsWith('press:') ? `marcar ${sb.path.slice('press:'.length)}` : 'esperar en línea sin hablar'
+  if (sb.outcome === 'contact') return `la última vez fue un menú automático y ${how} te llevó hasta el contacto. Haz lo mismo.`
+  if (sb.outcome === 'person') return `la última vez fue un menú automático y ${how} te pasó con una persona (probablemente recepción). Haz lo mismo.`
+  return `la última vez fue un menú automático y ${how} NO llevó a nadie. Prueba otra opción del menú (operadora, o esperar en línea).`
+}
+
 export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: IncomingMessage): Promise<void> {
   let streamSid: string | null = null
   let callDocId: mongoose.Types.ObjectId | null = null
@@ -141,6 +153,13 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   let voicemailMode = false
   let voicemailMessageSent = false
   let voicemailTimer: NodeJS.Timeout | null = null
+  // Temporizador de espera en silencio (ver enterHold)
+  let holdTimer: NodeJS.Timeout | null = null
+  // Corte por silencio (ver startSilenceWatchdog) y pulsaciones de teclas (ver marcar_digito)
+  let lastCustomerSpeechAt = 0
+  let silenceWatchdog: NodeJS.Timeout | null = null
+  let dtmfPresses = 0
+  const dtmfByDigits = new Map<string, number>()
   let agentSpeaking = false
   let currentContextId: string | null = null
   let queueDrainCompleteAt = 0
@@ -167,10 +186,20 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   // en el siguiente turno — la entrada cancelada nunca se guarda, que es lo correcto.
   let pendingAssistantText: string | null = null
   let consecutiveFailures = 0
+  // Memoria del conmutador (ver handleAutomatedMenu): lo aprendido en llamadas anteriores y lo
+  // que se observa en esta, para guardarlo al colgar.
+  let switchboardHint: SwitchboardHint | null = null
+  let memoryClientId: mongoose.Types.ObjectId | null = null
+  let menuSeen = false
+  let menuSample = ''
+  let menuWaitLogged = false
+  let personAfterMenu = false
+  let contactReached = false
+  const menuPressed: string[] = []
   let deepgramReconnects = 0
   const executedOnce = new Set<string>()
   const registeredPromises = new Set<string>()
-  const ONCE_ONLY_TOOLS = new Set(['confirmar_identidad', 'marcar_ticket_aclaracion', 'marcar_pago_domiciliado', 'marcar_pago_en_proceso', 'marcar_negativa_pago', 'programar_llamada', 'actualizar_contacto'])
+  const ONCE_ONLY_TOOLS = new Set(['confirmar_identidad', 'marcar_ticket_aclaracion', 'marcar_pago_domiciliado', 'marcar_pago_en_proceso', 'marcar_negativa_pago', 'programar_llamada', 'actualizar_contacto', 'marcar_numero_equivocado', 'solo_contacto_correo', 'marcar_facturas_recibidas'])
 
   const deepgram = new DeepgramSttSession()
   const tts = new ElevenLabsTtsSession()
@@ -178,6 +207,10 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   function closeAll(): void {
     if (closed) return
     closed = true
+    saveSwitchboardMemory()
+    if (holdTimer) clearTimeout(holdTimer)
+    if (voicemailTimer) clearTimeout(voicemailTimer)
+    if (silenceWatchdog) clearInterval(silenceWatchdog)
     deepgram.close()
     tts.close()
     try {
@@ -276,6 +309,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   // la voz del agente a media frase — visto en la prueba real, la llamada se quedaba muda.
   // Nunca se interrumpe una despedida (shouldHangup).
   deepgram.on('interim', (text) => {
+    if (text.trim()) lastCustomerSpeechAt = Date.now()
     if (voicemailMode) {
       if (text.trim()) scheduleVoicemailMessage()
       return
@@ -290,6 +324,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
 
   deepgram.on('transcript', (text, isFinal) => {
     if (!text) return
+    lastCustomerSpeechAt = Date.now()
     // Ya se detectó el buzón: lo que siga es el propio saludo grabado — solo sirve para
     // saber que todavía no termina de hablar (ver scheduleVoicemailMessage).
     if (voicemailMode) {
@@ -327,6 +362,9 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
       scheduleVoicemailMessage()
       return
     }
+    if (handleAutomatedMenu(finishedUtterance)) return
+    // Lo que NO es menú y llega después de uno es una persona (recepción o el contacto)
+    if (menuSeen) personAfterMenu = true
     if (tryFastIdentityConfirmation(finishedUtterance)) return
 
     // El agente sigue hablando (audio en curso) y esto no bastó para disparar el barge-in
@@ -367,7 +405,11 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   // Claude (0.8-1.8s medidos). Solo aplica con un sí inequívoco y sin RFC de por medio;
   // cualquier otra cosa (duda, pregunta, "¿quién habla?") sigue el camino normal con Claude.
   const YES_WORDS = new Set(['si', 'soy', 'yo', 'asi', 'es', 'claro', 'correcto', 'exacto', 'efectivamente', 'aqui', 'estoy', 'con', 'el', 'ella', 'mismo', 'misma', 'habla', 'digame', 'dime', 'por', 'supuesto', 'un', 'gusto', 'mucho', 'buenas', 'tardes', 'dias', 'noches', 'aja', 'mande', 'adelante', 'listo', 'ya', 'presente', 'mjm', 'mhm', 'ajam', 'sip', 'simon', 'ok', 'okey', 'oye'])
-  const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivamente', 'claro', 'asi', 'aqui', 'listo', 'presente', 'sip', 'mande', 'digame', 'dime'])
+  // Solo palabras que afirman ser la persona. 'digame', 'mande', 'aqui', 'listo', 'presente'
+// y 'dime' se quitaron: son lo que dice una RECEPCIONISTA al contestar ("Buenas tardes, dígame")
+// y con ellas el camino rápido la daba por el contacto y arrancaba el guion de cobranza.
+// Con "sí, dígame" sigue entrando por 'si'. Lo ambiguo lo evalúa Claude (QUIÉN CONTESTA).
+const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivamente', 'claro', 'asi', 'sip'])
   const IDENTITY_NEXT_STEP = 'Perfecto, gracias. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?'
 
   function isClearYes(text: string): boolean {
@@ -439,6 +481,127 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     shouldHangup = true
     speakFixed(buildVoicemailMessage(clientInfo))
     scheduleHangupFallback()
+  }
+
+  // Espera en silencio (esperar_en_linea): menú automático, música, "un momento, le comunico".
+  // Si nadie vuelve a hablar en HOLD_MAX_SECONDS se cuelga solo — antes una llamada atorada
+  // en un menú duraba hasta el límite de Twilio (10 min). Se reinicia cada vez que el
+  // agente habla (leaveHold), porque entonces ya hay una persona en la conversación.
+  function enterHold(): void {
+    if (holdTimer || closed) return
+    holdTimer = setTimeout(() => {
+      if (closed) return
+      console.log(`[VoiceCartesia] Sin persona después de ${HOLD_MAX_SECONDS}s en espera, colgando`)
+      shouldHangup = true
+      closeAll()
+    }, HOLD_MAX_SECONDS * 1000)
+  }
+
+  function leaveHold(): void {
+    if (holdTimer) clearTimeout(holdTimer)
+    holdTimer = null
+  }
+
+  // Corte por silencio: si pasan SILENCE_HANGUP_SECONDS sin que hable nadie (el cliente, o el
+  // agente — contando el audio que todavía está sonando, queueDrainCompleteAt) se cuelga. En
+  // la primera semana en producción, 4 llamadas se conectaron sin que nadie hablara (dos de
+  // 10 min). No aplica en espera en línea (tiene su propio límite), mientras Claude piensa,
+  // mientras habla el agente, ni en modo buzón (tiene sus propios temporizadores).
+  function startSilenceWatchdog(): void {
+    if (silenceWatchdog) return
+    const startedAt = Date.now()
+    silenceWatchdog = setInterval(() => {
+      if (closed || shouldHangup || holdTimer || processingTurn || agentSpeaking || voicemailMode) return
+      const lastActivity = Math.max(startedAt, lastCustomerSpeechAt, queueDrainCompleteAt)
+      if (Date.now() - lastActivity < SILENCE_HANGUP_SECONDS * 1000) return
+      console.log(`[VoiceCartesia] ${SILENCE_HANGUP_SECONDS}s sin que hable nadie, colgando`)
+      shouldHangup = true
+      closeAll()
+    }, 3000)
+  }
+
+  // Presiona teclas del teléfono enviando los tonos DTMF por el audio de la llamada (ver
+  // utils/dtmf.ts). Primero corta lo que el agente esté diciendo: al menú no le sirve y los
+  // tonos sonarían hasta que termine (el audio se reproduce en orden).
+  function sendDtmf(digits: string): void {
+    if (!streamSid || twilioWs.readyState !== WebSocket.OPEN) return
+    if (agentSpeaking && currentContextId) {
+      tts.cancel(currentContextId)
+      agentSpeaking = false
+    }
+    sendClearToTwilio()
+    const frames = dtmfFrames(digits)
+    for (const payload of frames) twilioWs.send(JSON.stringify({ event: 'media', streamSid, media: { payload } }))
+    // 20 ms por tramo — así el vigilante de silencio sabe cuándo termina de sonar
+    queueDrainCompleteAt = Date.now() + frames.length * 20
+  }
+
+  // Menú automático (IVR) o mensaje de espera: se resuelve con reglas de texto (utils/ivrMenu.ts),
+  // sin pasar por Claude — es instantáneo, no cuesta API, y no se queda sin respuesta si Claude
+  // falla. Presiona la tecla de operadora/pagos o espera en silencio. Devuelve true si el texto
+  // era de un menú (ya manejado). Hablarle a la grabación solo la hace repetir "no lo entiendo".
+  function handleAutomatedMenu(text: string): boolean {
+    const decision = decideMenuAction(text, switchboardHint, clientInfo?.contact)
+    if (!decision) return false
+
+    console.log(`[VoiceCartesia] Menú automático detectado → ${decision.action === 'press' ? `presionar ${decision.digit}` : 'esperar'} (${decision.reason})`)
+    menuSeen = true
+    if (!menuSample) menuSample = text.slice(0, 400)
+    pushUserTranscript(text)
+    history.push({ role: 'user', content: text })
+    queuedUserText = ''
+    // Si el saludo seguía sonando encima del menú, se corta
+    if (agentSpeaking && currentContextId) {
+      tts.cancel(currentContextId)
+      sendClearToTwilio()
+      agentSpeaking = false
+    }
+
+    if (decision.action === 'press') {
+      menuPressed.push(decision.digit)
+      history.push({ role: 'assistant', content: `[Acción: presioné la tecla ${decision.digit} y espero en silencio]` })
+      executeTool({ name: 'marcar_digito', input: { digitos: decision.digit } }).catch((err) =>
+        console.error('[VoiceCartesia] Error presionando tecla del menú:', err)
+      )
+    } else {
+      history.push({ role: 'assistant', content: '[Acción: espero en línea sin hablar]' })
+      // Una sola vez queda registrado como función (clasifica la llamada como 'Extension
+      // required' si no se llega a nadie); las siguientes solo reinician el temporizador.
+      if (!menuWaitLogged) {
+        menuWaitLogged = true
+        executeTool({ name: 'esperar_en_linea', input: {} }).catch((err) => console.error('[VoiceCartesia] Error esperando en línea:', err))
+      } else {
+        enterHold()
+      }
+    }
+    return true
+  }
+
+  // Al colgar: guarda en el cliente qué conmutador tiene y qué camino funcionó, para la siguiente
+  // llamada (ver Client.switchboard). Un intento fallido no borra un camino que ya funcionó:
+  // solo suma un fallo, porque el conmutador puede haber estado fuera de horario.
+  function saveSwitchboardMemory(): void {
+    if (!memoryClientId || !menuSeen) return
+    const outcome = contactReached ? 'contact' : personAfterMenu ? 'person' : 'none'
+    const path = menuPressed.length ? `press:${menuPressed[0]}` : 'wait'
+    const prev = switchboardHint
+    const update =
+      outcome === 'none' && prev?.outcome && prev.outcome !== 'none'
+        ? { $set: { 'switchboard.lastSeenAt': new Date() }, $inc: { 'switchboard.failures': 1 } }
+        : {
+            $set: {
+              'switchboard.kind': 'ivr',
+              'switchboard.path': path,
+              'switchboard.outcome': outcome,
+              'switchboard.menuText': menuSample,
+              'switchboard.lastSeenAt': new Date(),
+            },
+            $inc: { 'switchboard.hits': 1 },
+          }
+    Client.findByIdAndUpdate(memoryClientId, update).catch((err) =>
+      console.error('[VoiceCartesia] Error guardando memoria del conmutador:', err)
+    )
+    console.log(`[VoiceCartesia] Memoria del conmutador: ${path} → ${outcome}`)
   }
 
   function markVoicemail(): void {
@@ -562,7 +725,14 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
       // que la ejecución (base de datos) no retrase la última frase.
       const result = await generateLiveVoiceTurn(history, clientInfo, phone, onText, async (toolCall) => {
         flushPending()
-        return executeTool(toolCall)
+        // Una función que falla (Mongo, Twilio, etc.) no debe tumbar el turno entero: antes la
+        // excepción subía hasta el catch de abajo y el agente solo decía "¿me podría repetir?".
+        try {
+          return await executeTool(toolCall)
+        } catch (err) {
+          console.error(`[VoiceCartesia] Error ejecutando la función ${toolCall.name}:`, err)
+          return { output: 'No se pudo ejecutar esta función. Continúa la conversación sin ella.' }
+        }
       })
       flushPending()
       // Se acumula con $inc (varios turnos por llamada) — mismo patrón que openaiUsage en
@@ -576,6 +746,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
       console.log(`[VoiceCartesia] +${Date.now() - turnStartedAt}ms Claude terminó: "${spoken}" tools=${result.toolCalls.map((t) => t.name).join(',') || '-'}`)
 
       if (spoken) {
+        leaveHold()
         tts.endTurn(ctx)
         recordAssistant(spoken)
         if (shouldHangup) scheduleHangupFallback()
@@ -586,12 +757,23 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
       }
       consecutiveFailures = 0
     } catch (err) {
-      console.error('[VoiceCartesia] Error generando turno:', err)
+      // Detalle del error de la API de Anthropic (código HTTP y tipo) para distinguir límite de
+      // tasa (429), sobrecarga (529) o petición inválida (400) en el log de producción.
+      const apiErr = err as { status?: number; error?: { error?: { type?: string; message?: string } }; message?: string }
+      console.error(
+        `[VoiceCartesia] Error generando turno (status=${apiErr.status ?? '—'} tipo=${apiErr.error?.error?.type ?? '—'}): ${apiErr.error?.error?.message ?? apiErr.message ?? err}`,
+        err
+      )
       if (ctx) tts.cancel(ctx)
       consecutiveFailures++
       // Antes un fallo de Claude/red dejaba la línea muda hasta que el cliente volviera a
-      // hablar; ahora el agente pide repetir (máx. 2 fallos seguidos, para no ciclar).
-      if (!closed && !shouldHangup && consecutiveFailures <= 2) speakFixed('Disculpe, ¿me podría repetir, por favor?')
+      // hablar; ahora el agente pide repetir (máx. 2 fallos seguidos, para no ciclar). Si lo
+      // último que se oyó es un menú automático NO se dice: a una grabación no se le pide
+      // repetir (solo contesta "no lo entiendo" y entra en ciclo).
+      const lastUser = [...history].reverse().find((t) => t.role === 'user')?.content ?? ''
+      if (!closed && !shouldHangup && consecutiveFailures <= 2 && !isAutomatedPrompt(lastUser)) {
+        speakFixed('Disculpe, ¿me podría repetir, por favor?')
+      }
     } finally {
       processingTurn = false
     }
@@ -642,6 +824,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
 
     switch (toolCall.name) {
       case 'confirmar_identidad':
+        contactReached = true
         call.identityConfirmed = true
         await call.save()
         return { output: 'ok' }
@@ -654,6 +837,53 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         const received = normalizeRFC(String(toolCall.input.ultimos4 ?? ''))
         const matches = Boolean(expected) && received === expected
         return { output: JSON.stringify({ matches }), followUp: true }
+      }
+
+      case 'esperar_en_linea':
+        // Silencio a propósito: no se registra nada más y el turno termina sin hablar
+        enterHold()
+        return { output: 'ok' }
+
+      case 'marcar_numero_equivocado': {
+        const detalle = typeof toolCall.input.detalle === 'string' ? toolCall.input.detalle : ''
+        await runAction('crm', 'mark_wrong_number', { detalle }, call)
+        return { output: 'ok' }
+      }
+
+      case 'solo_contacto_correo': {
+        const correo = typeof toolCall.input.correo === 'string' ? toolCall.input.correo : ''
+        await runAction('crm', 'set_email_only', { correo }, call)
+        return { output: 'ok' }
+      }
+
+      case 'marcar_facturas_recibidas':
+        // Sin acción de negocio: solo queda en calledFunctions para clasificar la llamada
+        // como 'Invoices received' si no hay un resultado mayor (ver computeVoiceDisposition)
+        return { output: 'ok' }
+
+      case 'marcar_digito': {
+        const digits = sanitizeDigits(toolCall.input.digitos)
+        // Apagado (VOICE_DTMF_ENABLED=false), sin dígitos válidos o ya se insistió demasiado
+        // (mismo dígito 2 veces o tope por llamada — el menú no responde a los tonos): se
+        // espera en línea, que tiene su propio límite, en vez de ciclar.
+        const repeats = dtmfByDigits.get(digits) ?? 0
+        if (!DTMF_ENABLED || !digits || repeats >= 2 || dtmfPresses >= DTMF_MAX_PRESSES) {
+          console.log(`[VoiceCartesia] marcar_digito(${digits || '—'}) no se envía (activo=${DTMF_ENABLED}, repeticiones=${repeats}, total=${dtmfPresses}), solo espera`)
+          enterHold()
+          return { output: 'ok' }
+        }
+        dtmfByDigits.set(digits, repeats + 1)
+        dtmfPresses++
+        console.log(`[VoiceCartesia] Enviando tonos DTMF: ${digits} (pulsación ${dtmfPresses}/${DTMF_MAX_PRESSES})`)
+        sendDtmf(digits)
+        // Marca en la transcripción para poder medir el experimento en el reporte: qué se
+        // marcó y qué dijo el menú después. Los textos entre corchetes no cuentan como turnos.
+        const elapsedMs = callStartAt !== null ? Math.max(0, Date.now() - callStartAt) : null
+        Call.findByIdAndUpdate(callDocId, {
+          $push: { transcript: { role: 'assistant', content: `[DTMF: ${digits}]`, timestamp: new Date(), elapsedMs } },
+        }).catch((err) => console.error('[VoiceCartesia] Error guardando marca DTMF:', err))
+        enterHold()
+        return { output: 'ok' }
       }
 
       case 'marcar_ticket_aclaracion': {
@@ -737,7 +967,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         const extension =
           typeof toolCall.input.extension === 'string' && toolCall.input.extension.trim()
             ? toolCall.input.extension.trim()
-            : '1001'
+            : '0'
         const clientBefore = call.clientId ? await Client.findById(call.clientId).lean() : null
         const alreadyHadExtension = Boolean(clientBefore?.knownExtension)
 
@@ -777,6 +1007,14 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     phone = call.phone as string
 
     const client = call.clientId ? await Client.findById(call.clientId).lean() : null
+    memoryClientId = client ? (client._id as mongoose.Types.ObjectId) : null
+    // Con extensión guardada, Twilio ya presionó las teclas al contestar y ahora el conmutador
+    // transfiere / suena la extensión: eso es silencio o tono, no voz. Se arranca en espera (tope
+    // HOLD_MAX_SECONDS) en vez de aplicar el corte por silencio de 30 s, que colgaba una llamada
+    // que todavía estaba sonando en la extensión. Se sale de la espera en cuanto el agente habla.
+    if (PREDIAL_EXTENSION && client?.knownExtension) enterHold()
+    const sb = client?.switchboard as { kind?: string | null; path?: string | null; outcome?: string | null } | undefined
+    if (sb?.kind && sb.path) switchboardHint = { path: sb.path, outcome: sb.outcome }
     // Si falla la consulta de facturas, la llamada sigue igual (el prompt cae a agingDays).
     const invoices = client ? await loadInvoiceSummary(client._id).catch(() => null) : null
     clientInfo = client
@@ -789,6 +1027,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
           contact: (client.contact as string) ?? null,
           invoices,
           flowOverride: await loadManualFlowOverride(call.triggeredBy),
+          switchboardNote: describeSwitchboard(sb),
         }
       : null
 
@@ -834,6 +1073,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         // Ancla de todos los elapsedMs/latencyMs del flujo (ver declaración arriba).
         callStartAt = Date.now()
         lastTurnEndAt = callStartAt
+        startSilenceWatchdog()
         if (!callSid) {
           closeAll()
           break

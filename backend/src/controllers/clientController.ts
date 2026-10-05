@@ -138,7 +138,9 @@ export async function getClients(req: Request, res: Response) {
     // Búsqueda opcional por nombre — usada por el buscador de "agregar a la Blacklist"
     // (BlacklistSection.tsx) para encontrar un cliente sin tener que hojear páginas.
     const search = String(req.query.search ?? "").trim()
-    const filter = search ? { name: { $regex: search, $options: "i" } } : {}
+    // Más los filtros del dashboard (country, collectorId, team, teamLeader, collector)
+    const filter: Record<string, any> = { ...buildClientReportFilter(req.query) }
+    if (search) filter.name = { $regex: search, $options: "i" }
     // Orden opcional (tarjeta "Filtrado en página de clientes automáticamente de deuda mayor
     // a menor"): la tabla de clientes pide debt_desc; sin parámetro se mantiene el orden de
     // siempre (más recientes primero), que usan el dashboard y otras pantallas. _id como
@@ -146,11 +148,20 @@ export async function getClients(req: Request, res: Response) {
     const SORTS: Record<string, Record<string, 1 | -1>> = {
       debt_desc: { debt: -1, _id: 1 },
       debt_asc: { debt: 1, _id: 1 },
+      name_asc: { name: 1, _id: 1 },
+      name_desc: { name: -1, _id: 1 },
     }
-    const sort = SORTS[String(req.query.sort ?? "")] ?? { createdAt: -1 }
+    const sortKey = String(req.query.sort ?? "")
+    const sort = SORTS[sortKey] ?? { createdAt: -1 }
+
+    // Orden alfabético en español, sin distinguir mayúsculas ni acentos (strength 1): sin
+    // esto Mongo ordena por código de carácter y "Zapata" quedaría antes que "alvarez" o
+    // "Álvarez" al final de la lista.
+    const query = Client.find(filter).sort(sort)
+    if (sortKey.startsWith("name_")) query.collation({ locale: "es", strength: 1 })
 
     const [clients, total] = await Promise.all([
-      Client.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+      query.skip(skip).limit(limit).lean(),
       Client.countDocuments(filter),
     ])
 
@@ -669,6 +680,10 @@ export async function markNeedsAdminSent(req: Request, res: Response) {
       { new: true }
     )
     if (!client) return res.status(404).json({ message: "Cliente no encontrado" })
+    // La acción "Admin response" ya se cumplió: el siguiente paso vuelve a ser una llamada.
+    // Solo si esa era la acción pendiente — no se pisa un "Collector review" u otra distinta.
+    const reset = await Client.findOneAndUpdate({ _id: id, nextAction: "Admin response" }, { nextAction: "New Call" }, { new: true })
+    if (reset) client.nextAction = reset.nextAction
     await Ticket.updateMany(
       { clientId: client._id, reason: { $in: ["resend_invoice", "document_request"] }, status: "open" },
       { status: "closed" }

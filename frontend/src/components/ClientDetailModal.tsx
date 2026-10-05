@@ -246,6 +246,14 @@ const CALLED_FUNCTION_NOTE: Record<string, string> = {
   marcar_ticket_aclaracion: "Did not recognize the debt — clarification ticket opened",
   requerir_humano: "Escalated to a human agent",
   marcar_extension: "Reached a switchboard — extension marked",
+  marcar_digito: "Reached an automatic menu — pressed a key to reach a person",
+  esperar_en_linea: "Reached an automatic menu or reception — waited on the line",
+  programar_llamada: "Customer asked to be called back — call scheduled",
+  actualizar_contacto: "Another person handles the account — contact updated",
+  solicitar_documentos: "Requested documents (invoice, contract or account statement)",
+  marcar_numero_equivocado: "Wrong number",
+  solo_contacto_correo: "Asked to be contacted by email only",
+  marcar_facturas_recibidas: "Confirmed the invoices were received",
 }
 
 // Si el backend ya generó un resumen con Claude (ver analyzeCallTranscript en
@@ -298,9 +306,58 @@ interface Props {
 
 const EMPTY_INVOICE_FORM = { invoiceNumber: "", amount: "", currencyCode: "MXN", issueDate: "", dueDate: "", status: "pending", notes: "" }
 
+const SWITCHBOARD_OUTCOME: Record<string, { label: string; color: string }> = {
+  contact: { label: "Reached the contact", color: "bg-green-500/10 text-green-400" },
+  person: { label: "Reached a person (reception)", color: "bg-yellow-500/10 text-yellow-400" },
+  none: { label: "Reached no one", color: "bg-red-500/10 text-red-400" },
+}
+
+// Lo que el agente aprendió del conmutador de este cliente (ver Client.switchboard en el
+// backend): qué contestó, qué tecla funcionó y si llegó a la persona.
+function SwitchboardMemory({ switchboard, extension }: { switchboard?: any; extension?: string | null }) {
+  if (!switchboard?.kind && !extension) {
+    return (
+      <p className="text-zinc-500 text-sm text-center py-6">
+        Nothing learned yet. After the agent reaches an automatic menu on a call, what worked is saved here.
+      </p>
+    )
+  }
+
+  const path: string = switchboard?.path ?? ""
+  const action = path.startsWith("press:") ? `Pressed key ${path.slice(6)}` : path === "wait" ? "Waited on the line (no key)" : "—"
+  const outcome = SWITCHBOARD_OUTCOME[switchboard?.outcome ?? ""]
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <Field label="Type" value={switchboard?.kind === "ivr" ? "Automatic menu (IVR)" : "—"} />
+        <Field label="What worked" value={action} />
+        <Field label="Extension" value={extension || "—"} />
+        <Field label="Last seen" value={switchboard?.lastSeenAt ? new Date(switchboard.lastSeenAt).toLocaleString("en-US") : "—"} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        {outcome && (
+          <span className={`rounded-full px-3 py-1 text-xs font-medium ${outcome.color}`}>{outcome.label}</span>
+        )}
+        <span className="text-xs text-zinc-500">
+          Seen {switchboard?.hits ?? 0} time(s) · {switchboard?.failures ?? 0} failed attempt(s) since
+        </span>
+      </div>
+
+      {switchboard?.menuText && (
+        <div className="rounded-xl border border-zinc-800 bg-[var(--bg-primary)] p-4">
+          <p className="text-xs uppercase tracking-wide text-zinc-500">Menu heard</p>
+          <p className="mt-2 text-sm leading-relaxed text-zinc-300">"{switchboard.menuText}"</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ClientDetailModal({ clientId, onClose }: Props) {
   const [data, setData] = useState<any>(null)
-  const [tab, setTab] = useState<"promises" | "calls" | "invoices" | "summaries">("promises")
+  const [tab, setTab] = useState<"promises" | "calls" | "invoices" | "summaries" | "switchboard">("promises")
   const [expandedCall, setExpandedCall] = useState<string | null>(null)
   const [transcriptModalCallId, setTranscriptModalCallId] = useState<string | null>(null)
   const transcriptEndRef = useRef<HTMLDivElement>(null)
@@ -544,6 +601,14 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                   }`}
                 >
                   Summary Calls ({data.calls?.length ?? 0})
+                </button>
+                <button
+                  onClick={() => setTab("switchboard")}
+                  className={`px-4 py-3 text-sm font-medium transition-colors ${
+                    tab === "switchboard" ? "border-b-2 border-blue-500 text-white" : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  Switchboard
                 </button>
               </div>
 
@@ -806,6 +871,10 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                       )
                     })}
                   </div>
+                )}
+
+                {tab === "switchboard" && (
+                  <SwitchboardMemory switchboard={client.switchboard} extension={client.knownExtension} />
                 )}
               </div>
 

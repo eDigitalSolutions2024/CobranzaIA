@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { getClients, deleteClient, type ClientSort } from "../services/clients"
+import { getClientsPage, deleteClient, type ClientSort } from "../services/clients"
 import { api } from "../services/api"
 import { getAutomationSettings } from "../services/settings"
 import NewClientModal from "../components/NewClientModal"
@@ -10,7 +10,7 @@ import ExportClientsModal from "../components/ExportClientsModal"
 import AutoCallToggle from "../components/AutoCallToggle"
 import AutoCallEngineToggle from "../components/AutoCallEngineToggle"
 import ManualCallFlowSelect from "../components/ManualCallFlowSelect"
-import { ArrowDown, ArrowUp, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
 
 const DOCUMENT_LABEL: Record<string, string> = {
@@ -59,9 +59,59 @@ const testingGroup:string [] = [
   'Ever', 'Alberto', 'Laura', 'Ana', 'Lourdes','Esteban','Gerardo','Leslie' 
 ]
 
+// Clientes por página de la tabla de Customer
+const PAGE_SIZE = 50
+
+// Números de página a mostrar con puntos suspensivos: 1 … 4 5 [6] 7 8 … 20
+function pageNumbers(current: number, last: number): (number | "…")[] {
+  const wanted = new Set([1, last, current - 1, current, current + 1])
+  const sorted = [...wanted].filter((n) => n >= 1 && n <= last).sort((a, b) => a - b)
+  const out: (number | "…")[] = []
+  sorted.forEach((n, i) => {
+    if (i > 0 && n - sorted[i - 1] > 1) out.push("…")
+    out.push(n)
+  })
+  return out
+}
+
+// Encabezado de columna que ordena la tabla al hacer clic (el orden se aplica en el servidor,
+// así abarca a todos los clientes y no solo a los de la página cargada). Solo la columna
+// activa muestra flecha de dirección; las demás un ícono neutro. El primer clic ordena en
+// la dirección natural de la columna (nombre A→Z, deuda mayor→menor) y los siguientes alternan.
+function SortHeader({
+  label, asc, desc, descFirst, sort, setSort, hintAsc, hintDesc,
+}: {
+  label: string
+  asc: ClientSort
+  desc: ClientSort
+  descFirst: boolean
+  sort: ClientSort
+  setSort: (value: ClientSort) => void
+  hintAsc: string
+  hintDesc: string
+}) {
+  const active = sort === asc || sort === desc
+  const next: ClientSort = !active ? (descFirst ? desc : asc) : sort === asc ? desc : asc
+  return (
+    <button
+      onClick={() => setSort(next)}
+      title={`Sort by ${label.toLowerCase()}: ${next === asc ? hintAsc : hintDesc}`}
+      className={`flex items-center gap-1 cursor-pointer hover:text-white ${active ? "text-white" : "text-zinc-500"}`}
+    >
+      {label}
+      {!active ? <ArrowUpDown size={13} /> : sort === asc ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+    </button>
+  )
+}
+
 export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([])
-  const [debtSort, setDebtSort] = useState<ClientSort>("debt_desc")
+  // Un solo orden activo a la vez (por deuda o por nombre); por defecto, mayor deuda primero
+  const [sort, setSort] = useState<ClientSort>("debt_desc")
+  // Paginación: el servidor entrega PAGE_SIZE clientes por página y el total
+  const [page, setPage] = useState(1)
+  const [pages, setPages] = useState(1)
+  const [total, setTotal] = useState(0)
   // Pasos del ciclo automático (AUTO_CYCLE_STEPS del backend) — Auto Outreach se muestra "x/N"
   const [autoCycleSteps, setAutoCycleSteps] = useState(4)
   useEffect(() => {
@@ -194,7 +244,9 @@ export default function ClientsPage() {
     setDeletingId(clientId)
     try {
       await deleteClient(clientId)
-      setClients((prev) => prev.filter((c) => c._id !== clientId))
+      // Se recarga la página (no solo se quita la fila) para que el total y el relleno de
+      // la página con el siguiente cliente queden bien
+      await loadClients()
     } catch (error) {
       console.log(error)
       alert("Error deleting client")
@@ -205,15 +257,29 @@ export default function ClientsPage() {
 
   useEffect(() => {
     loadClients()
-  }, [debtSort])
+  }, [sort, page])
 
   async function loadClients() {
     try {
-      const data = await getClients(debtSort)
-      setClients(data)
+      const data = await getClientsPage(sort, page, PAGE_SIZE)
+      setTotal(data.total)
+      setPages(data.pages)
+      // La página actual ya no existe (ej. se borró el último cliente de la última
+      // página): se regresa a la última que sí tiene clientes, lo que recarga solo.
+      if (data.pages > 0 && page > data.pages) {
+        setPage(data.pages)
+        return
+      }
+      setClients(data.clients)
     } catch (error) {
       console.log(error)
     }
+  }
+
+  // Cambiar el orden regresa a la primera página (la página 3 de otro orden no tiene relación)
+  function changeSort(value: ClientSort) {
+    setSort(value)
+    setPage(1)
   }
   async function onHandleHideBtns(id: string) {
     setCheckedClientId((prev) => prev === id ? null : id);
@@ -265,19 +331,12 @@ export default function ClientsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-zinc-800 text-left">
-                  <th className="pb-4 text-sm text-zinc-500">Customer Name</th>
+                  <th className="pb-4 text-sm text-zinc-500">
+                    <SortHeader label="Customer Name" asc="name_asc" desc="name_desc" descFirst={false} sort={sort} setSort={changeSort} hintAsc="A to Z" hintDesc="Z to A" />
+                  </th>
                   <th className="pb-4 text-sm text-zinc-500">Phone</th>
                   <th className="pb-4 text-sm text-zinc-500">
-                    {/* Orden por deuda (del lado del servidor, para que abarque todas las
-                        páginas y no solo los clientes cargados) — por defecto mayor a menor */}
-                    <button
-                      onClick={() => setDebtSort((prev) => (prev === "debt_desc" ? "debt_asc" : "debt_desc"))}
-                      title={debtSort === "debt_desc" ? "Sorted by debt: highest first (click for lowest first)" : "Sorted by debt: lowest first (click for highest first)"}
-                      className="flex items-center gap-1 text-zinc-300 hover:text-white cursor-pointer"
-                    >
-                      USD Amount
-                      {debtSort === "debt_desc" ? <ArrowDown size={14} /> : <ArrowUp size={14} />}
-                    </button>
+                    <SortHeader label="USD Amount" asc="debt_asc" desc="debt_desc" descFirst sort={sort} setSort={changeSort} hintAsc="lowest first" hintDesc="highest first" />
                   </th>
                   <th className="pb-4 text-sm text-zinc-500">Risk</th>
                   <th className="pb-4 text-sm text-zinc-500">Last contact</th>
@@ -744,6 +803,48 @@ export default function ClientsPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Paginación — la tabla carga PAGE_SIZE clientes por vez, el servidor entrega el total */}
+          {total > 0 && (
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-4">
+              <p className="text-sm text-zinc-400">
+                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString("en-US")} customers
+              </p>
+              {pages > 1 && (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setPage(page - 1)}
+                    disabled={page <= 1}
+                    className="rounded-lg px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  {pageNumbers(page, pages).map((n, i) =>
+                    n === "…" ? (
+                      <span key={`gap-${i}`} className="px-2 text-zinc-500">…</span>
+                    ) : (
+                      <button
+                        key={n}
+                        onClick={() => setPage(n)}
+                        className={`min-w-9 rounded-lg px-3 py-1.5 text-sm cursor-pointer ${
+                          n === page ? "bg-blue-600 text-white" : "text-zinc-300 hover:bg-zinc-800"
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  )}
+                  <button
+                    onClick={() => setPage(page + 1)}
+                    disabled={page >= pages}
+                    className="rounded-lg px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
       </div>

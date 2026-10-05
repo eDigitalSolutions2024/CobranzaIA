@@ -9,6 +9,7 @@ import {
   estimateDeepgramCostUsd,
   estimateElevenLabsCostUsd,
 } from '../config/pricing'
+import { getAnthropicBilling, isAnthropicBillingConfigured } from '../services/anthropicBilling.service'
 
 // Motor de cada llamada + caracteres que habló el agente (lo que cobra ElevenLabs).
 // Call.voiceEngine existe solo en llamadas nuevas; para las anteriores se deduce: el motor
@@ -216,5 +217,24 @@ export async function getUsage(req: Request, res: Response) {
   } catch (error) {
     console.error('Error getUsage:', error)
     res.status(500).json({ message: 'Error calculando el consumo de recursos' })
+  }
+}
+
+// Gasto real de Anthropic según su API de administración (ver anthropicBilling.service.ts).
+// Siempre responde 200: sin clave configurada o con un error de la API, el panel muestra el
+// motivo en vez de romperse.
+export async function getAnthropicUsage(req: Request, res: Response) {
+  if (!isAnthropicBillingConfigured()) {
+    res.json({ configured: false })
+    return
+  }
+  const raw = String(req.query.days ?? '30')
+  // 'all' y 'today' del selector del panel: todo el historial útil (90 días) y solo hoy
+  const days = raw === 'today' ? 1 : raw === 'all' ? 90 : Math.min(90, Math.max(1, Number(raw) || 30))
+  try {
+    res.json({ configured: true, ...(await getAnthropicBilling(days)) })
+  } catch (error) {
+    console.error('Error getAnthropicUsage:', error)
+    res.json({ configured: true, error: error instanceof Error ? error.message : String(error) })
   }
 }

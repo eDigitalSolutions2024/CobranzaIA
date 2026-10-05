@@ -19,6 +19,7 @@ import { connectDB } from "./db"
 import { handleMediaStream } from "./controllers/voiceStream.controller"
 import { handleMediaStreamCartesia } from "./controllers/voiceStreamCartesia.controller"
 import { validateTwilioConfig } from "./config/twilio"
+import { logWebhookSecurityStatus, captureWebhookRawBody } from "./config/webhookSecurity"
 import { validateOpenAIConfig } from "./config/openai"
 import { validateVoicePipelineConfig } from "./config/voicePipeline"
 import { startReminderScheduler } from "./services/reminderScheduler.service"
@@ -53,7 +54,10 @@ app.use(
   })
 )
 
-app.use(express.json())
+// Meta firma el cuerpo ORIGINAL del webhook de WhatsApp: se guarda tal cual en req.rawBody
+// (solo para esa ruta, no para todo el tráfico) para poder verificar la firma después de
+// que express lo convierta a JSON — ver middleware/metaSignature.ts
+app.use(express.json({ verify: captureWebhookRawBody }))
 app.use(express.urlencoded({ extended: false })) // required for Twilio webhooks
 
 app.get("/", (_, res) => res.send("CobranzaAI API OK"))
@@ -77,6 +81,7 @@ async function start() {
 
   await connectDB()
   validateTwilioConfig()
+  logWebhookSecurityStatus()
   validateOpenAIConfig()
   validateVoicePipelineConfig()
   // Desactivados a petición del usuario (2026-09-18) — de momento no se necesita que
