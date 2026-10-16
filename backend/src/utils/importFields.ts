@@ -57,13 +57,14 @@ export function cleanContactName(raw: unknown): string | null {
   s = s.replace(/\d+/g, ' ')
   s = s.replace(TITLES, '')
   s = s.replace(/[^\p{L}\s.'-]/gu, ' ').replace(/\s+/g, ' ').trim()
+  s = s.replace(/\.+$/, '').trim() // punto final suelto ("Martín Martínez Olvera.")
   if (s.length < 3 || NON_PERSON.test(s) || s.split(' ').length > 7) return null
   // Usuario de correo ("claudia.montes") escrito en vez de un nombre
   if (/^[a-z0-9]+\.[a-z0-9.]+$/.test(s)) return null
   // El nombre del propio agente ("soy Guadalupe Martínez… ¿hablo con Guadalupe Martínez?")
   if (s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '') === 'guadalupe martinez') return null
-  // Todo en mayúsculas ("ALICIA CABRERA") → "Alicia Cabrera"
-  if (s === s.toUpperCase()) s = s.toLowerCase().replace(/(^|\s)\p{L}/gu, (m) => m.toUpperCase())
+  // Todo en mayúsculas ("ALICIA CABRERA") o todo en minúsculas ("karina fabiol fernandez") → "Alicia Cabrera"
+  if (s === s.toUpperCase() || s === s.toLowerCase()) s = s.toLowerCase().replace(/(^|\s)\p{L}/gu, (m) => m.toUpperCase())
   return s
 }
 

@@ -63,6 +63,6 @@ export const GREETING_SILENCE_MS = readPositiveInt('VOICE_GREETING_WAIT_MS', 250
 export const GREETING_MAX_WAIT_MS = readPositiveInt('VOICE_GREETING_MAX_WAIT_MS', 6000)
 // Un menú se oye completo antes de elegir tecla: se decide cuando la grabación lleva este tiempo
 // callada (ms). Una operadora o un "espere en línea" se actúan al instante, sin esperar.
-export const MENU_QUIET_MS = readPositiveInt('VOICE_MENU_QUIET_MS', 1800)
+export const MENU_QUIET_MS = readPositiveInt('VOICE_MENU_QUIET_MS', 2500)
 // Si la misma grabación se repite tantas veces sin que llegue una persona, se cuelga (bucle de menú)
 export const MENU_LOOP_MAX = readPositiveInt('VOICE_MENU_LOOP_MAX', 4)

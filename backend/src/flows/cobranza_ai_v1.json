@@ -8,7 +8,7 @@
     {
       "id": "start",
       "type": "message",
-      "text": "Hola, soy el asistente virtual del departamento de cobranza. Me comunico respecto a su cuenta.",
+      "text": "Hola, le llamo del departamento de cobranza de HP Financial Services. Me comunico respecto a su cuenta.",
       "next": "verify_identity"
     },
     {

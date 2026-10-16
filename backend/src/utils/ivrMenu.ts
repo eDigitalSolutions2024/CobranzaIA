@@ -19,7 +19,9 @@ export interface MenuOption {
 // el nombre del contacto no cambian por lo que venga después, así que esas se actúan al instante.
 export type MenuDecision =
   | { action: 'press'; digit: string; reason: string; immediate: boolean }
-  | { action: 'wait'; reason: string; immediate: true }
+  | { action: 'wait'; reason: string; immediate: boolean }
+  // Grabación de "ya cerramos / fuera de horario": no hay nadie a quien esperar, se cuelga
+  | { action: 'hangup'; reason: string; immediate: true }
 
 // Lo que funcionó la última vez con este número (ver Client.switchboard)
 export interface SwitchboardHint {
@@ -39,18 +41,24 @@ const NUMBER_WORDS: Record<string, string> = {
   asterisco: '*', numeral: '#', gato: '#',
 }
 
-const DIGIT_COMMAND = /\b(?:marque|marca|digite|oprima|presione|pulse|teclee|ingrese)\s+(?:el\s+|la\s+tecla\s+)?(?:numero\s+)?(\d|cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|asterisco|numeral|gato)\b/g
+// Incluye el trato de "tú" ("Presiona 1", "Marca 0"), muy común en los menús de México
+const DIGIT_COMMAND = /\b(?:marque|marca|digite|digita|oprima|oprime|presione|presiona|pulse|pulsa|teclee|teclea|ingrese|ingresa)\s+(?:el\s+|la\s+tecla\s+)?(?:numero\s+)?(\d|cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|asterisco|numeral|gato)\b/g
+
+// Menús que solo enumeran "1, Ciudad de México. 2, Guadalajara." (el verbo "seleccione…" va en otro pedazo)
+const ENUMERATED_OPTION = /(?:^|[.!?]\s+)([0-9])\s*,\s*([a-z][^.!?,]{2,60}?)(?=[.!?]|$)/g
 
 // Pistas de que habla una grabación y no una persona
 const IVR_CUES: RegExp[] = [
   /si conoce (el numero de |la )?extension/,
   /espere en (la )?linea/,
   /permanezca en (la )?linea/,
-  /(su llamada|esta llamada) (puede ser|sera|esta siendo|podria ser) (grabada|monitoreada)/,
+  /(su llamada|esta llamada) (puede ser|podra ser|sera|esta siendo|podria ser) (grabada|monitoreada)/,
+  /para fines de calidad/,
+  /seleccione (cualquiera|una) de las (siguientes )?opciones|elija una (de las )?opcion/,
   /para efectos de calidad/,
   /vuelva a intentarlo|no lo entiendo|opcion (no )?valida|marcacion invalida|informacion no fue recibida|excedido el numero de intentos/,
   /for english|press (one|two|\d)/,
-  /\b(?:marque|digite|oprima|presione|pulse|teclee)\b[^.?]*(?:\d|asterisco|numeral|extension|operadora)/,
+  /\b(?:marque|marca|digite|digita|oprima|oprime|presione|presiona|pulse|pulsa|teclee|teclea)\b[^.?]*(?:\d|asterisco|numeral|extension|operadora)/,
   // Texto institucional de una grabación (no lo dice una recepcionista al contestar)
   /aviso de privacidad/,
   /triple doble u|\bwww\b|punto com\b|nuestra pagina|visita nuestra|visite nuestra/,
@@ -61,6 +69,9 @@ const IVR_CUES: RegExp[] = [
   /(enseguida|en un momento|en breve|a la brevedad) (lo|le|la|sera|seran) (atend|comunic|transfer)/,
   /(esta|estas) llamando a|ha llamado a|ha marcado a/,
 ]
+
+// Grabaciones de oficina cerrada: esperar o escribirle no sirve de nada, hay que colgar y reintentar
+const CLOSED_CUE = /ya (hemos )?cerrado|(estamos|permanecemos|se encuentra[n]?) cerrad[oa]s?|oficinas? (esta[n]? )?cerrad[oa]s?|fuera de(l)? horario|nuestro horario (de atencion )?ha (terminado|concluido)|no hay (personal|nadie) disponible/
 
 // "Un momento", "le comunico"…: puede ser la grabación o una recepcionista. En ambos casos lo
 // correcto es esperar sin hablar (protocolo de recepción), pero solo si es corto y sin pregunta
@@ -115,13 +126,23 @@ export function parseMenuOptions(text: string): MenuOption[] {
     options.push({ digit, label })
     prevEnd = end
   })
+  // Opciones enumeradas sin verbo ("1, Ciudad de México. 2, Guadalajara."): se agregan las teclas que
+  // no salieron ya con un "marque/presiona"
+  for (const m of norm.matchAll(ENUMERATED_OPTION)) {
+    if (!options.some((o) => o.digit === m[1])) options.push({ digit: m[1], label: m[2].trim() })
+  }
   return options
+}
+
+// Dos o más opciones numeradas seguidas ("1, ventas. 2, compras.") = un menú, aunque no diga "marque"
+function looksLikeEnumeratedMenu(normalized: string): boolean {
+  return [...normalized.matchAll(ENUMERATED_OPTION)].length >= 2
 }
 
 // ¿Habla una grabación/menú? (para no pasarlo a Claude como si fuera conversación)
 export function isAutomatedPrompt(text: string): boolean {
   const t = normalize(text)
-  return IVR_CUES.some((r) => r.test(t)) || isTransferCue(t) || isLongRecordedGreeting(t)
+  return IVR_CUES.some((r) => r.test(t)) || CLOSED_CUE.test(t) || looksLikeEnumeratedMenu(t) || isTransferCue(t) || isLongRecordedGreeting(t)
 }
 
 // "Gracias por llamar a X…" / "Bienvenido a X…" largo y sin preguntas: una grabación. Una recepcionista
@@ -154,11 +175,17 @@ export function isShortHumanGreeting(text: string): boolean {
 export function decideMenuAction(text: string, hint?: SwitchboardHint | null, contact?: string | null): MenuDecision | null {
   if (!isAutomatedPrompt(text)) return null
   const t = normalize(text)
+
+  // "Ya hemos cerrado" / "fuera de horario": no hay nadie, se cuelga (y el ciclo reintenta). Antes el
+  // agente le contestaba conversación a esa grabación y llegó a "programar una llamada" por error.
+  if (CLOSED_CUE.test(t)) return { action: 'hangup', reason: 'grabación de oficina cerrada', immediate: true }
+
   const options = parseMenuOptions(text)
 
-  // Sin opciones: mensaje de espera, error del menú o un pedazo de menú cortado — se espera en
-  // silencio (el pedazo siguiente traerá las teclas).
-  if (options.length === 0) return { action: 'wait', reason: 'sin opciones: espera en línea', immediate: true }
+  // Sin opciones: mensaje de espera, error del menú o un pedazo de menú cortado. Se espera en silencio
+  // pero NO se da por final: el pedazo siguiente puede traer las teclas (el controlador junta lo que
+  // la grabación va diciendo y decide cuando termina de hablar).
+  if (options.length === 0) return { action: 'wait', reason: 'sin opciones: espera en línea', immediate: false }
 
   // 1. Lo que funcionó la última vez, si esa tecla sigue en el menú
   const remembered = hint?.path?.startsWith('press:') ? hint.path.slice('press:'.length) : null

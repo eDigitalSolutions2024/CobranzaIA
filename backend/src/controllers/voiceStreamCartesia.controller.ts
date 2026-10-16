@@ -32,6 +32,7 @@ import { HOLD_MAX_SECONDS, SILENCE_HANGUP_SECONDS, DTMF_ENABLED, DTMF_MAX_PRESSE
 import { dtmfFrames, sanitizeDigits } from '../utils/dtmf'
 import { decideMenuAction, isAutomatedPrompt, isShortHumanGreeting, MenuDecision, SwitchboardHint } from '../utils/ivrMenu'
 import { markServiceDown } from '../services/serviceHealth'
+import { cleanContactName } from '../utils/importFields'
 import { placeOutboundCall } from './voice.controller'
 
 const { VoiceResponse } = twilio.twiml
@@ -114,6 +115,8 @@ export async function handleIncomingCartesia(req: Request, res: Response): Promi
 }
 
 const VOICEMAIL_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono|(?:usuario|abonado|suscriptor|extensi[oó]n|n[uú]mero|l[ií]nea)\b[^.?]{0,40}no est[aá] disponible|no est[aá] disponible[^.?]{0,25}(?:deje|despu[eé]s del tono)|fuera del [aá]rea de servicio|el n[uú]mero que usted marc[oó]/i
+// Frases que dice una grabación y casi nunca una persona: sirven para reconocer el buzón en cualquier punto
+const VOICEMAIL_ONLY_RECORDINGS = /buz[oó]n de voz|grabe su mensaje|despu[eé]s del tono|al escuchar el tono|deje su mensaje despu[eé]s/i
 // Subconjunto de VOICEMAIL_PATTERN que sí es un buzón que graba (se deja recado); el resto
 // son avisos del operador que no graban nada.
 const VOICEMAIL_RECORDS_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono/i
@@ -129,7 +132,12 @@ function buildGreeting(name: string, contact?: string | null): string {
   const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Mexico_City' }).format(new Date())) % 24
   const salutation = hour < 12 ? 'buenos días' : hour < 19 ? 'buenas tardes' : 'buenas noches'
   const who = contact?.trim() ? `${contact.trim()}, de ${name}` : name
-  return `Hola, ${salutation}, soy Guadalupe Martínez, asistente virtual de HP Financial Services. ¿Tengo el gusto de hablar con ${who}?`
+  // Saludo corto (~3 s): lo primero es confirmar con quién se habla. El nombre y la empresa de quien llama se
+  // dicen en la frase siguiente, cuando ya confirmó (ver IDENTITY_NEXT_STEP y el guion en
+  // voiceConversation.service.ts). El saludo largo de antes (~11 s) hacía que muchas recepcionistas colgaran.
+  const cap = salutation.charAt(0).toUpperCase() + salutation.slice(1)
+  if (contact?.trim()) return `${cap}, ¿hablo con ${who}?`
+  return `${cap}, le llamo de HP Financial Services. ¿Me comunica con la persona encargada de pagos de ${name}, por favor?`
 }
 
 // Texto para el prompt con lo aprendido del conmutador de este cliente (ver Client.switchboard)
@@ -368,7 +376,11 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     // El buzón solo se reconoce al inicio de la llamada (history.length <= 3): las acciones sobre un
     // menú (el texto del menú + "presioné la tecla…") se descuentan, porque inflaban el conteo y un
     // buzón que contestaba DESPUÉS de un menú ya no se detectaba (visto en producción).
-    if (history.length - menuHistoryEntries <= 3 && VOICEMAIL_PATTERN.test(finishedUtterance)) {
+    // Las frases que solo dice una grabación ("después del tono", "buzón de voz", "grabe su mensaje") se
+    // reconocen en cualquier momento: un buzón puede contestar DESPUÉS de una conversación (ej. un filtro
+    // de llamadas que dice "permanece en la línea… esta persona no está disponible, deja tu mensaje después
+    // del tono"). El resto de las frases solo cuentan al inicio, porque una persona podría decirlas.
+    if ((history.length - menuHistoryEntries <= 3 && VOICEMAIL_PATTERN.test(finishedUtterance)) || VOICEMAIL_ONLY_RECORDINGS.test(finishedUtterance)) {
       // Es un buzón: no se saluda (ahorra voz). El recado se deja después del tono.
       greetingSent = true
       clearGreetTimer()
@@ -462,7 +474,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
 // y con ellas el camino rápido la daba por el contacto y arrancaba el guion de cobranza.
 // Con "sí, dígame" sigue entrando por 'si'. Lo ambiguo lo evalúa Claude (QUIÉN CONTESTA).
 const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivamente', 'claro', 'asi', 'sip'])
-  const IDENTITY_NEXT_STEP = 'Perfecto, gracias. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?'
+  const IDENTITY_NEXT_STEP = 'Perfecto, gracias. Le habla Guadalupe Martínez, de HP Financial Services. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?'
 
   function isClearYes(text: string): boolean {
     if (text.includes('?') || text.includes('¿')) return false
@@ -659,8 +671,14 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
 
   // Ejecuta la decisión sobre el menú (presionar tecla o esperar en silencio)
   function applyMenuDecision(decision: MenuDecision): void {
-    console.log(`[VoiceCartesia] Menú automático detectado → ${decision.action === 'press' ? `presionar ${decision.digit}` : 'esperar'} (${decision.reason})`)
+    console.log(`[VoiceCartesia] Menú automático detectado → ${decision.action === 'press' ? `presionar ${decision.digit}` : decision.action === 'hangup' ? 'colgar' : 'esperar'} (${decision.reason})`)
     menuHistoryEntries += 1 // la acción que se agrega a continuación
+    if (decision.action === 'hangup') {
+      // Oficina cerrada: no hay a quién esperar. Se cuelga; el ciclo lo cuenta como sin respuesta.
+      shouldHangup = true
+      closeAll()
+      return
+    }
     if (decision.action === 'press') {
       menuPressed.push(decision.digit)
       history.push({ role: 'assistant', content: `[Acción: presioné la tecla ${decision.digit} y espero en silencio]` })
@@ -691,7 +709,9 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
   function sendGreeting(): void {
     if (greetingSent || closed || voicemailMode || menuSeen || !clientInfo) return
     greetingSent = true
-    awaitingFirstAnswer = true
+    // El camino rápido "sí, soy yo" solo aplica si el saludo preguntó por una persona; sin contacto
+    // se pidió "la persona encargada de pagos" y un "sí" no confirma quién es
+    awaitingFirstAnswer = Boolean(clientInfo.contact?.trim())
     clearGreetTimer()
     speakFixed(buildGreeting(clientInfo.name, clientInfo.contact))
   }
@@ -1173,7 +1193,9 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
           agingDays: (client.agingDays as number) ?? 0,
           status: client.status as string,
           rfc: (client.rfc as string) ?? null,
-          contact: (client.contact as string) ?? null,
+          // Se limpia al usarlo (puntos sueltos, minúsculas, títulos…): así también quedan bien los contactos que ya
+          // estaban guardados antes de que el importador los limpiara
+          contact: cleanContactName(client.contact),
           invoices,
           flowOverride: await loadManualFlowOverride(call.triggeredBy),
           switchboardNote: describeSwitchboard(sb),
