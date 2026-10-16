@@ -242,6 +242,30 @@ function connectStream(baseUrl: string): string {
 
 const CALL_STATUSES = ['in_progress', 'completed', 'requires_human', 'failed'] as const
 
+// Filtros propios de la llamada (no del cliente), para la vista Calls y su exportación:
+//   disposition: resultado exacto (catálogo de config/disposition.ts)
+//   promise:     'yes' = quedó una promesa de pago, 'no' = no quedó ninguna
+//   type:        'auto' (ciclo automático) o 'manual' (botón Call del dashboard)
+//   from / to:   rango de fechas (AAAA-MM-DD) en hora de CDMX, ambos extremos incluidos
+function buildCallExtraFilter(query: Record<string, any>): Record<string, any> {
+  const filter: Record<string, any> = {}
+  const disposition = String(query.disposition ?? '').trim()
+  if (disposition) filter.disposition = disposition
+  if (query.promise === 'yes') filter.promiseDate = { $ne: null }
+  if (query.promise === 'no') filter.promiseDate = null
+  if (query.type === 'auto' || query.type === 'manual') filter.triggeredBy = query.type
+  const from = String(query.from ?? '')
+  const to = String(query.to ?? '')
+  const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
+  if (isDay(from) || isDay(to)) {
+    filter.createdAt = {
+      ...(isDay(from) ? { $gte: new Date(`${from}T00:00:00-06:00`) } : {}),
+      ...(isDay(to) ? { $lte: new Date(`${to}T23:59:59.999-06:00`) } : {}),
+    }
+  }
+  return filter
+}
+
 // Filtro de Mongo para la vista Calls: los 5 filtros de Reporte (país/collector/team...) y
 // el buscador por nombre o teléfono — los mismos que aplica la tabla en pantalla. El
 // estado se maneja aparte (lo piden la tabla y los contadores por separado).
@@ -262,6 +286,9 @@ async function buildCallsViewFilter(query: Record<string, any>): Promise<Record<
     const byName = await Client.find({ name: regex }).select('_id').lean()
     conditions.push({ $or: [{ clientId: { $in: byName.map((c) => c._id) } }, { phone: regex }] })
   }
+
+  const extra = buildCallExtraFilter(query)
+  if (Object.keys(extra).length > 0) conditions.push(extra)
 
   return conditions.length > 0 ? { $and: conditions } : {}
 }
@@ -301,10 +328,15 @@ export async function getCalls(req: Request, res: Response): Promise<void> {
     // que "Failed (25)" muestre esas 25 y no solo las que caen en las últimas 100 llamadas.
     const status = String(req.query.status ?? '')
     if ((CALL_STATUSES as readonly string[]).includes(status)) callFilter.status = status
+    Object.assign(callFilter, buildCallExtraFilter(req.query))
 
+    // Páginas de 100 (la tabla trae una a la vez): con filtros activos pueden coincidir más
+    // llamadas de las que caben en una sola carga
+    const page = Math.max(1, Number(req.query.page) || 1)
     const calls = await Call.find(callFilter)
       .populate('clientId', `debt status ${CLIENT_REPORT_FIELDS}`)
       .sort({ createdAt: -1 })
+      .skip((page - 1) * 100)
       .limit(100)
       .lean()
     res.json(calls)
@@ -329,6 +361,7 @@ export async function exportCalls(req: Request, res: Response): Promise<void> {
     }
     const status = String(req.query.status ?? '')
     if (status && status !== 'all') callFilter.status = status
+    Object.assign(callFilter, buildCallExtraFilter(req.query))
 
     // Cliente completo (no solo los campos de filtro): cada fila del reporte lleva toda la
     // información del cliente, igual que la hoja "Clientes" de GET /clients/export.

@@ -119,6 +119,11 @@ export class ElevenLabsTtsSession extends EventEmitter {
         return
       }
       if (event.error || event.message) console.error('[ElevenLabs] Mensaje del servidor:', JSON.stringify(event).slice(0, 300))
+      // Sin créditos: ElevenLabs rechaza cada texto y el agente se queda mudo. Se avisa con una
+      // marca propia para que la llamada se cierre y se pause el ciclo (ver serviceHealth.ts).
+      if (event.error === 'quota_exceeded' || event.code === 1008) {
+        this.emit('error', Object.assign(new Error('ElevenLabs sin créditos (quota_exceeded)'), { quotaExceeded: true }))
+      }
       if (event.audio && sock.contextId) {
         sock.audioChunks++
         this.emit('audio', String(event.audio), sock.contextId)

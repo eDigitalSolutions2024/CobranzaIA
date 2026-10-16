@@ -3,8 +3,8 @@ import ExcelJS from "exceljs"
 import mongoose from "mongoose"
 import Invoice from "../models/Invoice"
 import Client from "../models/Client"
-import { normalizeMexicanPhone } from "../utils/phone"
 import { loadExchangeRates, toMxn } from "../utils/currency"
+import { parseMexicanPhone, cleanContactName, parseExtension } from "../utils/importFields"
 
 // El saldo del cliente (`Client.debt`) no se captura a mano — es la suma de sus
 // facturas. Collector/TeamLeader/Aging tampoco se editan a mano en el cliente:
@@ -120,6 +120,9 @@ const HEADER_ALIASES: Record<string, string[]> = {
   // cliente (para no pisar correcciones manuales ya hechas).
   name: ["customer name", "nombre", "cliente"],
   phone: ["phone", "telefono", "teléfono", "celular"],
+  // Persona de contacto del cliente y su extensión (columnas "Contact" y "Ext" del Excel de HP)
+  contact: ["contact", "contacto"],
+  ext: ["ext", "extension", "extensión"],
   invoiceNumber: ["invoice number", "invoice", "numero de factura"],
   hptfInvoiceNumber: ["hptf invoice number", "hptf invoice"],
   contractNumber: ["contract number", "numero de contrato"],
@@ -210,6 +213,10 @@ export async function importInvoices(req: Request, res: Response) {
       customerId: number
       name: string | null
       phone: string | null
+      phoneIssue: string | null // por qué el teléfono del archivo no se pudo leer (ver parseMexicanPhone)
+      phoneRaw: string | null
+      contactRaw: string | null
+      ext: string | null
       invoiceNumber: string
       hptfInvoiceNumber: string | null
       contractNumber: string | null
@@ -242,11 +249,20 @@ export async function importInvoices(req: Request, res: Response) {
         return
       }
 
+      // Lectura estricta del teléfono: uno que no se pueda leer con seguridad queda vacío y se
+      // reporta (antes se armaba como "+" más lo que viniera, y "85218561" terminaba siendo un
+      // número de Hong Kong).
+      const parsedPhone = parseMexicanPhone(cellValue("phone"))
+
       rows.push({
         rowNumber,
         customerId,
         name: toStringOrNull(cellValue("name")),
-        phone: normalizeMexicanPhone(cellValue("phone")) || null,
+        phone: parsedPhone.phone || null,
+        phoneIssue: parsedPhone.phone ? null : parsedPhone.reason ?? null,
+        phoneRaw: toStringOrNull(cellValue("phone")),
+        contactRaw: toStringOrNull(cellValue("contact")),
+        ext: toStringOrNull(cellValue("ext")),
         invoiceNumber,
         hptfInvoiceNumber: toStringOrNull(cellValue("hptfInvoiceNumber")),
         contractNumber: toStringOrNull(cellValue("contractNumber")),
@@ -272,9 +288,11 @@ export async function importInvoices(req: Request, res: Response) {
 
     const customerIds = [...new Set(rows.map((r) => r.customerId))]
     const clients = await Client.find({ customerId: { $in: customerIds } })
-      .select("customerId")
+      .select("customerId phone")
       .lean()
     const clientIdByCustomerId = new Map(clients.map((c) => [c.customerId as number, c._id]))
+    const existingPhoneByCustomerId = new Map(clients.map((c) => [c.customerId as number, String(c.phone ?? "")]))
+    const last10 = (s: string) => s.replace(/\D/g, "").slice(-10)
 
     // Customer ID que el archivo trae por primera vez (no hay cliente con ese
     // customerId todavía) — si trae teléfono, se da de alta el cliente aquí
@@ -302,11 +320,16 @@ export async function importInvoices(req: Request, res: Response) {
         : []
       const takenPhones = new Set(existingPhoneClients.map((c) => c.phone))
 
-      const toCreate: { customerId: number; name: string; phone: string; country: string | null }[] = []
+      const toCreate: { customerId: number; name: string; phone: string; country: string | null; contact: string | null; knownExtension: string | null }[] = []
       for (const customerId of missingCustomerIds) {
         const rep = representativeByCustomerId.get(customerId)!
         if (!rep.phone) {
-          clientsSkipped.push({ customerId, reason: "Cliente nuevo sin columna Phone en el archivo" })
+          clientsSkipped.push({
+            customerId,
+            reason: rep.phoneRaw
+              ? `Teléfono no válido (${JSON.stringify(rep.phoneRaw)}: ${rep.phoneIssue ?? "no se pudo leer"})`
+              : "Cliente nuevo sin columna Phone en el archivo",
+          })
           continue
         }
         if (takenPhones.has(rep.phone)) {
@@ -319,6 +342,8 @@ export async function importInvoices(req: Request, res: Response) {
           name: rep.name || `Customer ${customerId}`,
           phone: rep.phone,
           country: rep.customerCountry,
+          contact: cleanContactName(rep.contactRaw),
+          knownExtension: parseExtension(rep.ext),
         })
       }
 
@@ -335,6 +360,8 @@ export async function importInvoices(req: Request, res: Response) {
               phone: c.phone,
               customerId: c.customerId,
               country: c.country,
+              contact: c.contact,
+              knownExtension: c.knownExtension,
               status: "pending",
             })),
             { ordered: false }
@@ -411,6 +438,8 @@ export async function importInvoices(req: Request, res: Response) {
 
     let upsertedCount = 0
     let modifiedCount = 0
+    let contactsFromFile = 0
+    let extensionsSet = 0
     if (ops.length > 0) {
       const result = await Invoice.bulkWrite(ops, { ordered: false })
       upsertedCount = result.upsertedCount ?? 0
@@ -419,28 +448,89 @@ export async function importInvoices(req: Request, res: Response) {
       const touchedClientIds = [...new Set(ops.map((op) => String(op.updateOne.update.$set.clientId)))]
       await Promise.all(touchedClientIds.map((clientId) => syncClientFromInvoices(clientId)))
 
-      // La columna "Collector" del Excel es la persona a la que hay que contactar — se
-      // usa como Contact del cliente (el saludo del agente de voz se dirige a ella). Solo
-      // se llena si el cliente no tiene Contact todavía: no pisa un contacto corregido a
-      // mano ni el que actualizó el agente en una llamada (actualizar_contacto).
-      const contactByClientId = new Map<string, string>()
+      // Contacto y extensión del cliente, de las columnas "Contact" y "Ext" del Excel de HP.
+      // ANTES se copiaba la columna "Collector" como Contact: eran solo ~11 nombres de cobradores
+      // repartidos entre cientos de empresas, y el agente se los pedía a cada recepcionista (en
+      // una semana, 0 de 19 dijeron "sí, soy yo"). Eso ya no se hace.
+      //  - Solo se toca el contacto si el archivo TRAE columna Contact (un archivo viejo sin esa
+      //    columna no pisa nada).
+      //  - Se reemplaza si el cliente no tenía contacto o si lo que tiene es el nombre de su
+      //    cobrador (el relleno automático de antes). Un contacto escrito a mano o aprendido por
+      //    el agente en una llamada (actualizar_contacto) NO se pisa.
+      //  - Si la celda no es una persona (un portal, un correo), el contacto queda vacío y el
+      //    agente pide a "la persona encargada de pagos".
+      //  - La extensión del archivo sí pisa a la guardada: la de HP es un dato; la anterior podía
+      //    ser una tecla de menú que el agente guardó creyendo que era una extensión.
+      const hasContactColumn = Boolean(colByField.contact)
+      const hasExtColumn = Boolean(colByField.ext)
+      const firstRowByClientId = new Map<string, ParsedRow>()
       for (const row of rows) {
         const clientId = clientIdByCustomerId.get(row.customerId)
-        if (clientId && row.collector && !contactByClientId.has(String(clientId))) {
-          contactByClientId.set(String(clientId), row.collector)
+        if (clientId && !firstRowByClientId.has(String(clientId))) firstRowByClientId.set(String(clientId), row)
+      }
+      const contactOps: any[] = []
+      for (const [clientId, row] of firstRowByClientId) {
+        if (hasContactColumn) {
+          const contact = cleanContactName(row.contactRaw)
+          const overwritable: any[] = [{ contact: null }, { contact: "" }, { contact: { $exists: false } }]
+          if (row.collector) overwritable.push({ contact: row.collector })
+          contactOps.push({ updateOne: { filter: { _id: clientId, $or: overwritable }, update: { $set: { contact } } } })
+          if (contact) contactsFromFile++
+        }
+        if (hasExtColumn) {
+          const ext = parseExtension(row.ext)
+          if (ext) {
+            contactOps.push({ updateOne: { filter: { _id: clientId }, update: { $set: { knownExtension: ext } } } })
+            extensionsSet++
+          }
         }
       }
-      if (contactByClientId.size > 0) {
-        await Client.bulkWrite(
-          [...contactByClientId.entries()].map(([clientId, contact]) => ({
-            updateOne: {
-              filter: { _id: clientId, $or: [{ contact: null }, { contact: "" }, { contact: { $exists: false } }] },
-              update: { $set: { contact } },
-            },
-          })),
-          { ordered: false }
-        )
+      if (contactOps.length > 0) await Client.bulkWrite(contactOps, { ordered: false })
+    }
+
+    // Teléfonos de clientes que YA existían: si el archivo trae uno válido y distinto, REEMPLAZA al
+    // guardado (muchos de los que había estaban mal; el archivo de HP es la fuente). Un teléfono que
+    // el archivo trae pero no se pudo leer (sin lada, dos números pegados…) deja el actual como está
+    // y se reporta. Si el número nuevo ya es de OTRO cliente (el teléfono es único), no se cambia y
+    // se reporta como conflicto. Los clientes recién creados ya traen el teléfono del archivo.
+    const phonesUpdated: { customerId: number; name: string | null; previous: string; current: string }[] = []
+    const phoneConflicts: { customerId: number; name: string | null; phone: string; reason: string }[] = []
+    const phoneIssues: { customerId: number; name: string | null; raw: string | null; reason: string }[] = []
+    let phonesReformatted = 0
+    const seenCustomers = new Set<number>()
+    const phoneCandidates: { row: ParsedRow; clientId: any; current: string }[] = []
+    for (const row of rows) {
+      if (seenCustomers.has(row.customerId)) continue
+      seenCustomers.add(row.customerId)
+      if (!row.phone && row.phoneIssue) {
+        phoneIssues.push({ customerId: row.customerId, name: row.name, raw: row.phoneRaw, reason: row.phoneIssue })
       }
+      const current = existingPhoneByCustomerId.get(row.customerId)
+      const clientId = clientIdByCustomerId.get(row.customerId)
+      if (current !== undefined && clientId && row.phone && current !== row.phone) {
+        phoneCandidates.push({ row, clientId, current })
+      }
+    }
+    if (phoneCandidates.length > 0) {
+      const owners = await Client.find({ phone: { $in: phoneCandidates.map((c) => c.row.phone as string) } })
+        .select("customerId phone")
+        .lean()
+      const ownerByPhone = new Map(owners.map((o) => [o.phone as string, o.customerId as number | undefined]))
+      const claimed = new Set<string>()
+      const phoneOps: any[] = []
+      for (const c of phoneCandidates) {
+        const phone = c.row.phone as string
+        const owner = ownerByPhone.get(phone)
+        if ((owner !== undefined && owner !== c.row.customerId) || (owner === undefined && ownerByPhone.has(phone)) || claimed.has(phone)) {
+          phoneConflicts.push({ customerId: c.row.customerId, name: c.row.name, phone, reason: "Ese teléfono ya pertenece a otro cliente: se dejó el actual" })
+          continue
+        }
+        claimed.add(phone)
+        phoneOps.push({ updateOne: { filter: { _id: c.clientId }, update: { $set: { phone } } } })
+        if (last10(c.current) === last10(phone)) phonesReformatted++ // mismo número, solo se unifica el formato
+        else phonesUpdated.push({ customerId: c.row.customerId, name: c.row.name, previous: c.current, current: phone })
+      }
+      if (phoneOps.length > 0) await Client.bulkWrite(phoneOps, { ordered: false })
     }
 
     res.json({
@@ -452,6 +542,12 @@ export async function importInvoices(req: Request, res: Response) {
       skipped,
       errors: rowErrors,
       unratedCurrencies: [...unratedCurrencies],
+      contactsFromFile,
+      extensionsSet,
+      phonesUpdated,
+      phonesReformatted,
+      phoneConflicts,
+      phoneIssues,
     })
   } catch (error) {
     console.error("Error importInvoices:", error)

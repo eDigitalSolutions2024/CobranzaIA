@@ -23,7 +23,9 @@ import { requireAuth } from "../middleware/auth"
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
+  // 20 MB: el Excel de facturas de HP ya pesa ~1.5 MB con 888 clientes y crece con cada cliente nuevo.
+  // El límite de Nginx (client_max_body_size) debe ser igual o mayor, o responde 413 antes de llegar aquí.
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = [
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

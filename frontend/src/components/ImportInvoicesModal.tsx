@@ -10,6 +10,12 @@ interface ImportResult {
   skipped: { row: number; invoiceNumber: string; reason: string }[]
   errors: { row: number; message: string }[]
   unratedCurrencies: string[]
+  contactsFromFile?: number
+  extensionsSet?: number
+  phonesUpdated?: { customerId: number; name: string | null; previous: string; current: string }[]
+  phonesReformatted?: number
+  phoneConflicts?: { customerId: number; name: string | null; phone: string; reason: string }[]
+  phoneIssues?: { customerId: number; name: string | null; raw: string | null; reason: string }[]
 }
 
 interface Props {
@@ -64,6 +70,9 @@ export default function ImportInvoicesModal({ isOpen, onClose, onImported }: Pro
           Contract Number, Invoice Type, Invoice Create Date, Payment Due Date, Invoice Amount,
           USD Remaining Amount Due, Aging Target, Collector, TL, Currency Code and Customer Country.
           Re-importing the same Invoice Number updates that invoice instead of duplicating it.
+          If the file has <strong>Contact</strong>, <strong>Phone</strong> and <strong>Ext</strong> columns,
+          existing clients get the file's phone (replacing the old one), the contact person, and the
+          extension.
         </p>
 
         <input
@@ -94,6 +103,52 @@ export default function ImportInvoicesModal({ isOpen, onClose, onImported }: Pro
                   Those invoices were saved but weren't converted to pesos yet, so they don't count toward
                   the client's debt total. Add a rate for them (Invoices tab → "Exchange rates") and reimport.
                 </p>
+              </div>
+            )}
+
+            {((result.contactsFromFile ?? 0) > 0 || (result.extensionsSet ?? 0) > 0 || (result.phonesReformatted ?? 0) > 0) && (
+              <p className="text-xs text-zinc-400">
+                Contacts set: {result.contactsFromFile ?? 0} · Extensions set: {result.extensionsSet ?? 0} · Phone
+                formats unified: {result.phonesReformatted ?? 0}
+              </p>
+            )}
+
+            {(result.phonesUpdated?.length ?? 0) > 0 && (
+              <div>
+                <p className="text-sm text-emerald-400 mb-1">Phone numbers updated ({result.phonesUpdated!.length}):</p>
+                <ul className="text-xs text-zinc-400 space-y-0.5">
+                  {result.phonesUpdated!.map((p, i) => (
+                    <li key={i}>
+                      {p.name ?? `Customer ${p.customerId}`}: {p.previous} → {p.current}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {(result.phoneConflicts?.length ?? 0) > 0 && (
+              <div>
+                <p className="text-sm text-yellow-400 mb-1">Phone not changed — belongs to another client ({result.phoneConflicts!.length}):</p>
+                <ul className="text-xs text-zinc-500 space-y-0.5">
+                  {result.phoneConflicts!.map((p, i) => (
+                    <li key={i}>
+                      {p.name ?? `Customer ${p.customerId}`}: {p.phone}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {(result.phoneIssues?.length ?? 0) > 0 && (
+              <div>
+                <p className="text-sm text-yellow-400 mb-1">Phones in the file that couldn't be read ({result.phoneIssues!.length}):</p>
+                <ul className="text-xs text-zinc-500 space-y-0.5">
+                  {result.phoneIssues!.map((p, i) => (
+                    <li key={i}>
+                      {p.name ?? `Customer ${p.customerId}`} — {JSON.stringify(p.raw)}: {p.reason}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
 

@@ -18,6 +18,7 @@ import AutomationSettings from '../models/AutomationSettings'
 import { placeOutboundCall } from '../controllers/voice.controller'
 import { prepareWhatsappMessage } from './whatsappService'
 import { AUTO_CYCLE_STEPS } from '../config/autoCall'
+import { activeServiceOutage } from './serviceHealth'
 
 const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 12
 // Pausa entre un disparo y el siguiente dentro del mismo lote (default 120 s: 12 llamadas
@@ -105,6 +106,13 @@ async function runAutoCallCycle(): Promise<void> {
   const publicUrl = (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
   if (!publicUrl) {
     console.error('[AutoCall] PUBLIC_URL no está configurado — no se pueden disparar llamadas automáticas.')
+    return
+  }
+
+  // Un proveedor sin saldo/créditos hace que cada llamada se pierda (ver serviceHealth.ts)
+  const outage = activeServiceOutage()
+  if (outage) {
+    console.error(`[AutoCall] Ciclo en pausa: ${outage.name} está caído (${outage.reason}). No se lanzan llamadas.`)
     return
   }
 
@@ -280,7 +288,39 @@ async function dispatchScheduledCallbacks(): Promise<void> {
   }
 }
 
+// Nueva semana, ciclo en cero: el lunes 00:00 (CDMX) los contadores de los clientes cuyo ciclo viene de
+// una semana anterior vuelven a 0 (intento, fecha de inicio, siguiente intento y "ciclo agotado").
+// Antes el contador solo se reiniciaba cuando el scheduler volvía a llamar a ese cliente, así que
+// con las llamadas automáticas apagadas — o mientras le tocaba el turno — la tabla seguía mostrando
+// el "1/1" de hace dos semanas. También corre al arrancar el servidor, por si estuvo apagado el lunes
+// (es idempotente: solo toca ciclos anteriores a esta semana).
+async function resetWeeklyCycle(): Promise<void> {
+  if (TEST_MODE) return
+  const weekStart = startOfWeekMexico(new Date())
+  const result = await Client.updateMany(
+    {
+      $or: [
+        { autoCallCycleStartAt: { $ne: null, $lt: weekStart } },
+        { autoCallAttempt: { $gt: 0 }, autoCallCycleStartAt: null },
+      ],
+    },
+    { $set: { autoCallAttempt: 0, autoCallCycleStartAt: null, autoCallNextAttemptAt: null, autoCycleExhausted: false } }
+  )
+  if (result.modifiedCount > 0) {
+    console.log(`[AutoCall] Semana nueva: ciclo reiniciado a 0 para ${result.modifiedCount} cliente(s).`)
+  }
+}
+
 export function startAutoCallScheduler(): void {
+  cron.schedule(
+    '0 0 * * 1',
+    () => {
+      resetWeeklyCycle().catch((err) => console.error('[AutoCall] Error reiniciando el ciclo semanal:', err))
+    },
+    { timezone: 'America/Mexico_City' }
+  )
+  resetWeeklyCycle().catch((err) => console.error('[AutoCall] Error reiniciando el ciclo semanal:', err))
+
   cron.schedule(
     '* * * * *',
     () => {

@@ -50,3 +50,19 @@ export const DTMF_MAX_PRESSES = readPositiveInt('VOICE_DTMF_MAX_PRESSES', 6)
 // (ver handleAutomatedMenu en voiceStreamCartesia.controller.ts). VOICE_PREDIAL_EXTENSION=true
 // lo reactiva.
 export const PREDIAL_EXTENSION = process.env.VOICE_PREDIAL_EXTENSION === 'true'
+
+// Saludo diferido: el agente NO habla al contestar la llamada; primero escucha. Si lo primero que
+// se oye es una grabación (menú, buzón) no se gasta voz de ElevenLabs en saludarla; si es una
+// persona, se saluda en cuanto termina su primera frase. En la semana del 6 al 8 de octubre el
+// saludo dicho a grabaciones fue ~26 % de todos los caracteres de voz. VOICE_DEFER_GREETING=false
+// vuelve a saludar de inmediato.
+export const DEFER_GREETING = process.env.VOICE_DEFER_GREETING !== 'false'
+// Si nadie dice nada en este tiempo desde que contesta, se saluda de todos modos (ms)
+export const GREETING_SILENCE_MS = readPositiveInt('VOICE_GREETING_WAIT_MS', 2500)
+// Si se oye ruido o una voz pero no termina de llegar una frase, tope antes de saludar (ms)
+export const GREETING_MAX_WAIT_MS = readPositiveInt('VOICE_GREETING_MAX_WAIT_MS', 6000)
+// Un menú se oye completo antes de elegir tecla: se decide cuando la grabación lleva este tiempo
+// callada (ms). Una operadora o un "espere en línea" se actúan al instante, sin esperar.
+export const MENU_QUIET_MS = readPositiveInt('VOICE_MENU_QUIET_MS', 1800)
+// Si la misma grabación se repite tantas veces sin que llegue una persona, se cuelga (bucle de menú)
+export const MENU_LOOP_MAX = readPositiveInt('VOICE_MENU_LOOP_MAX', 4)

@@ -28,9 +28,10 @@ import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { warmUpClaude, generateLiveVoiceTurn, LiveTurn, LiveToolCall, ToolOutcome } from '../services/claudeVoiceLive.service'
 import { ClientInfo, buildVoicemailMessage, loadManualFlowOverride } from '../services/voiceConversation.service'
-import { HOLD_MAX_SECONDS, SILENCE_HANGUP_SECONDS, DTMF_ENABLED, DTMF_MAX_PRESSES, PREDIAL_EXTENSION } from '../config/autoCall'
+import { HOLD_MAX_SECONDS, SILENCE_HANGUP_SECONDS, DTMF_ENABLED, DTMF_MAX_PRESSES, PREDIAL_EXTENSION, DEFER_GREETING, GREETING_SILENCE_MS, GREETING_MAX_WAIT_MS, MENU_QUIET_MS, MENU_LOOP_MAX } from '../config/autoCall'
 import { dtmfFrames, sanitizeDigits } from '../utils/dtmf'
-import { decideMenuAction, isAutomatedPrompt, SwitchboardHint } from '../utils/ivrMenu'
+import { decideMenuAction, isAutomatedPrompt, isShortHumanGreeting, MenuDecision, SwitchboardHint } from '../utils/ivrMenu'
+import { markServiceDown } from '../services/serviceHealth'
 import { placeOutboundCall } from './voice.controller'
 
 const { VoiceResponse } = twilio.twiml
@@ -194,6 +195,18 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   let menuSample = ''
   let menuWaitLogged = false
   let personAfterMenu = false
+  let voicemailSeen = false
+  let menuHistoryEntries = 0
+  // Saludo diferido (ver DEFER_GREETING): el agente espera a oír qué contesta antes de hablar
+  let greetingSent = false
+  let greetTimer: NodeJS.Timeout | null = null
+  let greetExtended = false
+  let awaitingFirstAnswer = false
+  // Menú que todavía está hablando: se junta lo que va diciendo y se decide al terminar
+  let menuBuffer = ''
+  let menuTimer: NodeJS.Timeout | null = null
+  const menuFragmentCounts = new Map<string, number>()
+  let menuFragments = 0
   let contactReached = false
   const menuPressed: string[] = []
   let deepgramReconnects = 0
@@ -210,6 +223,8 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     saveSwitchboardMemory()
     if (holdTimer) clearTimeout(holdTimer)
     if (voicemailTimer) clearTimeout(voicemailTimer)
+    if (greetTimer) clearTimeout(greetTimer)
+    if (menuTimer) clearTimeout(menuTimer)
     if (silenceWatchdog) clearInterval(silenceWatchdog)
     deepgram.close()
     tts.close()
@@ -279,13 +294,22 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     }
   })
 
-  tts.on('error', (err) => console.error('[VoiceCartesia] Error de ElevenLabs TTS:', err))
+  tts.on('error', (err) => {
+    console.error('[VoiceCartesia] Error de ElevenLabs TTS:', err)
+    // Sin créditos el agente no puede hablar: seguir en línea solo gasta Twilio y el intento del
+    // cliente. Se cuelga y se pausan las llamadas automáticas (ver serviceHealth.ts).
+    if ((err as Error & { quotaExceeded?: boolean }).quotaExceeded) {
+      markServiceDown('ElevenLabs', 'sin créditos (quota_exceeded)')
+      closeAll()
+    }
+  })
 
   // Solo para medir "cuánto tardó el cliente en empezar a contestar" (latencyMs) — a
   // diferencia del barge-in de abajo, aquí SÍ sirve el evento crudo de VAD de Deepgram
   // (no hace falta esperar 2+ palabras para saber que alguien empezó a hablar).
   deepgram.on('speechStarted', () => {
     currentUserSpeechStartAt = Date.now()
+    extendGreetingWait()
   })
 
   // Guarda el turno del cliente con su timing (elapsedMs/latencyMs, ver CallTimeline.tsx)
@@ -309,7 +333,10 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   // la voz del agente a media frase — visto en la prueba real, la llamada se quedaba muda.
   // Nunca se interrumpe una despedida (shouldHangup).
   deepgram.on('interim', (text) => {
-    if (text.trim()) lastCustomerSpeechAt = Date.now()
+    if (text.trim()) {
+      lastCustomerSpeechAt = Date.now()
+      extendGreetingWait()
+    }
     if (voicemailMode) {
       if (text.trim()) scheduleVoicemailMessage()
       return
@@ -338,7 +365,13 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     const finishedUtterance = utteranceBuffer
     utteranceBuffer = ''
     // Buzón de voz / contestadora: no se conversa con él (ni se paga Claude por ello).
-    if (history.length <= 3 && VOICEMAIL_PATTERN.test(finishedUtterance)) {
+    // El buzón solo se reconoce al inicio de la llamada (history.length <= 3): las acciones sobre un
+    // menú (el texto del menú + "presioné la tecla…") se descuentan, porque inflaban el conteo y un
+    // buzón que contestaba DESPUÉS de un menú ya no se detectaba (visto en producción).
+    if (history.length - menuHistoryEntries <= 3 && VOICEMAIL_PATTERN.test(finishedUtterance)) {
+      // Es un buzón: no se saluda (ahorra voz). El recado se deja después del tono.
+      greetingSent = true
+      clearGreetTimer()
       pushUserTranscript(finishedUtterance)
       // Señal directa (igual que voiceStream.controller.ts): handleStatus la usa para
       // clasificar 'Voice mail' y reintentar en el ciclo automático, en vez de contarlo
@@ -365,7 +398,26 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     if (handleAutomatedMenu(finishedUtterance)) return
     // Lo que NO es menú y llega después de uno es una persona (recepción o el contacto)
     if (menuSeen) personAfterMenu = true
-    if (tryFastIdentityConfirmation(finishedUtterance)) return
+
+    // Saludo diferido: esta es la primera voz real (no menú ni buzón). Se registra lo que dijo y
+    // recién ahora se saluda. Si ya se pasó por un menú, contestó una persona (recepción): no se
+    // manda el saludo fijo, sigue Claude con el protocolo de recepción.
+    if (!greetingSent) {
+      if (menuSeen || !clientInfo) {
+        greetingSent = true
+        clearGreetTimer()
+      } else {
+        clearGreetTimer()
+        pushUserTranscript(finishedUtterance)
+        history.push({ role: 'user', content: finishedUtterance })
+        sendGreeting()
+        return
+      }
+    }
+
+    const fastHandled = tryFastIdentityConfirmation(finishedUtterance)
+    awaitingFirstAnswer = false
+    if (fastHandled) return
 
     // El agente sigue hablando (audio en curso) y esto no bastó para disparar el barge-in
     // de arriba (menos de 2 palabras en el interim, ej. "bueno"/"aló"/muletillas) — no fue
@@ -427,7 +479,9 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
 
   function tryFastIdentityConfirmation(text: string): boolean {
     if (processingTurn || !callDocId || !clientInfo || clientInfo.rfc) return false
-    if (history.length !== 1 || history[0].role !== 'assistant') return false
+    // Solo la primera respuesta tras el saludo (con el saludo diferido el historial ya no empieza
+    // por el agente, por eso se usa una marca en vez de contar mensajes)
+    if (!awaitingFirstAnswer) return false
     if (!isClearYes(text)) return false
 
     turnStartedAt = Date.now()
@@ -541,14 +595,28 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
   // falla. Presiona la tecla de operadora/pagos o espera en silencio. Devuelve true si el texto
   // era de un menú (ya manejado). Hablarle a la grabación solo la hace repetir "no lo entiendo".
   function handleAutomatedMenu(text: string): boolean {
-    const decision = decideMenuAction(text, switchboardHint, clientInfo?.contact)
-    if (!decision) return false
+    // ¿Sigue hablando un menú que ya se estaba escuchando? Entonces esto es otro pedazo del mismo
+    // (aunque no tenga pistas propias, ej. "3, RMS Financial."), salvo que sea el saludo corto de
+    // una persona. Se decide con TODO lo que dijo, no pedazo por pedazo: antes se presionaba una
+    // tecla al oír la primera mitad del menú, sin haber oído la opción correcta.
+    const continuing = menuTimer !== null && !isShortHumanGreeting(text) && !text.includes('?')
+    const candidate = continuing ? `${menuBuffer} ${text}` : text
+    const decision = decideMenuAction(candidate, switchboardHint, clientInfo?.contact)
+    if (!decision) {
+      // Habló una persona mientras se esperaba el final de un menú: ya no hay que presionar nada
+      if (menuTimer) clearTimeout(menuTimer)
+      menuTimer = null
+      menuBuffer = ''
+      return false
+    }
 
-    console.log(`[VoiceCartesia] Menú automático detectado → ${decision.action === 'press' ? `presionar ${decision.digit}` : 'esperar'} (${decision.reason})`)
     menuSeen = true
+    greetingSent = true // a una grabación no se le saluda
+    clearGreetTimer()
     if (!menuSample) menuSample = text.slice(0, 400)
     pushUserTranscript(text)
     history.push({ role: 'user', content: text })
+    menuHistoryEntries += 1 // este texto (la acción se cuenta al aplicarla; ver detección de buzón)
     queuedUserText = ''
     // Si el saludo seguía sonando encima del menú, se corta
     if (agentSpeaking && currentContextId) {
@@ -557,6 +625,42 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
       agentSpeaking = false
     }
 
+    // Bucle: la misma grabación una y otra vez sin que llegue una persona (visto: un menú de
+    // horarios repetido 10 veces durante 2 minutos). Se cuelga en vez de seguir pagando la línea.
+    menuFragments++
+    const key = text.toLowerCase().replace(/[^a-záéíóúñ ]/g, '').trim().slice(0, 50)
+    const seen = (menuFragmentCounts.get(key) ?? 0) + 1
+    menuFragmentCounts.set(key, seen)
+    if (key && (seen >= MENU_LOOP_MAX || menuFragments >= MENU_LOOP_MAX * 8)) {
+      console.log(`[VoiceCartesia] Menú en bucle (${seen} repeticiones, ${menuFragments} fragmentos), colgando`)
+      shouldHangup = true
+      closeAll()
+      return true
+    }
+
+    menuBuffer = candidate
+    if (menuTimer) clearTimeout(menuTimer)
+    menuTimer = null
+    if (decision.immediate) {
+      // Operadora, memoria, nombre del contacto o "espere en línea": no cambia por lo que siga
+      menuBuffer = ''
+      applyMenuDecision(decision)
+    } else {
+      // Falta oír si el menú ofrece algo mejor: se espera a que la grabación termine de hablar
+      menuTimer = setTimeout(() => {
+        menuTimer = null
+        const complete = decideMenuAction(menuBuffer, switchboardHint, clientInfo?.contact)
+        menuBuffer = ''
+        if (complete && !closed) applyMenuDecision(complete)
+      }, MENU_QUIET_MS)
+    }
+    return true
+  }
+
+  // Ejecuta la decisión sobre el menú (presionar tecla o esperar en silencio)
+  function applyMenuDecision(decision: MenuDecision): void {
+    console.log(`[VoiceCartesia] Menú automático detectado → ${decision.action === 'press' ? `presionar ${decision.digit}` : 'esperar'} (${decision.reason})`)
+    menuHistoryEntries += 1 // la acción que se agrega a continuación
     if (decision.action === 'press') {
       menuPressed.push(decision.digit)
       history.push({ role: 'assistant', content: `[Acción: presioné la tecla ${decision.digit} y espero en silencio]` })
@@ -574,7 +678,42 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
         enterHold()
       }
     }
-    return true
+  }
+
+  // --- Saludo diferido (ver DEFER_GREETING) ---
+  function clearGreetTimer(): void {
+    if (greetTimer) clearTimeout(greetTimer)
+    greetTimer = null
+  }
+
+  // Dice el saludo fijo (texto de buildGreeting). Se llama cuando ya se oyó a una persona, o cuando
+  // pasó el tiempo de espera sin que nadie dijera nada.
+  function sendGreeting(): void {
+    if (greetingSent || closed || voicemailMode || menuSeen || !clientInfo) return
+    greetingSent = true
+    awaitingFirstAnswer = true
+    clearGreetTimer()
+    speakFixed(buildGreeting(clientInfo.name, clientInfo.contact))
+  }
+
+  // Espera a oír qué contesta: si nadie habla en GREETING_SILENCE_MS se saluda igual
+  function startGreetingWatch(): void {
+    clearGreetTimer()
+    // Número que la última vez fue un menú automático (memoria del conmutador): se espera a que
+    // hable la grabación con más paciencia antes de saludar por silencio, para no saludar encima
+    // del menú mientras arranca. Si en cambio contesta una persona, su primera frase dispara el saludo.
+    const knownIvr = switchboardHint?.kind === 'ivr' && Boolean(switchboardHint.outcome) && switchboardHint.outcome !== 'none'
+    greetExtended = knownIvr // ya espera el tiempo largo: no hace falta alargarlo otra vez
+    greetTimer = setTimeout(sendGreeting, knownIvr ? GREETING_MAX_WAIT_MS : GREETING_SILENCE_MS)
+  }
+
+  // Se detectó voz (o ruido) pero todavía no hay una frase completa: se alarga la espera una sola vez
+  // para dejar que termine, con un tope, en vez de saludar encima de lo que están diciendo.
+  function extendGreetingWait(): void {
+    if (greetingSent || !greetTimer || greetExtended) return
+    greetExtended = true
+    clearGreetTimer()
+    greetTimer = setTimeout(sendGreeting, GREETING_MAX_WAIT_MS)
   }
 
   // Al colgar: guarda en el cliente qué conmutador tiene y qué camino funcionó, para la siguiente
@@ -582,7 +721,9 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
   // solo suma un fallo, porque el conmutador puede haber estado fuera de horario.
   function saveSwitchboardMemory(): void {
     if (!memoryClientId || !menuSeen) return
-    const outcome = contactReached ? 'contact' : personAfterMenu ? 'person' : 'none'
+    // Un buzón de voz no es una persona: antes "esperar → buzón" se guardaba como "person" (visto
+    // en producción) y la siguiente llamada repetía un camino que nunca llegó a nadie.
+    const outcome = contactReached ? 'contact' : personAfterMenu && !voicemailSeen ? 'person' : 'none'
     const path = menuPressed.length ? `press:${menuPressed[0]}` : 'wait'
     const prev = switchboardHint
     const update =
@@ -605,6 +746,7 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
   }
 
   function markVoicemail(): void {
+    voicemailSeen = true
     if (!callDocId) return
     Call.findByIdAndUpdate(callDocId, { detectedVoicemail: true }).catch((err) =>
       console.error('[VoiceCartesia] Error marcando detectedVoicemail:', err)
@@ -765,6 +907,12 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
         err
       )
       if (ctx) tts.cancel(ctx)
+      // Sin saldo en Anthropic cada turno falla igual: colgar y pausar el ciclo, no quedarse en línea.
+      if (/credit balance is too low/i.test(String(apiErr.error?.error?.message ?? apiErr.message ?? ''))) {
+        markServiceDown('Anthropic', 'sin saldo (credit balance is too low)')
+        closeAll()
+        return
+      }
       consecutiveFailures++
       // Antes un fallo de Claude/red dejaba la línea muda hasta que el cliente volviera a
       // hablar; ahora el agente pide repetir (máx. 2 fallos seguidos, para no ciclar). Si lo
@@ -1014,7 +1162,8 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
     // que todavía estaba sonando en la extensión. Se sale de la espera en cuanto el agente habla.
     if (PREDIAL_EXTENSION && client?.knownExtension) enterHold()
     const sb = client?.switchboard as { kind?: string | null; path?: string | null; outcome?: string | null } | undefined
-    if (sb?.kind && sb.path) switchboardHint = { path: sb.path, outcome: sb.outcome }
+    if (sb?.kind && sb.path) switchboardHint = { kind: sb.kind, path: sb.path, outcome: sb.outcome }
+    if (switchboardHint) console.log(`[VoiceCartesia] Conmutador conocido por memoria: ${switchboardHint.kind} · ${switchboardHint.path} → ${switchboardHint.outcome}`)
     // Si falla la consulta de facturas, la llamada sigue igual (el prompt cae a agingDays).
     const invoices = client ? await loadInvoiceSummary(client._id).catch(() => null) : null
     clientInfo = client
@@ -1039,7 +1188,8 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
     tts.connect().catch((err) => console.error('[VoiceCartesia] No se pudo conectar a ElevenLabs:', err))
     warmUpClaude(clientInfo, phone)
     const deepgramReady = deepgram.connect()
-    if (clientInfo) speakFixed(buildGreeting(clientInfo.name, clientInfo.contact))
+    // Sin saludo diferido (VOICE_DEFER_GREETING=false) se saluda de inmediato, como antes
+    if (clientInfo && !DEFER_GREETING) sendGreeting()
 
     try {
       await deepgramReady
@@ -1052,6 +1202,9 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
     if (closed) return
     ready = true
     for (const payload of pendingAudio.splice(0)) deepgram.appendAudio(payload)
+
+    // Saludo diferido: ya se está escuchando; se saluda cuando hable una persona o pase el tiempo
+    if (clientInfo && DEFER_GREETING) startGreetingWatch()
 
     // Sin cliente asociado no hay saludo fijo — se deja que Claude lo genere.
     if (!clientInfo) await runTurn()

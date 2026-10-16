@@ -11,13 +11,15 @@ interface Props {
   initialFilters: ReportFilterValue
   initialStatus: string
   initialSearch: string
+  // Filtros propios de la llamada de la tabla (disposition, promesa, tipo, fechas): el reporte los respeta
+  extraFilters?: { disposition: string; promise: string; type: string; from: string; to: string }
 }
 
 // Se abre al hacer clic en "Export to Excel" en Calls — pide los 5 filtros de "Reporte
 // Filters" (Country/Collector ID/Team/Team Leader/Collector) ahí mismo, en vez de
 // depender de lo que ya esté filtrado en la tabla (aunque arranca con esos valores como
 // punto de partida, para no obligar a re-elegir algo que la persona ya había filtrado).
-export default function ExportCallsModal({ isOpen, onClose, initialFilters, initialStatus, initialSearch }: Props) {
+export default function ExportCallsModal({ isOpen, onClose, initialFilters, initialStatus, initialSearch, extraFilters }: Props) {
   const [filters, setFilters] = useState<ReportFilterValue>(initialFilters)
   const [status, setStatus] = useState(initialStatus)
   const [search, setSearch] = useState(initialSearch)
@@ -37,7 +39,7 @@ export default function ExportCallsModal({ isOpen, onClose, initialFilters, init
   async function handleExport() {
     setExporting(true)
     try {
-      await exportCallsExcel({ status, search, ...filters })
+      await exportCallsExcel({ status, search, ...filters, ...(extraFilters ?? {}) })
       onClose()
     } catch {
       alert("Error exporting Excel file")

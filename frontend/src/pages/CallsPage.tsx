@@ -6,6 +6,33 @@ import { CALL_STATUS_COLOR, CALL_STATUS_LABEL, formatDuration } from "../compone
 import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
 
 const STATUS_FILTERS = ["all", "in_progress", "completed", "requires_human", "failed"] as const
+const PAGE_SIZE = 100
+
+// Mismo catálogo que backend/src/config/disposition.ts
+const DISPOSITIONS = [
+  "No answer",
+  "Voice mail",
+  "Customer hung up",
+  "Contact made - No resolution",
+  "Follow up",
+  "Payment scheduled",
+  "Invoices received",
+  "Extension required",
+  "Invoice, statement or contract required",
+  "Payment received",
+  "Wrong number",
+  "Email contact only",
+  "Need invoice",
+  "Phone number updated",
+  "Prefers CAS support",
+  "Payment refused",
+  "Payment in process",
+]
+
+type CallExtraFilters = { disposition: string; promise: string; type: string; from: string; to: string }
+const EMPTY_EXTRA: CallExtraFilters = { disposition: "", promise: "", type: "", from: "", to: "" }
+
+const FILTER_CLASS = "rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white"
 
 export default function CallsPage() {
   const [calls, setCalls] = useState<any[]>([])
@@ -15,13 +42,25 @@ export default function CallsPage() {
   const [reportFilters, setReportFilters] = useState<ReportFilterValue>(EMPTY_REPORT_FILTERS)
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [counts, setCounts] = useState<CallCounts | null>(null)
+  const [extra, setExtra] = useState<CallExtraFilters>(EMPTY_EXTRA)
+  const [page, setPage] = useState(1)
 
-  // Filtros que entienden el backend (estado, 5 filtros de reporte y buscador): la tabla
-  // y los contadores se piden con ellos, así que los números cuadran con lo que se ve.
+  // Filtros que entienden el backend (estado, 5 filtros de reporte, buscador y los de la
+  // llamada: disposition, promesa, tipo y fechas): la tabla y los contadores se piden con
+  // ellos, así que los números cuadran con lo que se ve.
   const serverFilters = useMemo(
-    () => ({ ...reportFilters, status: statusFilter, search: search.trim() }),
-    [reportFilters, statusFilter, search]
+    () => ({ ...reportFilters, ...extra, status: statusFilter, search: search.trim(), page }),
+    [reportFilters, extra, statusFilter, search, page]
   )
+
+  // Cualquier cambio de filtro vuelve a la primera página
+  function changeExtra(field: keyof CallExtraFilters, value: string) {
+    setExtra((prev) => ({ ...prev, [field]: value }))
+    setPage(1)
+  }
+  const hasExtraFilters = Object.values(extra).some(Boolean)
+  const totalForStatus = counts ? counts[statusFilter] : 0
+  const totalPages = Math.max(1, Math.ceil(totalForStatus / PAGE_SIZE))
 
   // Con debounce al teclear en el buscador; y cada 15 s para ver llamadas nuevas en vivo
   useEffect(() => {
@@ -77,7 +116,10 @@ export default function CallsPage() {
       <div className="flex flex-wrap items-center gap-3">
         <input
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value)
+            setPage(1)
+          }}
           placeholder="Search by client or phone..."
           className="rounded-xl bg-zinc-900 border border-zinc-700 px-4 py-2.5 text-sm text-white placeholder:text-zinc-500 min-w-64"
         />
@@ -85,7 +127,10 @@ export default function CallsPage() {
           {STATUS_FILTERS.map((s) => (
             <button
               key={s}
-              onClick={() => setStatusFilter(s)}
+              onClick={() => {
+                setStatusFilter(s)
+                setPage(1)
+              }}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                 statusFilter === s
                   ? "bg-blue-600 text-white"
@@ -101,7 +146,52 @@ export default function CallsPage() {
         </div>
       </div>
 
-      <ReportFilters value={reportFilters} onChange={setReportFilters} />
+      <ReportFilters
+        value={reportFilters}
+        onChange={(v) => {
+          setReportFilters(v)
+          setPage(1)
+        }}
+      />
+
+      {/* Filtros propios de la llamada */}
+      <div className="flex flex-wrap items-center gap-3">
+        <select className={`${FILTER_CLASS} min-w-56`} value={extra.disposition} onChange={(e) => changeExtra("disposition", e.target.value)}>
+          <option value="">All dispositions</option>
+          {DISPOSITIONS.map((d) => (
+            <option key={d} value={d}>{d}</option>
+          ))}
+        </select>
+        <select className={`${FILTER_CLASS} min-w-44`} value={extra.promise} onChange={(e) => changeExtra("promise", e.target.value)}>
+          <option value="">All (promise or not)</option>
+          <option value="yes">With payment promise</option>
+          <option value="no">Without payment promise</option>
+        </select>
+        <select className={`${FILTER_CLASS} min-w-36`} value={extra.type} onChange={(e) => changeExtra("type", e.target.value)}>
+          <option value="">Automatic + manual</option>
+          <option value="auto">Automatic</option>
+          <option value="manual">Manual</option>
+        </select>
+        <label className="flex items-center gap-2 text-xs text-zinc-500">
+          From
+          <input type="date" className={FILTER_CLASS} value={extra.from} onChange={(e) => changeExtra("from", e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2 text-xs text-zinc-500">
+          To
+          <input type="date" className={FILTER_CLASS} value={extra.to} onChange={(e) => changeExtra("to", e.target.value)} />
+        </label>
+        {hasExtraFilters && (
+          <button
+            onClick={() => {
+              setExtra(EMPTY_EXTRA)
+              setPage(1)
+            }}
+            className="text-xs text-zinc-400 hover:text-white underline"
+          >
+            Clear call filters
+          </button>
+        )}
+      </div>
 
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
         <div className="overflow-x-auto">
@@ -187,6 +277,32 @@ export default function CallsPage() {
         </div>
       </div>
 
+      {/* Paginación: la tabla carga 100 llamadas a la vez */}
+      <div className="flex items-center justify-between text-sm text-zinc-400">
+        <span>
+          {totalForStatus === 0
+            ? "0 calls"
+            : `${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, totalForStatus)} of ${totalForStatus.toLocaleString("en-US")} calls`}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="rounded-lg border border-[var(--border)] px-3 py-1 disabled:opacity-40"
+          >
+            Previous
+          </button>
+          <span>Page {page} of {totalPages}</span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            className="rounded-lg border border-[var(--border)] px-3 py-1 disabled:opacity-40"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+
       <CallDetailModal call={selectedCall} onClose={() => setSelectedCallId(null)} />
 
       <ExportCallsModal
@@ -195,6 +311,7 @@ export default function CallsPage() {
         initialFilters={reportFilters}
         initialStatus={statusFilter}
         initialSearch={search}
+        extraFilters={extra}
       />
     </div>
   )

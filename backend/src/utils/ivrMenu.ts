@@ -13,12 +13,17 @@ export interface MenuOption {
   label: string
 }
 
+// immediate = se puede actuar con lo que ya se oyó. Las decisiones que dependen de ver TODAS las
+// opciones del menú (área de pagos, "probar el 0") llevan immediate:false: el controlador espera a
+// que la grabación termine de hablar y decide con el menú completo. Una operadora, la memoria o
+// el nombre del contacto no cambian por lo que venga después, así que esas se actúan al instante.
 export type MenuDecision =
-  | { action: 'press'; digit: string; reason: string }
-  | { action: 'wait'; reason: string }
+  | { action: 'press'; digit: string; reason: string; immediate: boolean }
+  | { action: 'wait'; reason: string; immediate: true }
 
 // Lo que funcionó la última vez con este número (ver Client.switchboard)
 export interface SwitchboardHint {
+  kind?: string | null
   path?: string | null
   outcome?: string | null
 }
@@ -43,9 +48,18 @@ const IVR_CUES: RegExp[] = [
   /permanezca en (la )?linea/,
   /(su llamada|esta llamada) (puede ser|sera|esta siendo|podria ser) (grabada|monitoreada)/,
   /para efectos de calidad/,
-  /vuelva a intentarlo|no lo entiendo|opcion (no )?valida|marcacion invalida/,
+  /vuelva a intentarlo|no lo entiendo|opcion (no )?valida|marcacion invalida|informacion no fue recibida|excedido el numero de intentos/,
   /for english|press (one|two|\d)/,
   /\b(?:marque|digite|oprima|presione|pulse|teclee)\b[^.?]*(?:\d|asterisco|numeral|extension|operadora)/,
+  // Texto institucional de una grabación (no lo dice una recepcionista al contestar)
+  /aviso de privacidad/,
+  /triple doble u|\bwww\b|punto com\b|nuestra pagina|visita nuestra|visite nuestra/,
+  /siganos en|facebook|instagram/,
+  /su llamada es (muy )?importante/,
+  /horario de atencion/,
+  /agradecemos su llamada|gracias por su preferencia/,
+  /(enseguida|en un momento|en breve|a la brevedad) (lo|le|la|sera|seran) (atend|comunic|transfer)/,
+  /(esta|estas) llamando a|ha llamado a|ha marcado a/,
 ]
 
 // "Un momento", "le comunico"…: puede ser la grabación o una recepcionista. En ambos casos lo
@@ -107,7 +121,15 @@ export function parseMenuOptions(text: string): MenuOption[] {
 // ¿Habla una grabación/menú? (para no pasarlo a Claude como si fuera conversación)
 export function isAutomatedPrompt(text: string): boolean {
   const t = normalize(text)
-  return IVR_CUES.some((r) => r.test(t)) || isTransferCue(t)
+  return IVR_CUES.some((r) => r.test(t)) || isTransferCue(t) || isLongRecordedGreeting(t)
+}
+
+// "Gracias por llamar a X…" / "Bienvenido a X…" largo y sin preguntas: una grabación. Una recepcionista
+// dice lo mismo pero corto y casi siempre cierra con una pregunta ("¿en qué le puedo ayudar?").
+function isLongRecordedGreeting(normalized: string): boolean {
+  if (normalized.includes('?')) return false
+  const words = normalized.split(/\s+/).filter(Boolean).length
+  return words > 12 && /^(hola,? )?(gracias por (llamar|comunicarse|comunicarte)|bienvenid[oa]s?)/.test(normalized)
 }
 
 function isTransferCue(normalized: string): boolean {
@@ -116,6 +138,15 @@ function isTransferCue(normalized: string): boolean {
   // "Sí, un momento, soy yo": es el contacto contestando, no una espera
   if (/\b(soy|yo|si|claro|habla|digame|mande|bueno)\b/.test(normalized)) return false
   return TRANSFER_CUE.test(normalized)
+}
+
+// Saludo corto de una persona al contestar ("¿bueno?", "buenas tardes", "diga"). Sirve para no
+// confundirlo con la continuación de un menú que sigue hablando.
+export function isShortHumanGreeting(text: string): boolean {
+  const t = normalize(text).replace(/[¿?¡!.,]/g, ' ').trim()
+  const words = t.split(/\s+/).filter(Boolean)
+  if (words.length === 0 || words.length > 4) return false
+  return /^(bueno|alo|diga|digame|mande|hola|si|buen(os|as|a)|dias|tardes|noches)/.test(words[0])
 }
 
 // null = no parece un menú automático (sigue el camino normal con Claude).
@@ -127,37 +158,43 @@ export function decideMenuAction(text: string, hint?: SwitchboardHint | null, co
 
   // Sin opciones: mensaje de espera, error del menú o un pedazo de menú cortado — se espera en
   // silencio (el pedazo siguiente traerá las teclas).
-  if (options.length === 0) return { action: 'wait', reason: 'sin opciones: espera en línea' }
+  if (options.length === 0) return { action: 'wait', reason: 'sin opciones: espera en línea', immediate: true }
 
   // 1. Lo que funcionó la última vez, si esa tecla sigue en el menú
   const remembered = hint?.path?.startsWith('press:') ? hint.path.slice('press:'.length) : null
   if (remembered && hint?.outcome && hint.outcome !== 'none' && options.some((o) => o.digit === remembered)) {
-    return { action: 'press', digit: remembered, reason: `memoria: la vez anterior funcionó el ${remembered}` }
+    return { action: 'press', digit: remembered, reason: `memoria: la vez anterior funcionó el ${remembered}`, immediate: true }
+  }
+
+  // 1a. La vez anterior bastó con esperar en línea (sin presionar nada): se espera ya, sin oír el menú completo
+  if (hint?.path === 'wait' && hint.outcome && hint.outcome !== 'none') {
+    return { action: 'wait', reason: 'memoria: la vez anterior bastó con esperar en línea', immediate: true }
   }
 
   // 1b. El menú nombra al contacto: es esa tecla
   const named = options.find((o) => mentionsContact(o.label, contact))
-  if (named) return { action: 'press', digit: named.digit, reason: 'el menú nombra al contacto (' + named.label + ')' }
+  if (named) return { action: 'press', digit: named.digit, reason: 'el menú nombra al contacto (' + named.label + ')', immediate: true }
 
   // 2. Operadora o recepción
   const operator = options.find((o) => OPERATOR.test(o.label) && !AVOID.test(o.label)) ?? (options.find((o) => o.digit === '0') && /operadora|recepcion/.test(t) ? options.find((o) => o.digit === '0') : undefined)
-  if (operator) return { action: 'press', digit: operator.digit, reason: `operadora (${operator.label || 'tecla ' + operator.digit})` }
+  if (operator) return { action: 'press', digit: operator.digit, reason: `operadora (${operator.label || 'tecla ' + operator.digit})`, immediate: true }
 
-  // 3. "Espere en la línea": suele caer en una persona y evita elegir un departamento a ciegas
+  // 3. "Espere en la línea": suele caer en una persona y evita elegir un departamento a ciegas.
+  // Se dice al final del menú, así que ya se oyeron todas las opciones.
   if (/espere en (la )?linea|permanezca en (la )?linea/.test(t)) {
-    return { action: 'wait', reason: 'el menú ofrece esperar en línea' }
+    return { action: 'wait', reason: 'el menú ofrece esperar en línea', immediate: true }
   }
 
   // 4. Opción que conecta con una persona de la empresa (abogado, ejecutivo…), nunca informativa ni de trámites nuevos
   const human = options.find((o) => HUMAN_CONTACT.test(o.label) && !AVOID.test(o.label) && !PERSON.test(o.label))
-  if (human) return { action: 'press', digit: human.digit, reason: 'persona de la empresa (' + human.label + ')' }
+  if (human) return { action: 'press', digit: human.digit, reason: 'persona de la empresa (' + human.label + ')', immediate: false }
 
   // 5. Departamento de pagos. Nunca "crédito y cobranza", ventas, compras, logística…: en una
   // empresa a la que se le cobra, esas áreas no son quien paga.
   const payables = options.find((o) => PAYABLES.test(o.label) && !/cobranza/.test(o.label))
-  if (payables) return { action: 'press', digit: payables.digit, reason: `área de pagos (${payables.label})` }
+  if (payables) return { action: 'press', digit: payables.digit, reason: `área de pagos (${payables.label})`, immediate: false }
 
   // 6. Nada reconocible: el "0" casi siempre manda a recepción (se presiona una sola vez, ver
   // el límite de repeticiones en marcar_digito)
-  return { action: 'press', digit: '0', reason: 'sin operadora ni espera: se prueba el 0' }
+  return { action: 'press', digit: '0', reason: 'sin operadora ni espera: se prueba el 0', immediate: false }
 }
