@@ -73,7 +73,13 @@ const registry: Record<string, ActionFn> = {
       detectedByAI: true,
       notes: `Compromiso registrado vía flujo de voz. CallSid: ${call.callSid}`,
     })
-    await Client.findByIdAndUpdate(call.clientId, { status: 'promised' })
+    // También en el cliente: son las columnas "Payment Promise" y "Date Promise" de la tabla y de los
+    // Excel, que antes solo se llenaban al importar y salían vacías aunque el agente registrara la promesa.
+    await Client.findByIdAndUpdate(call.clientId, {
+      status: 'promised',
+      paymentPromiseAmount: ctx.amount ?? 0,
+      datePromise: ctx.payment_date ? new Date(ctx.payment_date) : new Date(),
+    })
   },
 
   'crm.schedule_reminder': async (ctx, call) => {

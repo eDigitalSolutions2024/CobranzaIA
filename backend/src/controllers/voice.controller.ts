@@ -768,7 +768,7 @@ export async function processCallStatusUpdate(
     // cortaba aquí el resumen, la conclusión y la política de grabación, y devolvía 500.
     const analysis = await analyzeCallTranscript(call.transcript, clientInfo).catch((err) => {
       console.error(`[Voice] No se pudo analizar la llamada ${callSid} (se guarda sin resumen):`, err?.message ?? err)
-      return { summary: 'Summary unavailable (AI analysis failed)', usage: { inputTokens: 0, outputTokens: 0 }, paymentRefusal: false, refusalReason: '' }
+      return { hasAgreement: false, promises: [], summary: 'Summary unavailable (AI analysis failed)', usage: { inputTokens: 0, outputTokens: 0 }, paymentRefusal: false, refusalReason: '' }
     })
     call.summary = analysis.summary
     // Suma (no sobrescribe): en llamadas por ElevenLabs Claude ya consumió tokens durante
@@ -799,6 +799,39 @@ export async function processCallStatusUpdate(
       await Call.findByIdAndUpdate(call._id, { $push: { calledFunctions: 'marcar_negativa_pago' } })
       await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'Payment refused')
       finalDisposition = 'Payment refused'
+    }
+
+    // Red de seguridad de la PROMESA: el cliente dio y confirmó una fecha de pago, pero la llamada se cortó
+    // antes de la segunda confirmación (el agente repite dos veces antes de registrar) o el agente nunca
+    // llamó a la función. Visto el 16-oct: Minth ("el 31 de octubre" → "Correcto") y otros quedaron como
+    // "Contact made - No resolution" sin promesa. Si el análisis encuentra una fecha futura confirmada y no
+    // hay ningún resultado de pago ya registrado, se registra aquí, marcada como rescatada post-llamada.
+    const validPromises = (analysis.promises ?? []).filter((p: { promiseDate?: string; amount?: number }) => {
+      const t = p?.promiseDate ? new Date(`${p.promiseDate}T12:00:00-06:00`).getTime() : NaN
+      return Number.isFinite(t) && t >= Date.now() - 24 * 3600_000 && t <= Date.now() + 120 * 24 * 3600_000
+    })
+    if (
+      analysis.hasAgreement &&
+      validPromises.length > 0 &&
+      !hasPaymentOutcome &&
+      !calledFunctions.includes('registrar_promesa_pago') &&
+      !calledFunctions.includes('marcar_pago_en_proceso') &&
+      finalDisposition !== 'Payment refused' &&
+      call.clientId
+    ) {
+      const first = validPromises[0] as { promiseDate: string; amount?: number }
+      const clientNow = await Client.findById(call.clientId).select('debt').lean()
+      const ctx = { amount: first.amount && first.amount > 0 ? first.amount : (clientNow?.debt as number) ?? 0, payment_date: first.promiseDate }
+      console.log(`[Voice] Promesa rescatada post-llamada CallSid ${callSid}: ${ctx.amount} para ${ctx.payment_date}`)
+      await runAction('crm', 'create_payment_commitment', ctx, call)
+      await runAction('crm', 'schedule_reminder', ctx, call)
+      await Call.findByIdAndUpdate(call._id, {
+        promiseDate: new Date(`${first.promiseDate}T12:00:00-06:00`),
+        amount: ctx.amount,
+        $push: { calledFunctions: 'registrar_promesa_pago' },
+      })
+      await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'Payment scheduled')
+      finalDisposition = 'Payment scheduled'
     }
 
     // Conclusión para la columna Conclusion Call: en una negativa, el motivo que quedó en

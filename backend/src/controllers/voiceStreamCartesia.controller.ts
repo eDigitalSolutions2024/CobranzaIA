@@ -30,7 +30,7 @@ import { warmUpClaude, generateLiveVoiceTurn, LiveTurn, LiveToolCall, ToolOutcom
 import { ClientInfo, buildVoicemailMessage, loadManualFlowOverride } from '../services/voiceConversation.service'
 import { HOLD_MAX_SECONDS, SILENCE_HANGUP_SECONDS, DTMF_ENABLED, DTMF_MAX_PRESSES, PREDIAL_EXTENSION, DEFER_GREETING, GREETING_SILENCE_MS, GREETING_MAX_WAIT_MS, MENU_QUIET_MS, MENU_LOOP_MAX } from '../config/autoCall'
 import { dtmfFrames, sanitizeDigits } from '../utils/dtmf'
-import { decideMenuAction, isAutomatedPrompt, isShortHumanGreeting, MenuDecision, SwitchboardHint } from '../utils/ivrMenu'
+import { answeredLikeReception, decideMenuAction, isAutomatedPrompt, isShortHumanGreeting, MenuDecision, SwitchboardHint } from '../utils/ivrMenu'
 import { markServiceDown } from '../services/serviceHealth'
 import { cleanContactName } from '../utils/importFields'
 import { placeOutboundCall } from './voice.controller'
@@ -116,7 +116,7 @@ export async function handleIncomingCartesia(req: Request, res: Response): Promi
 
 const VOICEMAIL_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono|(?:usuario|abonado|suscriptor|extensi[oó]n|n[uú]mero|l[ií]nea)\b[^.?]{0,40}no est[aá] disponible|no est[aá] disponible[^.?]{0,25}(?:deje|despu[eé]s del tono)|fuera del [aá]rea de servicio|el n[uú]mero que usted marc[oó]/i
 // Frases que dice una grabación y casi nunca una persona: sirven para reconocer el buzón en cualquier punto
-const VOICEMAIL_ONLY_RECORDINGS = /buz[oó]n de voz|grabe su mensaje|despu[eé]s del tono|al escuchar el tono|deje su mensaje despu[eé]s/i
+const VOICEMAIL_ONLY_RECORDINGS = /unity connection|ip office|sistema de mensajes|buz[oó]n de voz|grabe su mensaje|despu[eé]s del tono|al escuchar el tono|deje su mensaje despu[eé]s/i
 // Subconjunto de VOICEMAIL_PATTERN que sí es un buzón que graba (se deja recado); el resto
 // son avisos del operador que no graban nada.
 const VOICEMAIL_RECORDS_PATTERN = /buz[oó]n de voz|grabe su mensaje|deje su mensaje|despu[eé]s del tono/i
@@ -128,7 +128,9 @@ const VOICEMAIL_SILENCE_MS = 1500
 // dirige a esa persona y menciona la empresa aparte, igual que en buildVoiceSystemPrompt
 // (voiceConversation.service.ts) — mismo texto, para que el saludo fijo de este piloto no
 // se desalinee del guion que sigue Claude en el resto de la llamada.
-function buildGreeting(name: string, contact?: string | null): string {
+// reception = quien contestó dijo el nombre de la empresa ("Grupo Hércules, buen día"): se le PIDE comunicarse
+// con la persona en vez de preguntarle "¿hablo con X?", que no encaja con una recepcionista.
+function buildGreeting(name: string, contact?: string | null, reception = false): string {
   const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Mexico_City' }).format(new Date())) % 24
   const salutation = hour < 12 ? 'buenos días' : hour < 19 ? 'buenas tardes' : 'buenas noches'
   const who = contact?.trim() ? `${contact.trim()}, de ${name}` : name
@@ -136,6 +138,11 @@ function buildGreeting(name: string, contact?: string | null): string {
   // dicen en la frase siguiente, cuando ya confirmó (ver IDENTITY_NEXT_STEP y el guion en
   // voiceConversation.service.ts). El saludo largo de antes (~11 s) hacía que muchas recepcionistas colgaran.
   const cap = salutation.charAt(0).toUpperCase() + salutation.slice(1)
+  if (reception) {
+    return contact?.trim()
+      ? `${cap}, ¿me comunica con ${contact.trim()}, por favor?`
+      : `${cap}, ¿me comunica con la persona encargada de pagos de ${name}, por favor?`
+  }
   if (contact?.trim()) return `${cap}, ¿hablo con ${who}?`
   return `${cap}, le llamo de HP Financial Services. ¿Me comunica con la persona encargada de pagos de ${name}, por favor?`
 }
@@ -210,6 +217,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   let greetTimer: NodeJS.Timeout | null = null
   let greetExtended = false
   let awaitingFirstAnswer = false
+  let postMenuReplied = false
   // Menú que todavía está hablando: se junta lo que va diciendo y se decide al terminar
   let menuBuffer = ''
   let menuTimer: NodeJS.Timeout | null = null
@@ -228,6 +236,16 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
   function closeAll(): void {
     if (closed) return
     closed = true
+    // Si el cliente colgó mientras el agente hablaba, esa frase nunca se guardaba (se guarda al terminar de
+    // sonar) y en el reporte parecía que el agente no contestó. Se deja con una marca que empieza con "[" para
+    // que no cuente como turno de conversación (ver la clasificación de la llamada).
+    if (pendingAssistantText && callDocId) {
+      const cut = pendingAssistantText
+      pendingAssistantText = null
+      Call.findByIdAndUpdate(callDocId, {
+        $push: { transcript: { role: 'assistant', content: `[Sin terminar: ${cut}]`, timestamp: new Date(), elapsedMs: callStartAt !== null ? Math.max(0, Math.round(Date.now() - callStartAt)) : null } },
+      }).catch((err) => console.error('[VoiceCartesia] Error guardando la frase cortada:', err))
+    }
     saveSwitchboardMemory()
     if (holdTimer) clearTimeout(holdTimer)
     if (voicemailTimer) clearTimeout(voicemailTimer)
@@ -411,6 +429,22 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
     // Lo que NO es menú y llega después de uno es una persona (recepción o el contacto)
     if (menuSeen) personAfterMenu = true
 
+    // RESPUESTA RÁPIDA tras el menú: la primera voz que llega después de presionar una tecla casi siempre es la
+    // recepcionista contestando ("Grupo Ibarra, buen día"). Antes esa frase iba a Claude (~3-4 s hasta oír al
+    // agente) y en 23 de 51 llamadas con tecla no hay respuesta registrada: la persona colgaba antes, o el
+    // modelo se quedaba en silencio (el historial le enseñaba "[Acción: … espero en silencio]"). Se responde con
+    // el texto fijo de siempre (~1.5 s, sin modelo, sin posibilidad de callar); lo que siga lo lleva Claude.
+    if (menuSeen && !postMenuReplied && clientInfo && !voicemailMode && !shouldHangup) {
+      postMenuReplied = true
+      leaveHold()
+      clearGreetTimer()
+      pushUserTranscript(finishedUtterance)
+      history.push({ role: 'user', content: finishedUtterance })
+      console.log('[VoiceCartesia] Respuesta rápida tras el menú (texto fijo, sin pasar por Claude)')
+      sendGreeting(finishedUtterance, true)
+      return
+    }
+
     // Saludo diferido: esta es la primera voz real (no menú ni buzón). Se registra lo que dijo y
     // recién ahora se saluda. Si ya se pasó por un menú, contestó una persona (recepción): no se
     // manda el saludo fijo, sigue Claude con el protocolo de recepción.
@@ -422,7 +456,7 @@ export async function handleMediaStreamCartesia(twilioWs: WebSocket, _req: Incom
         clearGreetTimer()
         pushUserTranscript(finishedUtterance)
         history.push({ role: 'user', content: finishedUtterance })
-        sendGreeting()
+        sendGreeting(finishedUtterance)
         return
       }
     }
@@ -613,7 +647,7 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
     // tecla al oír la primera mitad del menú, sin haber oído la opción correcta.
     const continuing = menuTimer !== null && !isShortHumanGreeting(text) && !text.includes('?')
     const candidate = continuing ? `${menuBuffer} ${text}` : text
-    const decision = decideMenuAction(candidate, switchboardHint, clientInfo?.contact)
+    const decision = decideMenuAction(candidate, switchboardHint, clientInfo?.contact, pressedTwiceList())
     if (!decision) {
       // Habló una persona mientras se esperaba el final de un menú: ya no hay que presionar nada
       if (menuTimer) clearTimeout(menuTimer)
@@ -661,12 +695,19 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
       // Falta oír si el menú ofrece algo mejor: se espera a que la grabación termine de hablar
       menuTimer = setTimeout(() => {
         menuTimer = null
-        const complete = decideMenuAction(menuBuffer, switchboardHint, clientInfo?.contact)
+        const complete = decideMenuAction(menuBuffer, switchboardHint, clientInfo?.contact, pressedTwiceList())
         menuBuffer = ''
         if (complete && !closed) applyMenuDecision(complete)
       }, MENU_QUIET_MS)
     }
     return true
+  }
+
+  // Teclas que ya se presionaron 2 veces sin que el menú avanzara: no se vuelven a elegir
+  function pressedTwiceList(): string[] {
+    const c: Record<string, number> = {}
+    menuPressed.forEach((d) => (c[d] = (c[d] ?? 0) + 1))
+    return Object.keys(c).filter((d) => c[d] >= 2)
   }
 
   // Ejecuta la decisión sobre el menú (presionar tecla o esperar en silencio)
@@ -706,14 +747,18 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
 
   // Dice el saludo fijo (texto de buildGreeting). Se llama cuando ya se oyó a una persona, o cuando
   // pasó el tiempo de espera sin que nadie dijera nada.
-  function sendGreeting(): void {
-    if (greetingSent || closed || voicemailMode || menuSeen || !clientInfo) return
+  // firstUtterance = lo que dijo quien contestó: define el estilo (¿hablo con X? / ¿me comunica con X?).
+  // afterMenu = es la primera voz tras pasar por un menú (ver "respuesta rápida" en el manejador de texto).
+  function sendGreeting(firstUtterance?: string, afterMenu = false): void {
+    if (closed || voicemailMode || !clientInfo) return
+    if (!afterMenu && (greetingSent || menuSeen)) return
     greetingSent = true
-    // El camino rápido "sí, soy yo" solo aplica si el saludo preguntó por una persona; sin contacto
-    // se pidió "la persona encargada de pagos" y un "sí" no confirma quién es
-    awaitingFirstAnswer = Boolean(clientInfo.contact?.trim())
+    const reception = firstUtterance ? answeredLikeReception(firstUtterance) : false
+    // El camino rápido "sí, soy yo" solo aplica si el saludo preguntó por una persona con nombre; si se pidió
+    // que lo comuniquen (recepción) o "la persona encargada de pagos", un "sí" no confirma quién es
+    awaitingFirstAnswer = !reception && Boolean(clientInfo.contact?.trim())
     clearGreetTimer()
-    speakFixed(buildGreeting(clientInfo.name, clientInfo.contact))
+    speakFixed(buildGreeting(clientInfo.name, clientInfo.contact, reception))
   }
 
   // Espera a oír qué contesta: si nadie habla en GREETING_SILENCE_MS se saluda igual

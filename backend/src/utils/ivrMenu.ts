@@ -51,9 +51,11 @@ const ENUMERATED_OPTION = /(?:^|[.!?]\s+)([0-9])\s*,\s*([a-z][^.!?,]{2,60}?)(?=[
 const IVR_CUES: RegExp[] = [
   /si conoce (el numero de |la )?extension/,
   /espere en (la )?linea/,
-  /permanezca en (la )?linea/,
+  /permanezca en (la )?linea|permanezca a la espera|mientras se transfiere su llamada|espere mientras se transfiere/,
   /(su llamada|esta llamada) (puede ser|podra ser|sera|esta siendo|podria ser) (grabada|monitoreada)/,
   /para fines de calidad/,
+  // Cola de espera: "todas nuestras atenciones están ocupadas, favor de esperar" → se espera, no se cuelga
+  /todas nuestras (atenciones|lineas|operadoras)[^.]{0,30}ocupad|favor de esperar/,
   /seleccione (cualquiera|una) de las (siguientes )?opciones|elija una (de las )?opcion/,
   /para efectos de calidad/,
   /vuelva a intentarlo|no lo entiendo|opcion (no )?valida|marcacion invalida|informacion no fue recibida|excedido el numero de intentos/,
@@ -70,8 +72,25 @@ const IVR_CUES: RegExp[] = [
   /(esta|estas) llamando a|ha llamado a|ha marcado a/,
 ]
 
-// Grabaciones de oficina cerrada: esperar o escribirle no sirve de nada, hay que colgar y reintentar
-const CLOSED_CUE = /ya (hemos )?cerrado|(estamos|permanecemos|se encuentra[n]?) cerrad[oa]s?|oficinas? (esta[n]? )?cerrad[oa]s?|fuera de(l)? horario|nuestro horario (de atencion )?ha (terminado|concluido)|no hay (personal|nadie) disponible/
+// Grabaciones sin salida: oficina cerrada, línea ocupada, buzón lleno. Esperar o hablarles no sirve de nada,
+// hay que colgar (el ciclo reintenta). Se redactan como lo dice una GRABACIÓN ("el destinatario … está ocupado"):
+// una recepcionista también dice "se encuentra ocupado" de la persona, y eso NO debe colgar.
+const CLOSED_CUE = new RegExp(
+  [
+    'ya (hemos )?cerrado',
+    '(estamos|permanecemos|se encuentra[n]?) cerrad[oa]s?',
+    'oficinas? (esta[n]? )?cerrad[oa]s?',
+    'fuera de(l)? horario',
+    'nuestro horario (de atencion )?ha (terminado|concluido)',
+    'no hay (personal|nadie) disponible',
+    // línea ocupada / sin respuesta, dicho por la central
+    'el (numero|destinatario|usuario|abonado)[^.]{0,70}ocupad',
+    'numero que marco[^.]{0,40}(ocupad|no (esta|existe))',
+    'intente (mas )?tarde',
+    // buzón que no se puede usar
+    'memory is full|mailbox is full|remote access code|buzon (esta )?lleno',
+  ].join('|')
+)
 
 // "Un momento", "le comunico"…: puede ser la grabación o una recepcionista. En ambos casos lo
 // correcto es esperar sin hablar (protocolo de recepción), pero solo si es corto y sin pregunta
@@ -170,17 +189,36 @@ export function isShortHumanGreeting(text: string): boolean {
   return /^(bueno|alo|diga|digame|mande|hola|si|buen(os|as|a)|dias|tardes|noches)/.test(words[0])
 }
 
+// ¿Contestó como una recepción? ("Grupo Hércules, buen día", "Altura, buenas tardes", "Está hablando a
+// Laboratorios Castells"). Quien dice el nombre de la empresa espera que le PIDAN comunicarse con alguien;
+// preguntarle "¿hablo con X?" no encaja. Un "¿bueno?" o "buenos días" suelto se trata como persona directa.
+export function answeredLikeReception(text: string): boolean {
+  if (isShortHumanGreeting(text)) return false
+  const t = normalize(text)
+  const words = t.replace(/[¿?¡!.,]/g, ' ').split(/\s+/).filter(Boolean)
+  return words.length >= 2 || /\b(grupo|colegio|hospital|clinica|laboratorios?|universidad|despacho|notaria|automotriz|recepcion|corporativo)\b/.test(t)
+}
+
 // null = no parece un menú automático (sigue el camino normal con Claude).
 // contact = nombre de la persona que se busca (Client.contact), para reconocerla en un directorio.
-export function decideMenuAction(text: string, hint?: SwitchboardHint | null, contact?: string | null): MenuDecision | null {
+// pressedTwice = teclas que ya se presionaron 2 veces sin que el menú avanzara: no se vuelven a elegir (se
+// prueba la siguiente mejor opción, o se espera). Una sola vez sí se repite: "su respuesta no fue recibida"
+// suele ser que no se oyó el tono.
+export function decideMenuAction(text: string, hint?: SwitchboardHint | null, contact?: string | null, pressedTwice: string[] = []): MenuDecision | null {
   if (!isAutomatedPrompt(text)) return null
   const t = normalize(text)
 
   // "Ya hemos cerrado" / "fuera de horario": no hay nadie, se cuelga (y el ciclo reintenta). Antes el
   // agente le contestaba conversación a esa grabación y llegó a "programar una llamada" por error.
-  if (CLOSED_CUE.test(t)) return { action: 'hangup', reason: 'grabación de oficina cerrada', immediate: true }
+  // Solo si la grabación no ofrece ninguna tecla: "no hay nadie disponible… pulse 0 para la operadora" tiene salida.
+  const allOptions = parseMenuOptions(text)
+  if (CLOSED_CUE.test(t) && allOptions.length === 0) return { action: 'hangup', reason: 'grabación sin salida (cerrado/ocupado/buzón lleno)', immediate: true }
 
-  const options = parseMenuOptions(text)
+  const options = allOptions.filter((o) => !pressedTwice.includes(o.digit))
+  // El menú tiene teclas pero ya se probaron las útiles: no insistir, esperar en línea
+  if (allOptions.length > 0 && options.length === 0) {
+    return { action: 'wait', reason: 'ya se probaron las teclas del menú sin avanzar', immediate: true }
+  }
 
   // Sin opciones: mensaje de espera, error del menú o un pedazo de menú cortado. Se espera en silencio
   // pero NO se da por final: el pedazo siguiente puede traer las teclas (el controlador junta lo que
@@ -223,5 +261,6 @@ export function decideMenuAction(text: string, hint?: SwitchboardHint | null, co
 
   // 6. Nada reconocible: el "0" casi siempre manda a recepción (se presiona una sola vez, ver
   // el límite de repeticiones en marcar_digito)
+  if (pressedTwice.includes('0')) return { action: 'wait', reason: 'el 0 ya se probó dos veces', immediate: true }
   return { action: 'press', digit: '0', reason: 'sin operadora ni espera: se prueba el 0', immediate: false }
 }

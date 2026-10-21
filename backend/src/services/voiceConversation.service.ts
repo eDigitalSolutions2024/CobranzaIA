@@ -242,7 +242,7 @@ export const VOICE_TOOLS = [
     type: 'function',
     name: 'marcar_numero_equivocado',
     description:
-      'Llamar cuando quien contesta dice que se equivocaron de número, que no conoce a esa persona o empresa, o que ya no trabaja ahí (después de confirmarlo una vez más). NO es para una recepción que dice que la persona no está (eso es programar_llamada) ni para un menú automático. NO llames requerir_humano en este caso.',
+      'Llamar SOLO cuando quien contesta dice con claridad que la EMPRESA no es esa o que se equivocaron de número (después de confirmarlo una vez más). NO es para "no trabaja aquí" / "ya no trabaja" / "no la conozco" (la empresa es correcta: pregunta por cuentas por pagar y usa actualizar_contacto), ni para una recepción que dice que la persona no está (eso es programar_llamada), ni para un menú automático. NO llames requerir_humano en este caso.',
     parameters: {
       type: 'object',
       properties: {
@@ -578,7 +578,8 @@ FLUJO A SEGUIR:
 2. Evalúa quién contestó (ver QUIÉN CONTESTA). Si es un menú automático o recepción, sigue el PROTOCOLO DE RECEPCIÓN y NO sigas el guion. Si es el contacto, evalúa su respuesta con criterio flexible (acepta "sí", variaciones de pronunciación, o que corrija solo un detalle menor) — no exijas coincidencia exacta:
    - Si confirma que es él o ella → ${identityConfirmedStep}
    - Si responde solo "no", "no soy", "no se encuentra" o da otro nombre → casi siempre es una recepción u otra persona de la empresa, NO un número equivocado. NO le preguntes quién es (suena a que no sabes a dónde llamaste y cuelgan). Sigue el PROTOCOLO DE RECEPCIÓN: "Disculpe, busco a ${contactForPrompt}, de parte de HP Financial Services, ¿me lo podría comunicar, por favor?".
-   - Solo si dice CON CLARIDAD que se equivocaron de número, que no conoce a esa persona ni a esa empresa, o que nunca ha trabajado ahí, y lo confirma una vez más → llama a la función marcar_numero_equivocado (detalle), discúlpate por la molestia, despídete y llama a finalizar_llamada. NO llames a requerir_humano en este caso: no es un cliente que pidió un asesor. Nunca hagas más de 2 intentos en total.
+   - "No trabaja aquí", "ya no trabaja", "no la conozco" o "no sé quién es" → la EMPRESA sí es la correcta (el contacto del expediente quedó viejo): NO es un número equivocado y NO llames a marcar_numero_equivocado. Pregunta: "Entiendo, gracias. ¿Me podría indicar quién es la persona responsable de cuentas por pagar?" y, si es posible, un teléfono; con su respuesta llama a actualizar_contacto (nombre, telefono, puesto), agradécele, despídete y llama a finalizar_llamada. Si no sabe quién es, pide que te pasen con administración o cuentas por pagar.
+   - Solo si dice CON CLARIDAD que la EMPRESA no es esa ("aquí no es …", "se equivocó de número", "no conozco esa empresa") y lo confirma una vez más → llama a la función marcar_numero_equivocado (detalle), discúlpate por la molestia, despídete y llama a finalizar_llamada. NO llames a requerir_humano en este caso: no es un cliente que pidió un asesor. Nunca hagas más de 2 intentos en total.
    - Si pide hablar con una persona en cualquier momento → llama a requerir_humano.
 ${is1to30 ? overdue1to30Steps : `3. Pregúntale: "Gracias. Le habla Guadalupe Martínez, de HP Financial Services. Me comunico para confirmar que cuente con las facturas correspondientes al mes y conocer la fecha estimada de pago. ¿Ya recibió sus facturas?".
    - Si confirma que SÍ las recibió → llama a marcar_facturas_recibidas (solo una vez, sin decir nada aparte) y continúa al punto 4.
