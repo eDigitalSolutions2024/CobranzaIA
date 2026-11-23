@@ -85,7 +85,7 @@ export interface ICall extends Document {
   // credenciales directo al frontend.
   recordingSid?: string | null
   // Si la grabación se conserva (true) o se borró de Twilio (false) — solo se conservan
-  // las llamadas de más de 1 minuto con negativa de pago (ver applyRecordingRetention en
+  // las llamadas de más de 30 s con negativa de pago, seguimiento, promesa agendada o pago en proceso (ver applyRecordingRetention en
   // voice.controller.ts). null mientras la llamada no termina de procesarse.
   recordingRetained?: boolean | null
   // Duración reportada por Twilio en el statusCallback final (CallDuration, en segundos) —

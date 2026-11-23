@@ -11,10 +11,18 @@ import { getMetrics } from "../services/metrics"
 import { CircleDollarSign, UsersRound, CircleCheckBig,
         ArrowUpNarrowWide, TriangleAlert, Siren,SquareCheckBig } from "lucide-react"
 import VoiceViewCall from "../components/VoiceViewCall"
+import type { CallsPreset } from "./CallsPage"
 
 const PAGE_SIZE = 25
 
-export default function DashboardPage() {
+// "2026-11-01" → "November 2026" (sin pasar por Date para que la zona horaria no mueva el mes)
+function monthLabel(isoDay: string): string {
+  const [year, month] = isoDay.split("-").map(Number)
+  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+  return `${names[month - 1]} ${year}`
+}
+
+export default function DashboardPage({ onOpenCalls }: { onOpenCalls?: (preset: CallsPreset) => void }) {
   const [openModal, setOpenModal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
@@ -42,6 +50,14 @@ export default function DashboardPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // La tarjeta de pagos abre Calls con las mismas llamadas que cuenta: disposiciones de pago, solo el mes
+  // en curso y los filtros de reporte que haya activos en el Dashboard
+  function openPaymentCalls() {
+    const m = metrics?.paymentMonth
+    if (!m || !onOpenCalls) return
+    onOpenCalls({ reportFilters, disposition: m.dispositions.join("|"), from: m.from, to: m.to })
   }
 
   const clients = useMemo(() => {
@@ -112,6 +128,8 @@ export default function DashboardPage() {
 
         <KpiCard
           title="Payment promises"
+          subtitle={metrics?.paymentMonth ? `${monthLabel(metrics.paymentMonth.from)} only · click to view calls` : undefined}
+          onClick={metrics?.paymentMonth ? openPaymentCalls : undefined}
           icon={CircleCheckBig}
           colorIcon="var(--success)"
           size={50}

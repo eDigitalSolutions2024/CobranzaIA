@@ -2,13 +2,16 @@ import { useEffect, useMemo, useState } from "react"
 import { getCalls, getCallCounts, type CallCounts } from "../services/calls"
 import CallDetailModal from "../components/CallDetailModal"
 import ExportCallsModal from "../components/ExportCallsModal"
-import { CALL_STATUS_COLOR, CALL_STATUS_LABEL, formatDuration } from "../components/CallTimeline"
+import MultiSelect, { splitSelected } from "../components/MultiSelect"
+import RecordingSettingsModal from "../components/RecordingSettingsModal"
+import { CALL_STATUS_COLOR, CALL_STATUS_LABEL, dispositionLabel, formatDuration } from "../components/CallTimeline"
 import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
 
 const STATUS_FILTERS = ["all", "in_progress", "completed", "requires_human", "failed"] as const
 const PAGE_SIZE = 100
 
-// Mismo catálogo que backend/src/config/disposition.ts
+// Opciones del filtro: catálogo de backend/src/config/disposition.ts sin las que ya no se filtran
+// (Need invoice, Email contact only, Wrong number). Se siguen guardando en la base de datos.
 const DISPOSITIONS = [
   "No answer",
   "Voice mail",
@@ -20,9 +23,6 @@ const DISPOSITIONS = [
   "Extension required",
   "Invoice, statement or contract required",
   "Payment received",
-  "Wrong number",
-  "Email contact only",
-  "Need invoice",
   "Phone number updated",
   "Prefers CAS support",
   "Payment refused",
@@ -34,15 +34,24 @@ const EMPTY_EXTRA: CallExtraFilters = { disposition: "", promise: "", type: "", 
 
 const FILTER_CLASS = "rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white"
 
-export default function CallsPage() {
+// Filtros con los que se abre esta página desde otra (ej. la tarjeta de pagos del Dashboard)
+export type CallsPreset = { reportFilters?: ReportFilterValue; disposition?: string; from?: string; to?: string }
+
+export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
   const [calls, setCalls] = useState<any[]>([])
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("all")
   const [search, setSearch] = useState("")
-  const [reportFilters, setReportFilters] = useState<ReportFilterValue>(EMPTY_REPORT_FILTERS)
+  const [reportFilters, setReportFilters] = useState<ReportFilterValue>(preset?.reportFilters ?? EMPTY_REPORT_FILTERS)
   const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [recordingModalOpen, setRecordingModalOpen] = useState(false)
   const [counts, setCounts] = useState<CallCounts | null>(null)
-  const [extra, setExtra] = useState<CallExtraFilters>(EMPTY_EXTRA)
+  const [extra, setExtra] = useState<CallExtraFilters>({
+    ...EMPTY_EXTRA,
+    disposition: preset?.disposition ?? "",
+    from: preset?.from ?? "",
+    to: preset?.to ?? "",
+  })
   const [page, setPage] = useState(1)
 
   // Filtros que entienden el backend (estado, 5 filtros de reporte, buscador y los de la
@@ -84,11 +93,15 @@ export default function CallsPage() {
     const query = search.trim().toLowerCase()
     return calls.filter((call) => {
       if (statusFilter !== "all" && call.status !== statusFilter) return false
-      if (reportFilters.country && call.clientId?.country !== reportFilters.country) return false
-      if (reportFilters.collectorId && String(call.clientId?.collectorId ?? "") !== reportFilters.collectorId) return false
-      if (reportFilters.team && call.clientId?.team !== reportFilters.team) return false
-      if (reportFilters.teamLeader && call.clientId?.teamLeader !== reportFilters.teamLeader) return false
-      if (reportFilters.collector && call.clientId?.collector !== reportFilters.collector) return false
+      const inFilter = (selected: string, actual: unknown) => {
+        const values = splitSelected(selected)
+        return values.length === 0 || values.includes(String(actual ?? ""))
+      }
+      if (!inFilter(reportFilters.country, call.clientId?.country)) return false
+      if (!inFilter(reportFilters.collectorId, call.clientId?.collectorId)) return false
+      if (!inFilter(reportFilters.team, call.clientId?.team)) return false
+      if (!inFilter(reportFilters.teamLeader, call.clientId?.teamLeader)) return false
+      if (!inFilter(reportFilters.collector, call.clientId?.collector)) return false
       if (!query) return true
       const name = String(call.clientId?.name ?? "").toLowerCase()
       const phone = String(call.phone ?? "").toLowerCase()
@@ -105,12 +118,20 @@ export default function CallsPage() {
           <h1 className="text-4xl font-bold">Calls</h1>
           <p className="mt-2 text-zinc-400">Collection call history</p>
         </div>
-        <button
-          onClick={() => setExportModalOpen(true)}
-          className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
-        >
-          Export to Excel
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setRecordingModalOpen(true)}
+            className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
+          >
+            Recording settings
+          </button>
+          <button
+            onClick={() => setExportModalOpen(true)}
+            className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
+          >
+            Export to Excel
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -156,12 +177,13 @@ export default function CallsPage() {
 
       {/* Filtros propios de la llamada */}
       <div className="flex flex-wrap items-center gap-3">
-        <select className={`${FILTER_CLASS} min-w-56`} value={extra.disposition} onChange={(e) => changeExtra("disposition", e.target.value)}>
-          <option value="">All dispositions</option>
-          {DISPOSITIONS.map((d) => (
-            <option key={d} value={d}>{d}</option>
-          ))}
-        </select>
+        <MultiSelect
+          className={`${FILTER_CLASS} min-w-56`}
+          label="All dispositions"
+          value={extra.disposition}
+          onChange={(v) => changeExtra("disposition", v)}
+          options={DISPOSITIONS.map((d) => ({ value: d, label: dispositionLabel(d) }))}
+        />
         <select className={`${FILTER_CLASS} min-w-44`} value={extra.promise} onChange={(e) => changeExtra("promise", e.target.value)}>
           <option value="">All (promise or not)</option>
           <option value="yes">With payment promise</option>
@@ -245,7 +267,7 @@ export default function CallsPage() {
                   </td>
 
                   <td className="py-4 text-zinc-400 text-sm">
-                    {call.disposition ?? "—"}
+                    {dispositionLabel(call.disposition)}
                   </td>
 
                   <td className="py-4">
@@ -304,6 +326,8 @@ export default function CallsPage() {
       </div>
 
       <CallDetailModal call={selectedCall} onClose={() => setSelectedCallId(null)} />
+
+      <RecordingSettingsModal isOpen={recordingModalOpen} onClose={() => setRecordingModalOpen(false)} />
 
       <ExportCallsModal
         isOpen={exportModalOpen}

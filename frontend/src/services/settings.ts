@@ -38,3 +38,18 @@ export const updateVoiceEngine = (voiceEngine: VoiceEngine, password: string) =>
     method: "PUT",
     body: JSON.stringify({ voiceEngine, password }),
   })
+
+export interface RecordingSettings {
+  dispositions: string[]
+  minDurationSeconds: number
+  recordingEnabled: boolean
+  availableDispositions: string[]
+}
+
+export const getRecordingSettings = (): Promise<RecordingSettings> => api("/settings/recording")
+
+export const updateRecordingSettings = (dispositions: string[], minDurationSeconds: number) =>
+  api("/settings/recording", {
+    method: "PUT",
+    body: JSON.stringify({ dispositions, minDurationSeconds }),
+  })

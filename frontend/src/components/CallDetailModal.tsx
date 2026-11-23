@@ -3,6 +3,7 @@ import {
   CALL_STATUS_LABEL,
   CallRecordingPlayer,
   CallTimelineView,
+  dispositionLabel,
   formatDuration,
 } from "./CallTimeline"
 
@@ -88,7 +89,7 @@ export default function CallDetailModal({ call, onClose }: Props) {
               value={call.promiseDate ? `${formatMoney(call.amount)} MXN` : "—"}
               sub={call.promiseDate ? new Date(call.promiseDate).toLocaleDateString("en-US") : undefined}
             />
-            <StatTile label="Disposition" value={call.disposition ?? "—"} />
+            <StatTile label="Disposition" value={dispositionLabel(call.disposition)} />
             <StatTile label="Next action" value={call.nextAction ?? "—"} />
           </div>
 

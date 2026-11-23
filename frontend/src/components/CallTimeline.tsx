@@ -15,6 +15,19 @@ export const CALL_STATUS_LABEL: Record<string, string> = {
   requires_human: "Requires agent",
 }
 
+// Nombre con que se muestra una disposición en pantalla. En la base de datos se guarda el valor
+// original (backend/src/config/disposition.ts), así que las llamadas viejas también se ven con
+// el nombre nuevo y los filtros siguen enviando el valor guardado.
+const DISPOSITION_LABEL: Record<string, string> = {
+  "Invoice, statement or contract required": "Account/Statement",
+  "Prefers CAS support": "Collector Assistance",
+}
+
+export function dispositionLabel(disposition?: string | null): string {
+  if (!disposition) return "—"
+  return DISPOSITION_LABEL[disposition] ?? disposition
+}
+
 export function formatMs(ms?: number | null): string {
   if (ms == null) return ""
   if (ms < 1000) return `${Math.round(ms)}ms`

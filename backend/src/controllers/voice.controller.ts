@@ -9,9 +9,9 @@ import { findClientByPhone } from '../services/customerLookup.service'
 import { analyzeCallTranscript, ClientInfo } from '../services/claudeVoice.service'
 import { DispositionStatus, nextActionFor } from '../config/disposition'
 import { runAction } from '../services/flowActions.service'
-import { CLIENT_REPORT_FIELDS, buildClientReportFilter } from '../utils/reportFilters'
+import { CLIENT_REPORT_FIELDS, buildClientReportFilter, splitFilterValues } from '../utils/reportFilters'
 import { CALL_EXPORT_COLUMNS, CLIENT_EXPORT_COLUMNS, toCallExportRow, toClientExportRow } from '../utils/clientExport'
-import type { VoiceEngine } from '../models/AutomationSettings'
+import AutomationSettings, { DEFAULT_RECORDING_RETENTION, type RecordingRetentionConfig, type VoiceEngine } from '../models/AutomationSettings'
 import { AUTO_CYCLE_STEPS, VOICE_MAX_CALL_SECONDS, PREDIAL_EXTENSION } from '../config/autoCall'
 
 
@@ -249,8 +249,8 @@ const CALL_STATUSES = ['in_progress', 'completed', 'requires_human', 'failed'] a
 //   from / to:   rango de fechas (AAAA-MM-DD) en hora de CDMX, ambos extremos incluidos
 function buildCallExtraFilter(query: Record<string, any>): Record<string, any> {
   const filter: Record<string, any> = {}
-  const disposition = String(query.disposition ?? '').trim()
-  if (disposition) filter.disposition = disposition
+  const dispositions = splitFilterValues(query.disposition)
+  if (dispositions.length > 0) filter.disposition = { $in: dispositions }
   if (query.promise === 'yes') filter.promiseDate = { $ne: null }
   if (query.promise === 'no') filter.promiseDate = null
   if (query.type === 'auto' || query.type === 'manual') filter.triggeredBy = query.type
@@ -537,11 +537,16 @@ export async function handleNotifyHuman(req: Request, res: Response): Promise<vo
   }
 }
 
-// Solo se conservan las grabaciones de llamadas de más de 1 minuto en las que hubo
-// negativa de pago (ver tarjeta "[STORY] Transcript habilitar dicha funcionalidad").
-// Twilio graba la llamada completa porque al iniciarla no se sabe cómo va a terminar;
-// al terminar se decide y, si no califica, se borra de Twilio.
-const RECORDING_MIN_DURATION_SECONDS = 60
+// Solo se conservan las grabaciones de llamadas de más de 30 segundos que terminaron en
+// negativa de pago, seguimiento, promesa de pago agendada o pago en proceso (ver tarjeta "[STORY] Transcript
+// habilitar dicha funcionalidad"). Twilio graba la llamada completa porque al iniciarla no
+// se sabe cómo va a terminar; al terminar se decide y, si no califica, se borra de Twilio.
+// Los valores salen de AutomationSettings.recordingRetention (botón "Recording settings" de
+// Calls); sin configurar se usan los de DEFAULT_RECORDING_RETENTION.
+export async function loadRecordingRetention(): Promise<RecordingRetentionConfig> {
+  const settings = await AutomationSettings.findById('global').select('recordingRetention').lean()
+  return settings?.recordingRetention ?? DEFAULT_RECORDING_RETENTION
+}
 
 async function deleteRecording(callId: mongoose.Types.ObjectId, recordingSid: string): Promise<void> {
   try {
@@ -846,10 +851,12 @@ export async function processCallStatusUpdate(
       await Client.findByIdAndUpdate(call.clientId, { lastCallConclusion: conclusion })
     }
 
-    // La grabación solo se conserva si la llamada duró más de 1 minuto Y terminó en
-    // negativa de pago (marcada en vivo por el agente o por la red de seguridad de arriba).
+    // La grabación solo se conserva si la llamada duró más de 30 s Y terminó en negativa de
+    // pago, seguimiento, promesa agendada o pago en proceso (marcada en vivo por el agente o por la red de
+    // seguridad de arriba).
+    const retention = await loadRecordingRetention()
     const keepRecording =
-      finalDisposition === 'Payment refused' && (call.durationSeconds ?? 0) > RECORDING_MIN_DURATION_SECONDS
+      retention.dispositions.includes(finalDisposition) && (call.durationSeconds ?? 0) > retention.minDurationSeconds
     await applyRecordingRetention(call._id as mongoose.Types.ObjectId, keepRecording)
   }
 }

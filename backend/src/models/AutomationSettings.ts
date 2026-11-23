@@ -16,10 +16,24 @@ export type VoiceEngine = 'openai' | 'elevenlabs'
 // buildVoiceSystemPrompt (ClientInfo.flowOverride).
 export type ManualCallFlow = 'auto' | 'preventive' | 'overdue_1_30'
 
+// Qué grabaciones de Twilio se conservan al terminar la llamada (ver applyRecordingRetention en
+// voice.controller.ts): las que duran más de minDurationSeconds Y terminan en una de estas
+// disposiciones. El resto se borra de Twilio. Se configura desde la página Calls.
+export interface RecordingRetentionConfig {
+  dispositions: string[]
+  minDurationSeconds: number
+}
+
+export const DEFAULT_RECORDING_RETENTION: RecordingRetentionConfig = {
+  dispositions: ['Payment refused', 'Follow up', 'Payment scheduled', 'Payment in process'],
+  minDurationSeconds: 30,
+}
+
 export interface IAutomationSettings extends Document {
   autoCallsEnabled: boolean
   voiceEngine: VoiceEngine
   manualCallFlow: ManualCallFlow
+  recordingRetention?: RecordingRetentionConfig
   updatedBy?: mongoose.Types.ObjectId | null
   updatedAt: Date
 }
@@ -34,6 +48,13 @@ const AutomationSettingsSchema = new Schema(
     autoCallsEnabled: { type: Boolean, default: false },
     voiceEngine: { type: String, enum: ['openai', 'elevenlabs'], default: 'openai' },
     manualCallFlow: { type: String, enum: ['auto', 'preventive', 'overdue_1_30'], default: 'auto' },
+    recordingRetention: {
+      type: new Schema(
+        { dispositions: { type: [String], default: DEFAULT_RECORDING_RETENTION.dispositions }, minDurationSeconds: { type: Number, default: DEFAULT_RECORDING_RETENTION.minDurationSeconds } },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
   },
   { timestamps: true }

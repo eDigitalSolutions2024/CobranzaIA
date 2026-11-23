@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import MultiSelect from "./MultiSelect"
 import { getClientFilterOptions, type ClientFilterOptions } from "../services/clients"
 
 export type ReportFilterValue = {
@@ -34,25 +35,6 @@ export function useClientFilterOptions(): ClientFilterOptions {
   return options
 }
 
-function FilterSelect({
-  label, value, onChange, options, className,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  options: (string | number)[]
-  className: string
-}) {
-  return (
-    <select className={className} value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">{label}</option>
-      {options.map((o) => (
-        <option key={o} value={String(o)}>{o}</option>
-      ))}
-    </select>
-  )
-}
-
 // Los 5 campos de los filtros de "Reporte Filters": Country / Collector ID / Team /
 // Team Leader / Collector (ver models/Client.ts). Un solo componente de campos, para que
 // la barra inline y el modal de export rendericen exactamente los mismos <select> con
@@ -73,11 +55,11 @@ export function ReportFilterFields({
   }
   return (
     <>
-      <FilterSelect label="All countries" value={value.country} onChange={(v) => set("country", v)} options={options.country} className={selectClassName} />
-      <FilterSelect label="All collector IDs" value={value.collectorId} onChange={(v) => set("collectorId", v)} options={options.collectorId} className={selectClassName} />
-      <FilterSelect label="All teams" value={value.team} onChange={(v) => set("team", v)} options={options.team} className={selectClassName} />
-      <FilterSelect label="All team leaders" value={value.teamLeader} onChange={(v) => set("teamLeader", v)} options={options.teamLeader} className={selectClassName} />
-      <FilterSelect label="All collectors" value={value.collector} onChange={(v) => set("collector", v)} options={options.collector} className={selectClassName} />
+      <MultiSelect label="All countries" value={value.country} onChange={(v) => set("country", v)} options={options.country} className={selectClassName} />
+      <MultiSelect label="All collector IDs" value={value.collectorId} onChange={(v) => set("collectorId", v)} options={options.collectorId} className={selectClassName} />
+      <MultiSelect label="All teams" value={value.team} onChange={(v) => set("team", v)} options={options.team} className={selectClassName} />
+      <MultiSelect label="All team leaders" value={value.teamLeader} onChange={(v) => set("teamLeader", v)} options={options.teamLeader} className={selectClassName} />
+      <MultiSelect label="All collectors" value={value.collector} onChange={(v) => set("collector", v)} options={options.collector} className={selectClassName} />
     </>
   )
 }

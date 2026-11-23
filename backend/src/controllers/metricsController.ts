@@ -16,6 +16,21 @@ function startOfWeek(d: Date): Date {
   return out
 }
 
+// Disposiciones de llamada que cuentan como "algo parecido a un pago" en la tarjeta Payment promises
+// (Payment scheduled incluye las domiciliadas, ver computeVoiceDisposition)
+const PAYMENT_LIKE_DISPOSITIONS = ["Payment scheduled", "Payment in process", "Payment received"]
+
+// Mes calendario en curso en hora de CDMX (UTC-6 fijo, sin horario de verano desde 2022): { month: 'AAAA-MM',
+// from: primer día, to: último día } en formato AAAA-MM-DD
+function currentMonthMexico(): { month: string; from: string; to: string } {
+  const now = new Date(Date.now() - 6 * 3600_000)
+  const year = now.getUTCFullYear()
+  const m = now.getUTCMonth()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const lastDay = new Date(Date.UTC(year, m + 1, 0)).getUTCDate()
+  return { month: year + '-' + pad(m + 1), from: year + '-' + pad(m + 1) + '-01', to: year + '-' + pad(m + 1) + '-' + pad(lastDay) }
+}
+
 // Todo se calcula en el servidor con agregaciones sobre TODOS los clientes (sin límite de
 // cantidad) y respeta los 5 filtros del dashboard (country, collectorId, team, teamLeader,
 // collector). Con filtros, las promesas/llamadas/mensajes se limitan a los clientes que
@@ -23,6 +38,7 @@ function startOfWeek(d: Date): Date {
 export async function getMetrics(req: Request, res: Response) {
   try {
     const clientFilter = buildClientReportFilter(req.query)
+    const paymentMonth = currentMonthMexico()
     const hasFilter = Object.keys(clientFilter).length > 0
     const ids = hasFilter ? await Client.find(clientFilter).distinct("_id") : null
     const byClient = ids ? { clientId: { $in: ids } } : {}
@@ -56,7 +72,13 @@ export async function getMetrics(req: Request, res: Response) {
         { $match: { ...clientFilter, status: "paid" } },
         { $group: { _id: null, total: { $sum: "$debt" } } },
       ]),
-      PaymentPromise.countDocuments({ status: "pending", ...byClient }),
+      // Llamadas del mes en curso con algo parecido a un pago (promesa, pago en proceso o pago recibido): son
+      // las mismas que muestra la página Calls al abrir la tarjeta, con el mismo rango de fechas.
+      Call.countDocuments({
+        ...byClient,
+        disposition: { $in: PAYMENT_LIKE_DISPOSITIONS },
+        createdAt: { $gte: new Date(paymentMonth.from + 'T00:00:00-06:00'), $lte: new Date(paymentMonth.to + 'T23:59:59.999-06:00') },
+      }),
       // Respondió = ya hubo conversación real (por llamada o WhatsApp), no solo "se le marcó"
       Client.countDocuments({
         ...clientFilter,
@@ -136,6 +158,8 @@ export async function getMetrics(req: Request, res: Response) {
       totalDebt,
       recoveredDebt,
       paymentPromises,
+      // Mes que cubre la tarjeta (se reinicia cada mes, igual que las facturas) y el filtro que abre en Calls
+      paymentMonth: { ...paymentMonth, dispositions: PAYMENT_LIKE_DISPOSITIONS },
       responseRate,
       riskBreakdown,
       messageStats: { ...msgStats, total: totalMessages },

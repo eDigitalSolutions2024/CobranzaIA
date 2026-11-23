@@ -228,7 +228,7 @@ export const VOICE_TOOLS = [
     type: 'function',
     name: 'registrar_promesa_pago',
     description:
-      'Llamar SOLO después de la confirmación FINAL (la segunda vez que el cliente confirma, tras repetirle el acuerdo en tiempo pasado) — nunca en cuanto mencione fecha/monto por primera vez, ni tras la primera confirmación. Si acuerdan un plan de pagos en varias cuotas, llamar una vez por cada cuota (máximo 12).',
+      'Llamar en cuanto el cliente CONFIRME el acuerdo (tras repetirle monto y fecha y preguntarle "¿Es correcta la información?"), en ese mismo turno — nunca solo porque mencionó una fecha/monto sin que lo hayas repetido y confirmado. Si acuerdan un plan de pagos en varias cuotas, llamar una vez por cada cuota (máximo 12).',
     parameters: {
       type: 'object',
       properties: {
@@ -514,8 +514,8 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
   // Solo para clientes con 1 a 30 días de atraso; el preventivo (sin vencer) y >30 días
   // siguen con el flujo de siempre, sin cambios. Decisiones del negocio sobre este
   // diagrama: la factura NO se identifica por número (folios de 12 dígitos), solo pago
-  // total (igual que el preventivo), doble confirmación en promesas de pago (igual que el
-  // preventivo), y aplican todas las ramas "EN CUALQUIER MOMENTO" + blacklist + buzón.
+  // total (igual que el preventivo), una sola confirmación en promesas de pago (antes eran
+  // dos; las llamadas se cortaban entre ambas y la promesa no se registraba), y aplican todas las ramas "EN CUALQUIER MOMENTO" + blacklist + buzón.
   const is1to30 =
     clientInfo.flowOverride === 'overdue_1_30'
       ? true
@@ -547,7 +547,7 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
       - Si propone pagar solo una parte → explícale con calidez que no se manejan pagos parciales, que necesitas una fecha en la que pueda cubrir el saldo COMPLETO (${debtText}), y vuelve a preguntar la fecha.
       - Si no tiene dinero ahora → NUNCA ofrezcas ni aceptes un pago parcial. Pregunta para qué fecha podría tener el pago COMPLETO. La primera vez esto NO es una negativa — busca una fecha con naturalidad.
       - Si después de preguntarle la fecha 2 veces sigue sin dar NINGUNA (ej. "no tenemos fecha", "no sabemos", "ya le dije que no tenemos efectivo") → NO insistas una tercera vez. Llama a marcar_negativa_pago con un motivo breve (ej. "Sin fecha de pago: no tiene flujo de efectivo"), dile que un agente de cobranza se pondrá en contacto con él o ella para revisar su situación, y ve al punto 7.
-      - Con una fecha específica para el saldo completo → ve al punto 5 (doble confirmación de la promesa).
+      - Con una fecha específica para el saldo completo → ve al punto 5 (confirmación de la promesa).
    C) EN PROCESO (tesorería, compras, cuentas por pagar, autorización, programación de pagos) → NO lo asumas como pago confirmado. Pregúntale: "¿Tiene una fecha estimada en que saldría el pago?".
       - Si da una fecha estimada → ve al punto 5 (resumen); cuando lo confirme, llama a marcar_pago_en_proceso (area, fecha_estimada).
       - Si no tiene fecha estimada → pregúntale qué día y horario le puedes volver a contactar para darle seguimiento. Ve al punto 5 (resumen); cuando lo confirme, llama a marcar_pago_en_proceso (area) y a programar_llamada (fecha, hora, motivo "Seguimiento de pago en proceso").
@@ -564,7 +564,7 @@ Cuando la llamada deba terminar, despídete y llama a la función finalizar_llam
    - Si se enoja → empatiza, ofrece contactarlo en otro momento (sigue la regla de LLAMAR DESPUÉS, más abajo).
    - Si pide que le escriban por WhatsApp → confírmaselo y ve al punto 7.
 5. CONFIRMACIÓN / RESUMEN:
-   - Si es una PROMESA DE PAGO (B): NO llames todavía a registrar_promesa_pago. Repite la intención en tiempo futuro: "Para confirmar, registraré el pago por [monto] pesos para el [fecha]. ¿Es correcta la información?". Si corrige el monto o la fecha, repite la nueva intención y vuelve a preguntar. Cuando confirme, repítelo en tiempo PASADO: "Para confirmar, he registrado el pago por [monto] pesos para el [fecha]. ¿Es correcta esta información?". Si corrige algo, vuelve a repetirlo en pasado hasta que confirme sin cambios. Cuando confirme esa segunda vez, AHORA SÍ llama a registrar_promesa_pago y ve al punto 6.
+   - Si es una PROMESA DE PAGO (B): NO llames todavía a registrar_promesa_pago. Repite el acuerdo: "Para confirmar, registraré el pago por [monto] pesos para el [fecha]. ¿Es correcta la información?". Si corrige el monto o la fecha, repite la nueva fecha o monto y vuelve a preguntar. En cuanto confirme UNA vez (un "sí", "correcto", "así es"), llama a registrar_promesa_pago en ese mismo turno y ve al punto 6. No pidas una segunda confirmación.
    - Para cualquier otro caso (A, C, D, E, F): resume en una frase lo acordado — ej. "Para confirmar, usted realizó el pago el [fecha] por [monto] mediante [medio], y lo enviaremos a verificación. ¿Es correcta la información?", o "Para confirmar, le reenviaremos la factura a [correo] y le llamaremos el [fecha] para dar seguimiento. ¿Es correcta la información?". Si corrige algo, ajústalo y vuelve a preguntar. Cuando confirme, llama a la(s) función(es) de su caso y ve al punto 6.
 6. REGISTRO FINAL: di "Perfecto. He registrado la información en nuestro sistema. Si surge algún cambio, puede responder a nuestros mensajes o comunicarse con nosotros." Si llamaste a requerir_humano, dile además que un agente se pondrá en contacto con él o ella a la brevedad.
 7. CIERRE: despídete con "Muchas gracias por su tiempo. Le atendió Guadalupe Martínez, de HP Financial Services. Que tenga excelente día." y llama a la función finalizar_llamada.`
@@ -613,14 +613,11 @@ ${is1to30 ? overdue1to30Steps : `3. Pregúntale: "Gracias. Le habla Guadalupe Ma
    - Si se enoja → empatiza, ofrece contactarlo en otro momento, cierra la llamada.
    - Si pide que le escriban por WhatsApp → confírmaselo y cierra la llamada.
    - Si propone pagar solo una parte del saldo → explícale con calidez que no se manejan pagos parciales, que necesitas una fecha en la que pueda cubrir el saldo COMPLETO (${clientInfo.debt.toLocaleString('es-MX')} pesos), y vuelve a preguntar la fecha.
-   - En cuanto el cliente dé una fecha para pagar el saldo completo → NO llames todavía a registrar_promesa_pago. Repite la intención en voz (tiempo futuro) y pide confirmación explícita: "Para confirmar, registraré el pago por [monto] pesos para el [fecha]. ¿Es correcta la información?". Continúa al punto 6.
-6. Según su respuesta a esa primera confirmación:
-   - Si corrige el monto o la fecha → repite la nueva intención y vuelve a preguntar "¿Es correcta la información?" (te puedes quedar en este punto varias veces hasta que confirme).
-   - Si confirma que es correcta → repite el acuerdo, esta vez en tiempo PASADO: "Para confirmar, he registrado el pago por [monto] pesos para el [fecha]. ¿Es correcta esta información?". Continúa al punto 7.
-7. Esta es la confirmación FINAL:
-   - Si corrige algo → vuelve a repetirlo en pasado y pregunta de nuevo, hasta que confirme sin cambios.
-   - Si confirma → AHORA SÍ llama a la función registrar_promesa_pago (una llamada por cada cuota, si acuerdan un plan de pagos, máximo 12 cuotas) y continúa al punto 8.
-8. Cierra siempre con calidez. Si quedó registrado un compromiso de pago, despídete con: "Queda registrado. Muchas gracias por su tiempo. Le atendió Guadalupe Martínez, de HP Financial Services. Que tenga excelente día." En los demás cierres usa la misma despedida, omitiendo "Queda registrado" si no se registró nada. En cuanto la conversación termine (con o sin acuerdo), despídete y llama a la función finalizar_llamada.`}
+   - En cuanto el cliente dé una fecha para pagar el saldo completo → NO llames todavía a registrar_promesa_pago. Repite el acuerdo en voz y pide confirmación explícita: "Para confirmar, registraré el pago por [monto] pesos para el [fecha]. ¿Es correcta la información?". Continúa al punto 6.
+6. Según su respuesta a esa confirmación:
+   - Si corrige el monto o la fecha → repite la nueva fecha o monto y vuelve a preguntar "¿Es correcta la información?" (te puedes quedar en este punto varias veces hasta que confirme).
+   - Si confirma UNA vez (un "sí", "correcto", "así es") → AHORA SÍ llama a la función registrar_promesa_pago en ese mismo turno (una llamada por cada cuota, si acuerdan un plan de pagos, máximo 12 cuotas) y continúa al punto 7. No pidas una segunda confirmación.
+7. Cierra siempre con calidez. Si quedó registrado un compromiso de pago, despídete con: "Queda registrado. Muchas gracias por su tiempo. Le atendió Guadalupe Martínez, de HP Financial Services. Que tenga excelente día." En los demás cierres usa la misma despedida, omitiendo "Queda registrado" si no se registró nada. En cuanto la conversación termine (con o sin acuerdo), despídete y llama a la función finalizar_llamada.`}
 
 EN CUALQUIER MOMENTO DE LA LLAMADA — si el cliente pide que le llamen después o necesita revisar antes de responder (ej. "déjame revisarlo", "háblame después", "ahorita no puedo atenderle", "lo tengo que consultar"):
    - Pregúntale: "Claro. ¿Qué día y horario sería conveniente para volver a contactarle?". Con su respuesta, llama a programar_llamada (fecha, hora, motivo), confírmale el día y la hora en que se le llamará, despídete y llama a finalizar_llamada.

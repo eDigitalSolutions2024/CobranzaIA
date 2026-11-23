@@ -1,7 +1,8 @@
 import { Response } from "express"
 import bcrypt from "bcryptjs"
 import ExchangeRate from "../models/ExchangeRate"
-import AutomationSettings from "../models/AutomationSettings"
+import AutomationSettings, { DEFAULT_RECORDING_RETENTION } from "../models/AutomationSettings"
+import { STATUS_OPTIONS } from "../config/disposition"
 import User from "../models/User"
 import { AuthedRequest } from "../middleware/auth"
 import { AUTO_CYCLE_STEPS } from "../config/autoCall"
@@ -83,6 +84,45 @@ export async function getAutomationSettings(req: AuthedRequest, res: Response) {
   } catch (error) {
     console.error("Error getAutomationSettings:", error)
     res.status(500).json({ message: "Error obteniendo la configuración de automatización" })
+  }
+}
+
+// Qué grabaciones se conservan (ver RecordingRetentionConfig). Aplica a llamadas nuevas;
+// lo que ya se borró de Twilio no se recupera. Sin contraseña: no dispara llamadas ni gasto.
+export async function getRecordingSettings(req: AuthedRequest, res: Response) {
+  try {
+    const settings = await AutomationSettings.findById("global").select("recordingRetention").lean()
+    res.json({
+      ...(settings?.recordingRetention ?? DEFAULT_RECORDING_RETENTION),
+      recordingEnabled: process.env.VOICE_CALL_RECORDING_ENABLED === "true",
+      availableDispositions: STATUS_OPTIONS,
+    })
+  } catch (error) {
+    console.error("Error getRecordingSettings:", error)
+    res.status(500).json({ message: "Error obteniendo la configuración de grabaciones" })
+  }
+}
+
+export async function updateRecordingSettings(req: AuthedRequest, res: Response) {
+  try {
+    const { dispositions, minDurationSeconds } = req.body as { dispositions?: unknown; minDurationSeconds?: unknown }
+    if (!Array.isArray(dispositions) || dispositions.some((d) => !(STATUS_OPTIONS as readonly string[]).includes(d))) {
+      return res.status(400).json({ message: "dispositions debe ser una lista de disposiciones válidas" })
+    }
+    const min = Number(minDurationSeconds)
+    if (!Number.isFinite(min) || min < 0 || min > 3600) {
+      return res.status(400).json({ message: "minDurationSeconds debe estar entre 0 y 3600" })
+    }
+    const recordingRetention = { dispositions: [...new Set(dispositions as string[])], minDurationSeconds: Math.round(min) }
+    await AutomationSettings.findByIdAndUpdate(
+      "global",
+      { recordingRetention, updatedBy: req.user?.id ?? null },
+      { upsert: true }
+    )
+    res.json(recordingRetention)
+  } catch (error) {
+    console.error("Error updateRecordingSettings:", error)
+    res.status(500).json({ message: "Error actualizando la configuración de grabaciones" })
   }
 }
 
