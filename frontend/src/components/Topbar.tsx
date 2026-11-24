@@ -96,7 +96,7 @@ export default function Topbar() {
             </div>
 
             <ChevronDown
-              size={16}
+              size={24}
               className={`
                 transition-transform
                 ${openMenu ? "rotate-180" : ""}

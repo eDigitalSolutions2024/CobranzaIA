@@ -13,6 +13,10 @@ import { CircleDollarSign, UsersRound, CircleCheckBig,
 import VoiceViewCall from "../components/VoiceViewCall"
 import type { CallsPreset } from "./CallsPage"
 
+interface Props {
+  onOpenCalls?: (preset: CallsPreset) => void
+  setCardPage: (page: string) => void
+}
 const PAGE_SIZE = 25
 
 // "2026-11-01" → "November 2026" (sin pasar por Date para que la zona horaria no mueva el mes)
@@ -22,7 +26,7 @@ function monthLabel(isoDay: string): string {
   return `${names[month - 1]} ${year}`
 }
 
-export default function DashboardPage({ onOpenCalls }: { onOpenCalls?: (preset: CallsPreset) => void }) {
+export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
   const [openModal, setOpenModal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
@@ -124,6 +128,7 @@ export default function DashboardPage({ onOpenCalls }: { onOpenCalls?: (preset: 
           size={50}
           value={loading ? "..." : String(metrics?.activeClients ?? 0)}
           change=""
+          onClick={() => setCardPage("clients")}
         />
 
         <KpiCard
@@ -144,6 +149,7 @@ export default function DashboardPage({ onOpenCalls }: { onOpenCalls?: (preset: 
           size={50}
           value={loading ? "..." : `${metrics?.responseRate ?? 0}%`}
           change=""
+          onClick={() => setCardPage("calls")}
         />
       </div>
 
@@ -205,7 +211,7 @@ export default function DashboardPage({ onOpenCalls }: { onOpenCalls?: (preset: 
           </div>
       </div>
     )}
-      <div className="mt-6 grid gap-6 xl:grid-cols-3">
+      <div className="mt-6 grid gap-6 xl:grid-cols-2">
         <div className="min-w-0 xl:col-span-2">
           <div className="mt-6">
 
@@ -253,9 +259,9 @@ export default function DashboardPage({ onOpenCalls }: { onOpenCalls?: (preset: 
         onSave={handleSaveClient}
       />
         </div>
-        <div className="min-w-0">
+        {/*<div className="min-w-0">
           <RecentActivity />
-        </div>
+        </div>*/}
       </div>
     </>
   )

@@ -44,7 +44,7 @@ const RISK_COLOR: Record<string, string> = {
 
 export default function ClientsTable({ clients }: Props) {
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6">
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] p-6 w-full">
 
       <div className="mb-6">
         <h2 className="text-xl font-semibold">Recent customers</h2>

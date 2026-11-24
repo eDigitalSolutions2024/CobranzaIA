@@ -43,7 +43,7 @@ export default function App() {
   return (
     <MainLayout page={page} setPage={setPage}>
 
-      {page === "dashboard" && <DashboardPage onOpenCalls={openCalls} />}
+      {page === "dashboard" && <DashboardPage onOpenCalls={openCalls} setCardPage={setPage} />}
 
       {page === "clients" && <ClientsPage />}
 

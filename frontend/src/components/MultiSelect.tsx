@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { ChevronDown } from "lucide-react"
 
 // Los valores elegidos viajan como un solo texto separado por "|" (ej. "Mexico|Peru"): así los
 // filtros siguen siendo string y el backend los separa (ver splitFilterValues).
@@ -50,10 +51,10 @@ export default function MultiSelect({ label, value, onChange, options, className
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen((o) => !o)} className={`${className} flex items-center justify-between gap-2 text-left`}>
         <span className="truncate">{text}</span>
-        <span className="text-xs text-zinc-500">▾</span>
+        <span className="text-xs text-zinc-500"><ChevronDown color={"white"} /></span>
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 max-h-64 min-w-full w-max max-w-xs overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+        <div className="absolute z-50 mt-1 max-h-128 min-w-full w-max max-w-xs overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
           {selected.length > 0 && (
             <button type="button" onClick={() => onChange("")} className="w-full px-2 py-1.5 text-left text-xs text-blue-400 hover:text-blue-300">
               Clear selection

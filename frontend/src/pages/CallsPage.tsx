@@ -6,6 +6,7 @@ import MultiSelect, { splitSelected } from "../components/MultiSelect"
 import RecordingSettingsModal from "../components/RecordingSettingsModal"
 import { CALL_STATUS_COLOR, CALL_STATUS_LABEL, dispositionLabel, formatDuration } from "../components/CallTimeline"
 import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
+import { ChevronDown } from "lucide-react"
 
 const STATUS_FILTERS = ["all", "in_progress", "completed", "requires_human", "failed"] as const
 const PAGE_SIZE = 100
@@ -184,16 +185,22 @@ export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
           onChange={(v) => changeExtra("disposition", v)}
           options={DISPOSITIONS.map((d) => ({ value: d, label: dispositionLabel(d) }))}
         />
-        <select className={`${FILTER_CLASS} min-w-44`} value={extra.promise} onChange={(e) => changeExtra("promise", e.target.value)}>
+        <div className="relative">
+        <select className={`${FILTER_CLASS} min-w-44 appearance-none pr-9`} value={extra.promise} onChange={(e) => changeExtra("promise", e.target.value)}>
           <option value="">All (promise or not)</option>
           <option value="yes">With payment promise</option>
           <option value="no">Without payment promise</option>
         </select>
-        <select className={`${FILTER_CLASS} min-w-36`} value={extra.type} onChange={(e) => changeExtra("type", e.target.value)}>
+          <ChevronDown size={24} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white" />
+        </div>
+        <div className="relative">
+        <select className={`${FILTER_CLASS} min-w-36 appearance-none pr-9`} value={extra.type} onChange={(e) => changeExtra("type", e.target.value)}>
           <option value="">Automatic + manual</option>
           <option value="auto">Automatic</option>
           <option value="manual">Manual</option>
         </select>
+        <ChevronDown size={24} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white" />
+        </div>
         <label className="flex items-center gap-2 text-xs text-zinc-500">
           From
           <input type="date" className={FILTER_CLASS} value={extra.from} onChange={(e) => changeExtra("from", e.target.value)} />

@@ -5,7 +5,7 @@ import ClientDetailModal from "./ClientDetailModal"
 const STATUS_LABEL: Record<string, string> = { candidate: "Candidate", confirmed: "Confirmed" }
 const STATUS_COLOR: Record<string, string> = {
   candidate: "bg-yellow-500/10 text-yellow-400",
-  confirmed: "bg-red-500/10 text-red-400",
+  confirmed: "bg-yellow-500/10 text-yellow-400",
 }
 
 function formatMoney(value: any): string {
@@ -232,7 +232,7 @@ export default function BlacklistSection() {
               key={s}
               onClick={() => setStatus(s)}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                status === s ? "bg-red-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                status === s ? "bg-[var(--wave-red)] text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
               }`}
             >
               {s === "all" ? "All" : STATUS_LABEL[s]}
