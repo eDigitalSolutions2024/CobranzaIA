@@ -694,3 +694,25 @@ export async function markNeedsAdminSent(req: Request, res: Response) {
     res.status(500).json({ message: "Error al marcar como enviado" })
   }
 }
+
+// "Mark handled" — el gestor ya atendió el caso asignado a Collector Assistance (disputa, petición del cliente o
+// Follow up sin solución, ver followUpEscalation.service.ts): el cliente vuelve al ciclo automático. Cierra los
+// tickets de escalamiento abiertos.
+export async function releaseCollectorCase(req: Request, res: Response) {
+  try {
+    const { id } = req.params
+    const client = await Client.findByIdAndUpdate(
+      id,
+      { collectorAssignedAt: null, escalationReason: null, followUp: null },
+      { new: true }
+    )
+    if (!client) return res.status(404).json({ message: "Cliente no encontrado" })
+    // Si la acción pendiente era la revisión del gestor, el siguiente paso vuelve a ser una llamada
+    await Client.findOneAndUpdate({ _id: id, nextAction: "Collector review" }, { nextAction: "New Call" })
+    await Ticket.updateMany({ clientId: client._id, reason: "collector_escalation", status: "open" }, { status: "closed" })
+    res.json(client)
+  } catch (error) {
+    console.error("[Clients] releaseCollectorCase error:", error)
+    res.status(500).json({ message: "Error al liberar el caso de Collector Assistance" })
+  }
+}

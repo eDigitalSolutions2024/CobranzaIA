@@ -57,7 +57,7 @@ export default function CallDetailModal({ call, onClose }: Props) {
                 <span className="text-xs text-emerald-400 animate-pulse">● Live</span>
               )}
               <span className="rounded-full px-3 py-1 text-xs font-medium bg-zinc-500/10 text-zinc-400">
-                {call.triggeredBy === "auto" ? "Automatic" : "Manual"}
+                {call.triggeredBy === "auto" ? "Automatic" : call.triggeredBy === "followup" ? "Follow-up" : "Manual"}
               </span>
               {call.detectedVoicemail && (
                 <span className="rounded-full px-3 py-1 text-xs font-medium bg-purple-500/10 text-purple-400">

@@ -1,36 +1,33 @@
 import { useEffect, useState } from "react"
 import { exportCallsExcel } from "../services/calls"
-import { ReportFilterFields, useClientFilterOptions, EMPTY_REPORT_FILTERS, type ReportFilterValue } from "./ReportFilters"
-import { CALL_STATUS_LABEL } from "./CallTimeline"
+import MultiSelect from "./MultiSelect"
+import { CALL_DISPOSITIONS, CALL_STATUS_LABEL, dispositionLabel } from "./CallTimeline"
 
 const STATUS_OPTIONS = ["all", "in_progress", "completed", "requires_human", "failed"] as const
+
+const SELECT_CLASS = "mt-1 w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white"
 
 interface Props {
   isOpen: boolean
   onClose: () => void
-  initialFilters: ReportFilterValue
+  // Valores con los que arranca el modal: lo que ya estaba elegido en la página Calls
   initialStatus: string
-  initialSearch: string
-  // Filtros propios de la llamada de la tabla (disposition, promesa, tipo, fechas): el reporte los respeta
-  extraFilters?: { disposition: string; promise: string; type: string; from: string; to: string }
+  initialDisposition: string
 }
 
-// Se abre al hacer clic en "Export to Excel" en Calls — pide los 5 filtros de "Reporte
-// Filters" (Country/Collector ID/Team/Team Leader/Collector) ahí mismo, en vez de
-// depender de lo que ya esté filtrado en la tabla (aunque arranca con esos valores como
-// punto de partida, para no obligar a re-elegir algo que la persona ya había filtrado).
-export default function ExportCallsModal({ isOpen, onClose, initialFilters, initialStatus, initialSearch, extraFilters }: Props) {
-  const [filters, setFilters] = useState<ReportFilterValue>(initialFilters)
+// Se abre al hacer clic en "Export to Excel" en Calls. Solo pide el estado y las disposiciones
+// (Follow up, Payment scheduled, No answer…), para descargar solo lo que el usuario necesita.
+// Lo que se elige aquí es lo único que filtra el reporte: los demás filtros de la página no se
+// arrastran en silencio. Arranca con el estado y las disposiciones que ya había en la tabla.
+export default function ExportCallsModal({ isOpen, onClose, initialStatus, initialDisposition }: Props) {
   const [status, setStatus] = useState(initialStatus)
-  const [search, setSearch] = useState(initialSearch)
+  const [disposition, setDisposition] = useState(initialDisposition)
   const [exporting, setExporting] = useState(false)
-  const options = useClientFilterOptions()
 
   useEffect(() => {
     if (!isOpen) return
-    setFilters(initialFilters)
     setStatus(initialStatus)
-    setSearch(initialSearch)
+    setDisposition(initialDisposition)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen])
 
@@ -39,7 +36,7 @@ export default function ExportCallsModal({ isOpen, onClose, initialFilters, init
   async function handleExport() {
     setExporting(true)
     try {
-      await exportCallsExcel({ status, search, ...filters, ...(extraFilters ?? {}) })
+      await exportCallsExcel({ status, disposition })
       onClose()
     } catch {
       alert("Error exporting Excel file")
@@ -52,12 +49,14 @@ export default function ExportCallsModal({ isOpen, onClose, initialFilters, init
     <div onClick={onClose} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex flex-col overflow-hidden"
+        className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex flex-col"
       >
         <div className="flex items-center justify-between gap-4 border-b border-zinc-800 p-5">
           <div>
             <h2 className="text-lg font-semibold text-white">Export calls to Excel</h2>
-            <p className="text-sm text-zinc-400 mt-0.5">Choose filters for the report, or leave them empty to export everything.</p>
+            <p className="text-sm text-zinc-400 mt-0.5">
+              Choose the status and dispositions to download, or leave them empty to export everything.
+            </p>
           </div>
           <button onClick={onClose} className="shrink-0 text-zinc-500 hover:text-white transition-colors text-xl leading-none">
             ✕
@@ -67,11 +66,7 @@ export default function ExportCallsModal({ isOpen, onClose, initialFilters, init
         <div className="p-5 space-y-4">
           <div>
             <label className="text-xs text-zinc-500">Status</label>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="mt-1 w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white"
-            >
+            <select value={status} onChange={(e) => setStatus(e.target.value)} className={SELECT_CLASS}>
               {STATUS_OPTIONS.map((s) => (
                 <option key={s} value={s}>{s === "all" ? "All statuses" : CALL_STATUS_LABEL[s] ?? s}</option>
               ))}
@@ -79,33 +74,14 @@ export default function ExportCallsModal({ isOpen, onClose, initialFilters, init
           </div>
 
           <div>
-            <label className="text-xs text-zinc-500">Search by client or phone</label>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Optional"
-              className="mt-1 w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white placeholder:text-zinc-500"
+            <label className="text-xs text-zinc-500">Dispositions</label>
+            <MultiSelect
+              label="All dispositions"
+              value={disposition}
+              onChange={setDisposition}
+              options={CALL_DISPOSITIONS.map((d) => ({ value: d, label: dispositionLabel(d) }))}
+              className={SELECT_CLASS}
             />
-          </div>
-
-          <div>
-            <label className="text-xs text-zinc-500">Report filters</label>
-            <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <ReportFilterFields
-                value={filters}
-                onChange={setFilters}
-                options={options}
-                selectClassName="rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white w-full"
-              />
-            </div>
-            {Object.values(filters).some((v) => v !== "") && (
-              <button
-                onClick={() => setFilters(EMPTY_REPORT_FILTERS)}
-                className="mt-2 text-xs text-zinc-500 hover:text-white transition-colors"
-              >
-                Clear filters
-              </button>
-            )}
           </div>
         </div>
 

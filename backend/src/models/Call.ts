@@ -53,7 +53,7 @@ export interface ICall extends Document {
   // Si la disparó el botón "Call" del dashboard o el scheduler de llamadas automáticas
   // (ver autoCallScheduler.service.ts) — determina si el resultado de la llamada avanza
   // el ciclo automático del cliente (voice.controller.ts, advanceAutoCallCycle).
-  triggeredBy: 'manual' | 'auto'
+  triggeredBy: 'manual' | 'auto' | 'followup'
   // true si el agente identificó que contestó un buzón de voz (ver voiceStream.controller.ts) —
   // señal directa y confiable, en vez de inferirlo contando renglones del transcript (el
   // saludo grabado del buzón se transcribe como "user" y hacía que se contara como
@@ -78,6 +78,12 @@ export interface ICall extends Document {
   // la acción sugerida que resulta de ella — se copia también a Client.nextAction.
   disposition?: string | null
   nextAction?: string | null
+  // Segundo intento de un Follow up (triggeredBy 'followup'): la llamada que lo originó. Si el segundo intento no
+  // resolvió y se escaló a Collector Assistance, originalDisposition guarda lo que la llamada había sido, y
+  // escalationReason por qué se escaló (ver followUpEscalation.service.ts).
+  followUpOfCallId?: mongoose.Types.ObjectId | null
+  originalDisposition?: string | null
+  escalationReason?: 'dispute' | 'customer_request' | 'followup_unresolved' | null
   // Grabación de la llamada en Twilio — se pide al crearla (outbound) o justo al
   // contestar (inbound, ver handleIncoming) y se guarda cuando llega el statusCallback
   // de la grabación (RecordingStatus:completed). El audio real se sirve a través de
@@ -124,7 +130,10 @@ const CallSchema = new Schema<ICall>(
     requiresHuman: { type: Boolean, default: false },
     identityConfirmed: { type: Boolean, default: false },
     callSid: { type: String, required: true, unique: true },
-    triggeredBy: { type: String, enum: ['manual', 'auto'], default: 'manual' },
+    triggeredBy: { type: String, enum: ['manual', 'auto', 'followup'], default: 'manual' },
+    followUpOfCallId: { type: Schema.Types.ObjectId, ref: 'Call', default: null },
+    originalDisposition: { type: String, default: null },
+    escalationReason: { type: String, enum: ['dispute', 'customer_request', 'followup_unresolved', null], default: null },
     detectedVoicemail: { type: Boolean, default: false },
     voiceEngine: { type: String, enum: ['openai', 'elevenlabs', null], default: null },
     // Estado y variables de la máquina de estados (backend/src/flows/cobranza_ai_v1.json)

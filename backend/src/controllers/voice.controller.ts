@@ -9,6 +9,7 @@ import { findClientByPhone } from '../services/customerLookup.service'
 import { analyzeCallTranscript, ClientInfo } from '../services/claudeVoice.service'
 import { DispositionStatus, nextActionFor } from '../config/disposition'
 import { runAction } from '../services/flowActions.service'
+import { applyFollowUpRules } from '../services/followUpEscalation.service'
 import { CLIENT_REPORT_FIELDS, buildClientReportFilter, splitFilterValues } from '../utils/reportFilters'
 import { CALL_EXPORT_COLUMNS, CLIENT_EXPORT_COLUMNS, toCallExportRow, toClientExportRow } from '../utils/clientExport'
 import AutomationSettings, { DEFAULT_RECORDING_RETENTION, type RecordingRetentionConfig, type VoiceEngine } from '../models/AutomationSettings'
@@ -22,10 +23,10 @@ import { AUTO_CYCLE_STEPS, VOICE_MAX_CALL_SECONDS, PREDIAL_EXTENSION } from '../
 //
 // Definiciones del negocio de cada estado (las usa esta función):
 //  - Extension required: es necesaria una extensión (menú automático / no se llegó a la persona).
-//  - Follow up: seguimiento a CUALQUIER tema o requerimiento (llamada agendada, aclaración o
-//    disputa con ticket, nuevo responsable de la cuenta sin teléfono).
-//  - Prefers CAS support: el cliente pide/prefiere contacto personalizado con un asesor o
-//    cobrador. NO es una disputa ni un número equivocado.
+//  - Follow up: llamada agendada o nuevo responsable de la cuenta sin teléfono. Tiene un segundo intento del
+//    agente y, si no se resuelve, pasa a Collector Assistance (ver followUpEscalation.service.ts).
+//  - Prefers CAS support (se muestra como Collector Assistance): el cliente pide un asesor o cobrador, hay una
+//    disputa con ticket, o un Follow up no se resolvió en el segundo intento. NO es un número equivocado.
 //  - Wrong number: número equivocado.  Phone number updated: se obtuvo un teléfono nuevo.
 //  - Email contact only: el cliente pide ser contactado solo por correo.
 //  - Invoices received: el cliente confirmó que recibió sus facturas (sin un resultado mayor).
@@ -43,10 +44,10 @@ export function computeVoiceDisposition(calledFunctions: string[], relevantTurnC
     return 'Invoice, statement or contract required'
   }
   if (called('telefono_actualizado')) return 'Phone number updated'
-  // Disputa/aclaración (no reconoce el adeudo, monto o factura incorrectos...), llamada
-  // agendada o nuevo responsable sin teléfono: seguimiento a un tema. Va antes que
-  // requerir_humano porque las disputas llaman a las dos.
-  if (called('marcar_ticket_aclaracion') || called('programar_llamada') || called('actualizar_contacto')) {
+  // Una disputa va directo a Collector Assistance (sin segundo intento del agente, que no la resuelve). Gana sobre
+  // programar_llamada/actualizar_contacto si en la misma llamada hubo las dos.
+  if (called('marcar_ticket_aclaracion')) return 'Prefers CAS support'
+  if (called('programar_llamada') || called('actualizar_contacto')) {
     return 'Follow up'
   }
   if (called('requerir_humano')) return 'Prefers CAS support'
@@ -253,7 +254,7 @@ function buildCallExtraFilter(query: Record<string, any>): Record<string, any> {
   if (dispositions.length > 0) filter.disposition = { $in: dispositions }
   if (query.promise === 'yes') filter.promiseDate = { $ne: null }
   if (query.promise === 'no') filter.promiseDate = null
-  if (query.type === 'auto' || query.type === 'manual') filter.triggeredBy = query.type
+  if (query.type === 'auto' || query.type === 'manual' || query.type === 'followup') filter.triggeredBy = query.type
   const from = String(query.from ?? '')
   const to = String(query.to ?? '')
   const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
@@ -401,7 +402,8 @@ export async function exportCalls(req: Request, res: Response): Promise<void> {
     sheet.getRow(1).font = { bold: true }
 
     const buffer = await workbook.xlsx.writeBuffer()
-    const filename = `cobranzaia-calls-${new Date().toISOString().slice(0, 10)}.xlsx`
+    // Fecha en hora de CDMX (UTC-6): en UTC, una exportación en la noche salía con la fecha de mañana
+    const filename = `cobranzaia-calls-${new Date(Date.now() - 6 * 3600_000).toISOString().slice(0, 10)}.xlsx`
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
     res.send(Buffer.from(buffer))
@@ -420,8 +422,10 @@ export async function exportCalls(req: Request, res: Response): Promise<void> {
 export async function placeOutboundCall(
   clientId: string,
   publicUrl: string,
-  triggeredBy: 'manual' | 'auto' = 'manual',
-  engine: VoiceEngine = 'openai'
+  triggeredBy: 'manual' | 'auto' | 'followup' = 'manual',
+  engine: VoiceEngine = 'openai',
+  // Solo para 'followup': la llamada que dejó al cliente en Follow up
+  followUpOfCallId: mongoose.Types.ObjectId | null = null
 ): Promise<{ callSid: string; status: string }> {
   const client = await Client.findById(clientId).lean()
   if (!client) throw new Error('Cliente no encontrado')
@@ -472,6 +476,7 @@ export async function placeOutboundCall(
     requiresHuman: false,
     triggeredBy,
     voiceEngine: engine,
+    ...(followUpOfCallId ? { followUpOfCallId } : {}),
   })
 
   return { callSid: call.sid, status: call.status }
@@ -723,6 +728,7 @@ export async function processCallStatusUpdate(
     if (call) {
       await applyDisposition(call._id as mongoose.Types.ObjectId, call.clientId, 'No answer')
       if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, 'No answer')
+      await applyFollowUpRules(call, 'No answer')
       await applyRecordingRetention(call._id as mongoose.Types.ObjectId, false)
     }
   } else if (callStatus === 'completed') {
@@ -753,6 +759,7 @@ export async function processCallStatusUpdate(
     if (call.triggeredBy === 'auto') await advanceAutoCallCycle(call.clientId, disposition)
 
     if (relevantTurns.length < 2) {
+      await applyFollowUpRules(call, disposition)
       await applyRecordingRetention(call._id as mongoose.Types.ObjectId, false)
       return
     }
@@ -854,6 +861,9 @@ export async function processCallStatusUpdate(
     // La grabación solo se conserva si la llamada duró más de 30 s Y terminó en negativa de
     // pago, seguimiento, promesa agendada o pago en proceso (marcada en vivo por el agente o por la red de
     // seguridad de arriba).
+    // Segundo intento de Follow up / escalamiento a Collector Assistance (ver followUpEscalation.service.ts)
+    finalDisposition = await applyFollowUpRules(call, finalDisposition)
+
     const retention = await loadRecordingRetention()
     const keepRecording =
       retention.dispositions.includes(finalDisposition) && (call.durationSeconds ?? 0) > retention.minDurationSeconds

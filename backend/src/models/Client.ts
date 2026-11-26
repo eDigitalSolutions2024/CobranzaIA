@@ -130,6 +130,31 @@ type:String,
 default:null
 },
 
+// Seguimiento de un Follow up (ver followUpEscalation.service.ts): attempt 1 = la llamada que quedó en Follow up,
+// 2 = el segundo intento ya disparado; noAnswerRetries cuenta el reintento si el segundo intento no contestó.
+followUp:{
+type:{
+attempt:{type:Number,default:1},
+sourceCallId:{type:Schema.Types.ObjectId,ref:"Call",default:null},
+nextAt:{type:Date,default:null},
+noAnswerRetries:{type:Number,default:0}
+},
+default:null,
+_id:false
+},
+
+// Asignado a Collector Assistance (gestor humano): no se le llama en automático hasta que se libere (gestor) o
+// cambie el mes. escalationReason: 'dispute' | 'customer_request' | 'followup_unresolved'
+collectorAssignedAt:{
+type:Date,
+default:null
+},
+
+escalationReason:{
+type:String,
+default:null
+},
+
 // Extensión del conmutador de este cliente, una vez detectada (ver marcar_extension en
 // voiceStream.controller.ts) — las llamadas futuras la marcan directo (ver
 // placeOutboundCall en voice.controller.ts), sin tener que redetectarla cada vez.

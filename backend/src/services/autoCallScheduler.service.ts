@@ -12,6 +12,7 @@
 // de Meta (mensajes). Procesando en lotes varias veces al día, la cola se va vaciando
 // sola sin necesitar infraestructura de colas aparte.
 import cron from 'node-cron'
+import mongoose from 'mongoose'
 import Client from '../models/Client'
 import Call from '../models/Call'
 import AutomationSettings from '../models/AutomationSettings'
@@ -19,6 +20,7 @@ import { placeOutboundCall } from '../controllers/voice.controller'
 import { prepareWhatsappMessage } from './whatsappService'
 import { AUTO_CYCLE_STEPS } from '../config/autoCall'
 import { activeServiceOutage } from './serviceHealth'
+import { releaseCollectorCases } from './followUpEscalation.service'
 
 const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 12
 // Pausa entre un disparo y el siguiente dentro del mismo lote (default 120 s: 12 llamadas
@@ -143,6 +145,8 @@ async function runAutoCallCycle(): Promise<void> {
     // Llamada de seguimiento pendiente que el propio cliente pidió ("háblame el jueves") —
     // no se le llama antes por el ciclo normal; la dispara dispatchScheduledCallbacks.
     scheduledCallbackAt: null,
+    // Asignado a Collector Assistance (disputa, petición del cliente o Follow up sin solución): lo atiende un gestor
+    collectorAssignedAt: null,
     $and: [{ $or: [{ collectionExcludedUntil: null }, { collectionExcludedUntil: { $lte: now } }] }],
     $or: [
       { autoCallCycleStartAt: null },
@@ -247,9 +251,10 @@ async function runAutoCallCycle(): Promise<void> {
 }
 
 // Llamadas de seguimiento agendadas por el agente (programar_llamada → crm.schedule_callback)
-// cuando el cliente pidió que le llamen en un día/hora. Independiente del ciclo de 4
-// pasos: se dispara con triggeredBy 'manual' para no avanzar ni reiniciar ese ciclo, y
-// respeta el mismo interruptor global de llamadas automáticas.
+// cuando el cliente pidió que le llamen en un día/hora, y el segundo intento de los Follow up (ver
+// followUpEscalation.service.ts). Independiente del ciclo de 4 pasos: se dispara con triggeredBy 'manual' (o
+// 'followup' si el cliente tiene un seguimiento abierto) para no avanzar ni reiniciar ese ciclo, y respeta el
+// mismo interruptor global de llamadas automáticas, el horario laboral y la pausa por servicio caído.
 async function dispatchScheduledCallbacks(): Promise<void> {
   const settings = await AutomationSettings.findById('global').lean()
   if (!settings?.autoCallsEnabled) return
@@ -257,10 +262,16 @@ async function dispatchScheduledCallbacks(): Promise<void> {
   const publicUrl = (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
   if (!publicUrl) return
 
+  // Antes corría a cualquier hora (también de noche o en domingo): ahora solo lun-sáb 9:00-18:59 CDMX, como el
+  // ciclo. Lo que venció fuera de horario sale en cuanto abre.
+  if (!TEST_MODE && !isBusinessHoursMexico(new Date())) return
+  if (activeServiceOutage()) return
+
   const now = new Date()
   const due = await Client.find({
     scheduledCallbackAt: { $ne: null, $lte: now },
     blacklistStatus: { $ne: 'confirmed' },
+    collectorAssignedAt: null,
   }).limit(BATCH_SIZE).lean()
 
   for (const client of due) {
@@ -272,20 +283,47 @@ async function dispatchScheduledCallbacks(): Promise<void> {
     )
     if (!claimed) continue
 
-    // Ya pagó / pago en proceso mientras tanto, o ya no debe nada: no se llama.
+    // Ya pagó / pago en proceso mientras tanto, o ya no debe nada: no se llama (y el seguimiento se cierra).
     const excluded = client.collectionExcludedUntil && (client.collectionExcludedUntil as Date) > now
-    if (!client.debt || (client.debt as number) <= 0 || excluded) continue
+    if (!client.debt || (client.debt as number) <= 0 || excluded) {
+      if (client.followUp) await Client.findByIdAndUpdate(client._id, { followUp: null })
+      continue
+    }
 
     const activeCall = await Call.findOne({ phone: client.phone, status: 'in_progress' }).lean()
     if (activeCall) continue
 
+    const followUp = client.followUp as { attempt?: number; sourceCallId?: mongoose.Types.ObjectId | null } | null | undefined
+    const isFollowUp = Boolean(followUp?.attempt)
     try {
-      await placeOutboundCall(String(client._id), publicUrl, 'manual', settings.voiceEngine ?? 'openai')
-      console.log(`[AutoCall] Llamada de seguimiento agendada disparada: ${client.name} (${client.phone})`)
+      if (isFollowUp) await Client.findByIdAndUpdate(client._id, { 'followUp.attempt': 2 })
+      await placeOutboundCall(
+        String(client._id),
+        publicUrl,
+        isFollowUp ? 'followup' : 'manual',
+        settings.voiceEngine ?? 'openai',
+        isFollowUp ? (followUp?.sourceCallId ?? null) : null
+      )
+      console.log(`[AutoCall] ${isFollowUp ? 'Segundo intento de Follow up' : 'Llamada de seguimiento agendada'} disparada: ${client.name} (${client.phone})`)
     } catch (err) {
       console.error(`[AutoCall] Error en llamada agendada de ${client.name} (${client._id}):`, err)
     }
   }
+}
+
+// Lun-sáb 9:00-18:59 en hora de CDMX (el mismo horario del cron del ciclo)
+function isBusinessHoursMexico(now: Date): boolean {
+  const wall = new Date(now.getTime() - 6 * 3600_000)
+  const day = wall.getUTCDay()
+  const hour = wall.getUTCHours()
+  return day !== 0 && hour >= 9 && hour <= 18
+}
+
+// Las facturas son mensuales: el día 1 se liberan los clientes asignados a Collector Assistance el mes anterior,
+// para que vuelvan al ciclo con la factura nueva (el gestor también puede liberarlos antes, ver releaseCollectorCases).
+async function releaseCollectorCasesMonthly(): Promise<void> {
+  const released = await releaseCollectorCases()
+  if (released > 0) console.log(`[AutoCall] Mes nuevo: ${released} cliente(s) liberados de Collector Assistance.`)
 }
 
 // Nueva semana, ciclo en cero: el lunes 00:00 (CDMX) los contadores de los clientes cuyo ciclo viene de
@@ -320,6 +358,14 @@ export function startAutoCallScheduler(): void {
     { timezone: 'America/Mexico_City' }
   )
   resetWeeklyCycle().catch((err) => console.error('[AutoCall] Error reiniciando el ciclo semanal:', err))
+
+  cron.schedule(
+    '0 0 1 * *',
+    () => {
+      releaseCollectorCasesMonthly().catch((err) => console.error('[AutoCall] Error liberando Collector Assistance:', err))
+    },
+    { timezone: 'America/Mexico_City' }
+  )
 
   cron.schedule(
     '* * * * *',

@@ -12,6 +12,7 @@ import {
   deleteClient,
   getClientFilterOptions,
   markNeedsAdminSent,
+  releaseCollectorCase,
 } from "../controllers/clientController"
 import {
   createInvoice,
@@ -61,6 +62,7 @@ router.patch("/clients/:id", requireAuth, updateClient)
 router.post("/clients/import", requireAuth, uploadClientsFile, importClients)
 router.delete("/clients/:id", requireAuth, deleteClient)
 router.post("/clients/:id/needs-admin/sent", requireAuth, markNeedsAdminSent)
+router.post("/clients/:id/collector/release", requireAuth, releaseCollectorCase)
 
 router.post("/clients/:id/invoices", requireAuth, createInvoice)
 router.post("/invoices/import", requireAuth, uploadClientsFile, importInvoices)

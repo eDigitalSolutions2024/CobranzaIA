@@ -23,6 +23,25 @@ const DISPOSITION_LABEL: Record<string, string> = {
   "Prefers CAS support": "Collector Assistance",
 }
 
+// Opciones de los filtros de disposición (Calls y export): catálogo de backend/src/config/disposition.ts sin las que
+// ya no se filtran (Need invoice, Email contact only, Wrong number). Se siguen guardando en la base de datos.
+export const CALL_DISPOSITIONS = [
+  "No answer",
+  "Voice mail",
+  "Customer hung up",
+  "Contact made - No resolution",
+  "Follow up",
+  "Payment scheduled",
+  "Invoices received",
+  "Extension required",
+  "Invoice, statement or contract required",
+  "Payment received",
+  "Phone number updated",
+  "Prefers CAS support",
+  "Payment refused",
+  "Payment in process",
+]
+
 export function dispositionLabel(disposition?: string | null): string {
   if (!disposition) return "—"
   return DISPOSITION_LABEL[disposition] ?? disposition

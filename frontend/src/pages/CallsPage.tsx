@@ -4,31 +4,12 @@ import CallDetailModal from "../components/CallDetailModal"
 import ExportCallsModal from "../components/ExportCallsModal"
 import MultiSelect, { splitSelected } from "../components/MultiSelect"
 import RecordingSettingsModal from "../components/RecordingSettingsModal"
-import { CALL_STATUS_COLOR, CALL_STATUS_LABEL, dispositionLabel, formatDuration } from "../components/CallTimeline"
+import { CALL_STATUS_COLOR, CALL_STATUS_LABEL, CALL_DISPOSITIONS, dispositionLabel, formatDuration } from "../components/CallTimeline"
 import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
 import { ChevronDown } from "lucide-react"
 
 const STATUS_FILTERS = ["all", "in_progress", "completed", "requires_human", "failed"] as const
 const PAGE_SIZE = 100
-
-// Opciones del filtro: catálogo de backend/src/config/disposition.ts sin las que ya no se filtran
-// (Need invoice, Email contact only, Wrong number). Se siguen guardando en la base de datos.
-const DISPOSITIONS = [
-  "No answer",
-  "Voice mail",
-  "Customer hung up",
-  "Contact made - No resolution",
-  "Follow up",
-  "Payment scheduled",
-  "Invoices received",
-  "Extension required",
-  "Invoice, statement or contract required",
-  "Payment received",
-  "Phone number updated",
-  "Prefers CAS support",
-  "Payment refused",
-  "Payment in process",
-]
 
 type CallExtraFilters = { disposition: string; promise: string; type: string; from: string; to: string }
 const EMPTY_EXTRA: CallExtraFilters = { disposition: "", promise: "", type: "", from: "", to: "" }
@@ -183,7 +164,7 @@ export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
           label="All dispositions"
           value={extra.disposition}
           onChange={(v) => changeExtra("disposition", v)}
-          options={DISPOSITIONS.map((d) => ({ value: d, label: dispositionLabel(d) }))}
+          options={CALL_DISPOSITIONS.map((d) => ({ value: d, label: dispositionLabel(d) }))}
         />
         <div className="relative">
         <select className={`${FILTER_CLASS} min-w-44 appearance-none pr-9`} value={extra.promise} onChange={(e) => changeExtra("promise", e.target.value)}>
@@ -195,9 +176,10 @@ export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
         </div>
         <div className="relative">
         <select className={`${FILTER_CLASS} min-w-36 appearance-none pr-9`} value={extra.type} onChange={(e) => changeExtra("type", e.target.value)}>
-          <option value="">Automatic + manual</option>
+          <option value="">All types</option>
           <option value="auto">Automatic</option>
           <option value="manual">Manual</option>
+          <option value="followup">Follow-up</option>
         </select>
         <ChevronDown size={24} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white" />
         </div>
@@ -260,7 +242,7 @@ export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
 
                   <td className="py-4">
                     <span className="rounded-full px-3 py-1 text-xs bg-zinc-500/10 text-zinc-400">
-                      {call.triggeredBy === "auto" ? "Automatic" : "Manual"}
+                      {call.triggeredBy === "auto" ? "Automatic" : call.triggeredBy === "followup" ? "Follow-up" : "Manual"}
                     </span>
                   </td>
 
@@ -339,10 +321,8 @@ export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
       <ExportCallsModal
         isOpen={exportModalOpen}
         onClose={() => setExportModalOpen(false)}
-        initialFilters={reportFilters}
         initialStatus={statusFilter}
-        initialSearch={search}
-        extraFilters={extra}
+        initialDisposition={extra.disposition}
       />
     </div>
   )
