@@ -2,6 +2,7 @@ import cron from 'node-cron'
 import Reminder from '../models/Reminder'
 import Client from '../models/Client'
 import { prepareWhatsappMessage } from './whatsappService'
+import { PROMISE_EXCLUSION_REASON } from './paymentExclusion.service'
 
 // Errores que prepareWhatsappMessage lanza a propósito por horario hábil / tope diario
 // (ver whatsappService.ts) — NO son una falla real, se debe reintentar en la siguiente
@@ -24,8 +25,9 @@ async function dispatchDueReminders(): Promise<void> {
       // recordatorio — ver tarjeta "Exclusión automática de clientes del ciclo mensual
       // de cobranza". Se deja 'pending' (no 'failed') — si la exclusión termina antes de
       // que se agote la promesa, el recordatorio sigue teniendo sentido y se manda solo.
+      // Excluido por una promesa de pago: ahí el recordatorio es justo el de esa promesa y sí se manda.
       const excludedUntil = client.collectionExcludedUntil as Date | null
-      if (excludedUntil && excludedUntil > new Date()) {
+      if (excludedUntil && excludedUntil > new Date() && client.collectionExclusionReason !== PROMISE_EXCLUSION_REASON) {
         console.log(`[Reminders] Recordatorio ${reminder._id} pospuesto — ${client.name} excluido del ciclo (${client.collectionExclusionReason}).`)
         continue
       }

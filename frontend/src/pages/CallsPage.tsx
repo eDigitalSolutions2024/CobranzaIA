@@ -4,6 +4,7 @@ import CallDetailModal from "../components/CallDetailModal"
 import ExportCallsModal from "../components/ExportCallsModal"
 import MultiSelect, { splitSelected } from "../components/MultiSelect"
 import RecordingSettingsModal from "../components/RecordingSettingsModal"
+import PaymentAuditModal from "../components/PaymentAuditModal"
 import { CALL_STATUS_COLOR, CALL_STATUS_LABEL, CALL_DISPOSITIONS, dispositionLabel, formatDuration } from "../components/CallTimeline"
 import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
 import { ChevronDown } from "lucide-react"
@@ -27,6 +28,7 @@ export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
   const [reportFilters, setReportFilters] = useState<ReportFilterValue>(preset?.reportFilters ?? EMPTY_REPORT_FILTERS)
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [recordingModalOpen, setRecordingModalOpen] = useState(false)
+  const [auditModalOpen, setAuditModalOpen] = useState(false)
   const [counts, setCounts] = useState<CallCounts | null>(null)
   const [extra, setExtra] = useState<CallExtraFilters>({
     ...EMPTY_EXTRA,
@@ -101,6 +103,12 @@ export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
           <p className="mt-2 text-zinc-400">Collection call history</p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setAuditModalOpen(true)}
+            className="rounded-xl bg-blue-600 px-5 py-3 font-medium hover:bg-blue-500 cursor-pointer"
+          >
+            Review payments
+          </button>
           <button
             onClick={() => setRecordingModalOpen(true)}
             className="rounded-xl bg-zinc-800 px-5 py-3 font-medium hover:bg-zinc-700 cursor-pointer"
@@ -317,6 +325,15 @@ export default function CallsPage({ preset }: { preset?: CallsPreset | null }) {
       <CallDetailModal call={selectedCall} onClose={() => setSelectedCallId(null)} />
 
       <RecordingSettingsModal isOpen={recordingModalOpen} onClose={() => setRecordingModalOpen(false)} />
+
+      <PaymentAuditModal
+        isOpen={auditModalOpen}
+        onClose={() => setAuditModalOpen(false)}
+        initialDisposition={extra.disposition}
+        initialFrom={extra.from}
+        initialTo={extra.to}
+        onChanged={load}
+      />
 
       <ExportCallsModal
         isOpen={exportModalOpen}

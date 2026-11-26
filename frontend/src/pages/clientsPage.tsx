@@ -10,6 +10,8 @@ import ExportClientsModal from "../components/ExportClientsModal"
 import AutoCallToggle from "../components/AutoCallToggle"
 import AutoCallEngineToggle from "../components/AutoCallEngineToggle"
 import ManualCallFlowSelect from "../components/ManualCallFlowSelect"
+import PaymentBadge from "../components/PaymentBadge"
+import { hasRegisteredPayment } from "../components/paymentStatus"
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronUp } from "lucide-react";
 import { Switch } from "@mui/material"
 
@@ -356,7 +358,9 @@ export default function ClientsPage() {
                     className={`border-b transition-colors ${
                       client.requiresHuman
                         ? "border-red-900/60 bg-red-500/10 hover:bg-red-500/20"
-                        : client.needsAdmin
+                        : hasRegisteredPayment(client)
+                          ? "border-green-900/60 bg-green-500/10 hover:bg-green-500/20"
+                          : client.needsAdmin
                           ? "border-yellow-900/60 bg-yellow-500/10 hover:bg-yellow-500/20"
                           : "border-zinc-800 hover:bg-zinc-800/40"
                     }`}
@@ -389,6 +393,7 @@ export default function ClientsPage() {
                             Needs admin
                           </span>
                         )}
+                        {hasRegisteredPayment(client) && <PaymentBadge client={client} />}
                       </div>
                     </td>
                     <td className="py-4 text-zinc-400">{client.phone}</td>
@@ -431,7 +436,7 @@ export default function ClientsPage() {
                           title={`${client.collectionExclusionReason ?? "Excluido"} — pausado hasta el ${new Date(
                             client.collectionExcludedUntil
                           ).toLocaleDateString("en-US")}`}
-                          className="ml-2 rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-400"
+                          className="ml-2 rounded-full bg-green-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-400"
                         >
                           Excluded
                         </span>

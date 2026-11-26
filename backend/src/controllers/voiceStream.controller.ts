@@ -6,6 +6,7 @@ import Client from '../models/Client'
 import { runAction } from '../services/flowActions.service'
 import { OpenAIRealtimeSession, RealtimeFunctionCall, RealtimeUsage } from '../services/openaiRealtime.service'
 import { buildVoiceSystemPrompt, buildTranscriptionPrompt, ClientInfo, loadManualFlowOverride } from '../services/voiceConversation.service'
+import { buildFollowUpNote } from '../services/followUpEscalation.service'
 import { HOLD_MAX_SECONDS } from '../config/autoCall'
 import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
@@ -659,6 +660,7 @@ export async function handleMediaStream(twilioWs: WebSocket, _req: IncomingMessa
           contact: (client.contact as string) ?? null,
           invoices,
           flowOverride: await loadManualFlowOverride(call.triggeredBy),
+          followUpNote: await buildFollowUpNote(call),
         }
       : null
 

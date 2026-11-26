@@ -137,7 +137,9 @@ type:{
 attempt:{type:Number,default:1},
 sourceCallId:{type:Schema.Types.ObjectId,ref:"Call",default:null},
 nextAt:{type:Date,default:null},
-noAnswerRetries:{type:Number,default:0}
+noAnswerRetries:{type:Number,default:0},
+// La hora del segundo intento la pidió el cliente: se respeta aunque ya no queden llamadas esa semana
+requestedByCustomer:{type:Boolean,default:false}
 },
 default:null,
 _id:false

@@ -1,6 +1,10 @@
+import PaymentBadge from "./PaymentBadge"
+
 interface Client {
   nombre: string
   needsAdmin?: boolean
+  // Datos del cliente si registró un pago este mes (fila y etiqueta en verde)
+  pago?: any
   deuda: string
   estado: string
   riesgo: string
@@ -67,7 +71,13 @@ export default function ClientsTable({ clients }: Props) {
             {clients.map((client, index) => (
               <tr
                 key={index}
-                className={`border-b ${client.needsAdmin ? "border-yellow-900/60 bg-yellow-500/10" : "border-zinc-800"}`}
+                className={`border-b ${
+                  client.pago
+                    ? "border-green-900/60 bg-green-500/10"
+                    : client.needsAdmin
+                      ? "border-yellow-900/60 bg-yellow-500/10"
+                      : "border-zinc-800"
+                }`}
               >
 
                 <td className="py-4 font-medium">
@@ -78,6 +88,7 @@ export default function ClientsTable({ clients }: Props) {
                         Needs admin
                       </span>
                     )}
+                    {client.pago && <PaymentBadge client={client.pago} />}
                   </div>
                 </td>
 

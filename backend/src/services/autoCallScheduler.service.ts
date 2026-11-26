@@ -7,7 +7,7 @@
 // ya existen, aunque cambien más adelante).
 //
 // Corre en lotes (AUTO_CALL_BATCH_SIZE, default 12) cada hora en punto, solo en
-// horario laboral (lun-sáb 9am-7pm hora CDMX) — con potencialmente cientos de clientes,
+// horario laboral (lun-vie 9am-7pm hora CDMX) — con potencialmente cientos de clientes,
 // disparar todo de golpe saturaría la cuenta de Twilio/OpenAI (llamadas) y el rate limit
 // de Meta (mensajes). Procesando en lotes varias veces al día, la cola se va vaciando
 // sola sin necesitar infraestructura de colas aparte.
@@ -20,7 +20,8 @@ import { placeOutboundCall } from '../controllers/voice.controller'
 import { prepareWhatsappMessage } from './whatsappService'
 import { AUTO_CYCLE_STEPS } from '../config/autoCall'
 import { activeServiceOutage } from './serviceHealth'
-import { releaseCollectorCases } from './followUpEscalation.service'
+import { planCallback, releaseCollectorCases } from './followUpEscalation.service'
+import { syncPaymentExclusions } from './paymentExclusion.service'
 
 const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 12
 // Pausa entre un disparo y el siguiente dentro del mismo lote (default 120 s: 12 llamadas
@@ -29,17 +30,20 @@ const BATCH_SIZE = Number(process.env.AUTO_CALL_BATCH_SIZE) || 12
 const SPACING_MS =
   process.env.AUTO_CALL_TEST_MODE === 'true' ? 0 : Math.max(0, Number(process.env.AUTO_CALL_SPACING_SECONDS ?? 120) || 0) * 1000
 
+// Rellamadas y segundos intentos que salen como máximo en cada revisión (corre cada minuto)
+const CALLBACKS_PER_RUN = 2
+
 // Modo de prueba: con AUTO_CALL_TEST_MODE=true, TODOS los tiempos del ciclo (gaps entre
 // pasos, duración del ciclo semanal, y qué tan seguido corre el cron) se acortan a
 // minutos — para poder ver el flujo completo de 4 pasos en una sola sesión de prueba en
 // vez de esperar una semana real. Se declara aquí y también en voice.controller.ts
-// (AUTO_CALL_RETRY_GAP_MS/AUTO_MESSAGE_GAP_MS) — mismo env var, mismo efecto en los dos
+// (nextCallRetryAt/AUTO_MESSAGE_GAP_MS) — mismo env var, mismo efecto en los dos
 // archivos que manejan el timing del ciclo.
 const TEST_MODE = process.env.AUTO_CALL_TEST_MODE === 'true'
 
 // Modo "test con timing real": restringe los candidatos al test group (igual que
 // TEST_MODE) pero SIN acelerar nada — mismo cron por hora, mismo horario laboral, mismo
-// ciclo de 7 días y mismos gaps que producción (AUTO_CALL_RETRY_GAP_MS/AUTO_MESSAGE_GAP_MS
+// ciclo de 7 días y mismos gaps que producción (nextCallRetryAt/AUTO_MESSAGE_GAP_MS
 // en voice.controller.ts, que solo se aceleran con AUTO_CALL_TEST_MODE, no con esta
 // variable). Pensado para validar el comportamiento real del ciclo completo sobre el test
 // group antes de soltarlo a todos los clientes, sin esperar ni arriesgar la base real.
@@ -54,8 +58,8 @@ const TEST_GROUP_ONLY = process.env.AUTO_CALL_TEST_GROUP_ONLY === 'true' || TEST
 // autoCallCycleStartAt seguía viéndose "viejo" (isNewCycle) el intento se reiniciaba a
 // 1/4 en vez de avanzar a 3/4 — nunca llegaba a mandar mensajes (ver bug de 2026-09-19).
 const CYCLE_MS = TEST_MODE ? 30 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
-// Gap entre el 3er y 4to paso (mensajes) — más corto que entre las dos llamadas (3 días,
-// ver AUTO_CALL_RETRY_GAP_MS en voice.controller.ts) porque mandar un WhatsApp no
+// Gap entre el 3er y 4to paso (mensajes) — más corto que entre las dos llamadas (2 días,
+// ver nextCallRetryAt en voice.controller.ts) porque mandar un WhatsApp no
 // necesita el mismo margen que esperar a que alguien note una llamada perdida.
 const MESSAGE_STEP_GAP_MS = TEST_MODE ? 30 * 1000 : 1 * 24 * 60 * 60 * 1000
 
@@ -185,6 +189,18 @@ async function runAutoCallCycle(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, SPACING_MS))
     }
 
+    // La lista se armó al empezar el lote, que puede tardar más de media hora: si mientras tanto el cliente registró
+    // un pago, pasó a un gestor o pidió una cita, ya no se le llama
+    const stillEligible = await Client.exists({
+      _id: client._id,
+      requiresHuman: { $ne: true },
+      blacklistStatus: { $ne: 'confirmed' },
+      collectorAssignedAt: null,
+      scheduledCallbackAt: null,
+      $or: [{ collectionExcludedUntil: null }, { collectionExcludedUntil: { $lte: new Date() } }],
+    })
+    if (!stillEligible) continue
+
     const isNewCycle = !client.autoCallCycleStartAt || (client.autoCallCycleStartAt as Date) <= cycleThreshold
     const attemptNumber = isNewCycle ? 1 : ((client.autoCallAttempt as number) + 1)
     // Ciclo recortado (AUTO_CYCLE_STEPS, ej. 1 en la semana de prueba): nunca se dispara un
@@ -252,9 +268,9 @@ async function runAutoCallCycle(): Promise<void> {
 
 // Llamadas de seguimiento agendadas por el agente (programar_llamada → crm.schedule_callback)
 // cuando el cliente pidió que le llamen en un día/hora, y el segundo intento de los Follow up (ver
-// followUpEscalation.service.ts). Independiente del ciclo de 4 pasos: se dispara con triggeredBy 'manual' (o
-// 'followup' si el cliente tiene un seguimiento abierto) para no avanzar ni reiniciar ese ciclo, y respeta el
-// mismo interruptor global de llamadas automáticas, el horario laboral y la pausa por servicio caído.
+// followUpEscalation.service.ts). Se dispara con triggeredBy 'manual' (o 'followup' si el cliente tiene un
+// seguimiento abierto): no programa los siguientes pasos del ciclo, pero sí cuenta como intento de la semana en
+// Auto Outreach. Respeta el interruptor global, el horario laboral y la pausa por servicio caído.
 async function dispatchScheduledCallbacks(): Promise<void> {
   const settings = await AutomationSettings.findById('global').lean()
   if (!settings?.autoCallsEnabled) return
@@ -262,41 +278,73 @@ async function dispatchScheduledCallbacks(): Promise<void> {
   const publicUrl = (process.env.PUBLIC_URL ?? '').replace(/\/$/, '')
   if (!publicUrl) return
 
-  // Antes corría a cualquier hora (también de noche o en domingo): ahora solo lun-sáb 9:00-18:59 CDMX, como el
+  // Antes corría a cualquier hora (también de noche o en domingo): ahora solo lun-vie 9:00-18:59 CDMX, como el
   // ciclo. Lo que venció fuera de horario sale en cuanto abre.
   if (!TEST_MODE && !isBusinessHoursMexico(new Date())) return
   if (activeServiceOutage()) return
 
   const now = new Date()
+  const weekStart = TEST_MODE ? new Date(now.getTime() - CYCLE_MS) : startOfWeekMexico(now)
   const due = await Client.find({
     scheduledCallbackAt: { $ne: null, $lte: now },
     blacklistStatus: { $ne: 'confirmed' },
     collectorAssignedAt: null,
-  }).limit(BATCH_SIZE).lean()
+  }).sort({ scheduledCallbackAt: 1 }).limit(BATCH_SIZE * 5).lean()
 
+  let dispatched = 0
   for (const client of due) {
-    // Se limpia ANTES de llamar, con la misma fecha como condición, para que otra corrida
-    // no la dispare dos veces.
-    const claimed = await Client.findOneAndUpdate(
-      { _id: client._id, scheduledCallbackAt: client.scheduledCallbackAt },
-      { scheduledCallbackAt: null, scheduledCallbackReason: null }
-    )
-    if (!claimed) continue
+    // Pocas por minuto: varios seguimientos vencen a la misma hora (10:00) y no deben salir todos de golpe
+    if (dispatched >= CALLBACKS_PER_RUN) break
+
+    // Todas las escrituras llevan la fecha agendada como condición, para que otra corrida no la dispare dos veces
+    const pending = { _id: client._id, scheduledCallbackAt: client.scheduledCallbackAt }
 
     // Ya pagó / pago en proceso mientras tanto, o ya no debe nada: no se llama (y el seguimiento se cierra).
     const excluded = client.collectionExcludedUntil && (client.collectionExcludedUntil as Date) > now
     if (!client.debt || (client.debt as number) <= 0 || excluded) {
-      if (client.followUp) await Client.findByIdAndUpdate(client._id, { followUp: null })
+      await Client.updateOne(pending, { scheduledCallbackAt: null, scheduledCallbackReason: null, followUp: null })
       continue
     }
 
+    // Con otra llamada en curso se deja agendada para la siguiente corrida
     const activeCall = await Call.findOne({ phone: client.phone, status: 'in_progress' }).lean()
     if (activeCall) continue
 
-    const followUp = client.followUp as { attempt?: number; sourceCallId?: mongoose.Types.ObjectId | null } | null | undefined
+    const followUp = client.followUp as
+      | { attempt?: number; sourceCallId?: mongoose.Types.ObjectId | null; requestedByCustomer?: boolean }
+      | null
+      | undefined
     const isFollowUp = Boolean(followUp?.attempt)
+
+    // Cuenta en Auto Outreach igual que las llamadas del ciclo (ver planCallback)
+    const plan = planCallback({
+      now,
+      weekStart,
+      cycleStartAt: client.autoCallCycleStartAt as Date | null | undefined,
+      attempt: (client.autoCallAttempt as number) ?? 0,
+      cycleSteps: AUTO_CYCLE_STEPS,
+      // Una rellamada sin seguimiento abierto solo existe porque el cliente la pidió
+      requestedByCustomer: followUp ? Boolean(followUp.requestedByCustomer) : true,
+    })
+    if (plan.action === 'defer') {
+      await Client.updateOne(pending, { scheduledCallbackAt: plan.until, ...(isFollowUp ? { 'followUp.nextAt': plan.until } : {}) })
+      console.log(`[AutoCall] Sin llamadas disponibles esta semana para ${client.name}: pasa al ${plan.until.toISOString()}`)
+      continue
+    }
+
+    // Se marca ANTES de llamar
+    const claimed = await Client.findOneAndUpdate(pending, {
+      scheduledCallbackAt: null,
+      scheduledCallbackReason: null,
+      autoCallAttempt: plan.attempt,
+      autoCallCycleStartAt: plan.newWeek ? now : client.autoCallCycleStartAt,
+      autoCallNextAttemptAt: null,
+      ...(plan.newWeek ? { autoCycleExhausted: false } : {}),
+      ...(isFollowUp ? { 'followUp.attempt': 2 } : {}),
+    })
+    if (!claimed) continue
+
     try {
-      if (isFollowUp) await Client.findByIdAndUpdate(client._id, { 'followUp.attempt': 2 })
       await placeOutboundCall(
         String(client._id),
         publicUrl,
@@ -304,19 +352,27 @@ async function dispatchScheduledCallbacks(): Promise<void> {
         settings.voiceEngine ?? 'openai',
         isFollowUp ? (followUp?.sourceCallId ?? null) : null
       )
-      console.log(`[AutoCall] ${isFollowUp ? 'Segundo intento de Follow up' : 'Llamada de seguimiento agendada'} disparada: ${client.name} (${client.phone})`)
+      dispatched++
+      console.log(`[AutoCall] ${isFollowUp ? 'Segundo intento de Follow up' : 'Llamada de seguimiento agendada'} disparada (intento ${plan.attempt}/${AUTO_CYCLE_STEPS}): ${client.name} (${client.phone})`)
     } catch (err) {
+      // La llamada no salió: se devuelve el intento y se reintenta en 15 minutos, para no perder el seguimiento
+      await Client.findByIdAndUpdate(client._id, {
+        scheduledCallbackAt: new Date(now.getTime() + 15 * 60_000),
+        scheduledCallbackReason: client.scheduledCallbackReason,
+        autoCallAttempt: client.autoCallAttempt ?? 0,
+        autoCallCycleStartAt: client.autoCallCycleStartAt ?? null,
+      })
       console.error(`[AutoCall] Error en llamada agendada de ${client.name} (${client._id}):`, err)
     }
   }
 }
 
-// Lun-sáb 9:00-18:59 en hora de CDMX (el mismo horario del cron del ciclo)
+// Lun-vie 9:00-18:59 en hora de CDMX (el mismo horario del cron del ciclo)
 function isBusinessHoursMexico(now: Date): boolean {
   const wall = new Date(now.getTime() - 6 * 3600_000)
   const day = wall.getUTCDay()
   const hour = wall.getUTCHours()
-  return day !== 0 && hour >= 9 && hour <= 18
+  return day >= 1 && day <= 5 && hour >= 9 && hour <= 18
 }
 
 // Las facturas son mensuales: el día 1 se liberan los clientes asignados a Collector Assistance el mes anterior,
@@ -359,6 +415,11 @@ export function startAutoCallScheduler(): void {
   )
   resetWeeklyCycle().catch((err) => console.error('[AutoCall] Error reiniciando el ciclo semanal:', err))
 
+  // Quien ya registró un pago este mes queda excluido (ver paymentExclusion.service.ts)
+  syncPaymentExclusions()
+    .then((n) => console.log(`[AutoCall] Exclusión por pago del mes: ${n} cliente(s) marcados al arrancar.`))
+    .catch((err) => console.error('[AutoCall] Error marcando clientes con pago del mes:', err))
+
   cron.schedule(
     '0 0 1 * *',
     () => {
@@ -378,8 +439,8 @@ export function startAutoCallScheduler(): void {
   // En modo prueba corre cada 30 segundos (node-cron soporta un 1er campo opcional de
   // segundos), cualquier día/hora — para que el cron mismo no sea el cuello de botella al
   // probar el ciclo rápido. En producción, cada hora en punto y solo horario laboral
-  // (lun-sáb 9am-6:59pm CDMX).
-  const schedule = TEST_MODE ? '*/30 * * * * *' : '0 9-18 * * 1-6'
+  // (lun-vie 9am-6:59pm CDMX).
+  const schedule = TEST_MODE ? '*/30 * * * * *' : '0 9-18 * * 1-5'
   cron.schedule(
     schedule,
     () => {
@@ -389,7 +450,7 @@ export function startAutoCallScheduler(): void {
   )
   const timingDesc = TEST_MODE
     ? 'timing ACELERADO (cada 30s, sin restricción de horario/día)'
-    : `timing real (lotes de ${BATCH_SIZE}, cada hora, lun-sáb 9am-7pm CDMX)`
+    : `timing real (lotes de ${BATCH_SIZE}, cada hora, lun-vie 9am-7pm CDMX)`
   const groupDesc = TEST_GROUP_ONLY ? ' — restringido al test group' : ''
   console.log(`[AutoCall] Scheduler iniciado — ${timingDesc}${groupDesc}`)
 }

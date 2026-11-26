@@ -6,6 +6,10 @@ import {
   dispositionLabel,
   formatDuration,
 } from "./CallTimeline"
+import ClientDetailModal from "./ClientDetailModal"
+import { useState } from "react"
+import TranscriptDownload from "./TranscriptDownload"
+import FollowUpBadges from "./FollowUpBadges"
 
 function formatMoney(value: any): string {
   if (value === null || value === undefined) return "—"
@@ -28,19 +32,27 @@ interface Props {
 }
 
 export default function CallDetailModal({ call, onClose }: Props) {
+  // En pantallas anchas la ficha del cliente se abre junto a la llamada; en angostas se ve una a la vez
+  const [showClient, setShowClient] = useState(() => window.innerWidth >= 1280)
+
   if (!call) return null
 
   const clientName = call.clientId?.name ?? "Unknown"
   const clientPhone = call.clientId?.phone ?? call.phone
+  const clientId: string | null = call.clientId?._id ?? null
+  const withClient = showClient && clientId !== null
 
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center gap-4 bg-black/70 p-4"
     >
+      {/* La llamada es el panel principal */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl max-h-[90vh] rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex flex-col overflow-hidden"
+        className={`w-full max-w-2xl rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex-col overflow-hidden ${
+          withClient ? "hidden xl:flex h-[90vh]" : "flex max-h-[90vh]"
+        }`}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-4 border-b border-zinc-800 p-5">
@@ -59,6 +71,7 @@ export default function CallDetailModal({ call, onClose }: Props) {
               <span className="rounded-full px-3 py-1 text-xs font-medium bg-zinc-500/10 text-zinc-400">
                 {call.triggeredBy === "auto" ? "Automatic" : call.triggeredBy === "followup" ? "Follow-up" : "Manual"}
               </span>
+              <FollowUpBadges call={call} />
               {call.detectedVoicemail && (
                 <span className="rounded-full px-3 py-1 text-xs font-medium bg-purple-500/10 text-purple-400">
                   Voicemail
@@ -68,6 +81,17 @@ export default function CallDetailModal({ call, onClose }: Props) {
                 <span className="rounded-full px-3 py-1 text-xs font-medium bg-orange-500/10 text-orange-400">
                   Requires agent
                 </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <TranscriptDownload key={call._id} call={call} clientName={clientName} clientPhone={clientPhone} />
+              {clientId && (
+                <button
+                  onClick={() => setShowClient((v) => !v)}
+                  className="mt-3 inline-flex items-center rounded-lg bg-zinc-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700 transition-colors cursor-pointer"
+                >
+                  {showClient ? "Hide client info" : "Client info"}
+                </button>
               )}
             </div>
           </div>
@@ -107,6 +131,13 @@ export default function CallDetailModal({ call, onClose }: Props) {
           </div>
         </div>
       </div>
+
+      {withClient && (
+        // stopPropagation: los clics dentro de la ficha (y de sus ventanas) no cierran la llamada
+        <div onClick={(e) => e.stopPropagation()} className="flex h-[90vh] w-full max-w-2xl">
+          <ClientDetailModal clientId={clientId} onClose={() => setShowClient(false)} embedded />
+        </div>
+      )}
     </div>
   )
 }

@@ -28,6 +28,7 @@ import { normalizeRFC } from '../utils/rfc'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
 import { warmUpClaude, generateLiveVoiceTurn, LiveTurn, LiveToolCall, ToolOutcome } from '../services/claudeVoiceLive.service'
 import { ClientInfo, buildVoicemailMessage, loadManualFlowOverride } from '../services/voiceConversation.service'
+import { buildFollowUpNote } from '../services/followUpEscalation.service'
 import { HOLD_MAX_SECONDS, SILENCE_HANGUP_SECONDS, DTMF_ENABLED, DTMF_MAX_PRESSES, PREDIAL_EXTENSION, DEFER_GREETING, GREETING_SILENCE_MS, GREETING_MAX_WAIT_MS, MENU_QUIET_MS, MENU_LOOP_MAX } from '../config/autoCall'
 import { dtmfFrames, sanitizeDigits } from '../utils/dtmf'
 import { answeredLikeReception, decideMenuAction, isAutomatedPrompt, isShortHumanGreeting, MenuDecision, SwitchboardHint } from '../utils/ivrMenu'
@@ -1243,6 +1244,7 @@ const YES_ANCHORS = new Set(['si', 'soy', 'yo', 'correcto', 'exacto', 'efectivam
           contact: cleanContactName(client.contact),
           invoices,
           flowOverride: await loadManualFlowOverride(call.triggeredBy),
+          followUpNote: await buildFollowUpNote(call),
           switchboardNote: describeSwitchboard(sb),
         }
       : null

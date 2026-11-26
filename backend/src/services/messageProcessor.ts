@@ -10,6 +10,7 @@ import { sendWhatsappText, sendTypingIndicator } from './whatsappService'
 import { bufferMessage } from './whatsappDebounce.cache'
 import { DispositionStatus, nextActionFor } from '../config/disposition'
 import { endOfCurrentMonthMexicoCity } from '../utils/collectionExclusion'
+import { excludeForPayment, PROMISE_EXCLUSION_REASON } from './paymentExclusion.service'
 
 // Traduce el outcome.type que ya calculó el guion (whatsappFlow.service.ts) al
 // Status del catálogo fijo — no es una clasificación de IA aparte, es una
@@ -196,6 +197,8 @@ async function runWhatsappFlowTurn(
       detectedByAI: true,
     })
     newClientStatus = 'promised'
+    // Registró una promesa: fuera de las llamadas automáticas hasta fin de mes
+    if (clientId) await excludeForPayment(clientId, PROMISE_EXCLUSION_REASON)
   }
 
   if (newClientStatus || newClientIntent || newClientNextAction) {

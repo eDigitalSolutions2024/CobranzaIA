@@ -42,6 +42,8 @@ export interface ClientInfo {
   // Lo que se aprendió del conmutador de este cliente en llamadas anteriores (ver
   // Client.switchboard). Texto ya redactado para el prompt; sin valor = primera vez.
   switchboardNote?: string | null
+  // Segundo intento de un Follow up: qué quedó pendiente y qué hacer (ver buildFollowUpNote). Sin valor = llamada normal.
+  followUpNote?: string | null
 }
 
 // Definición de tools en formato Realtime API (session.tools). Los nombres y parámetros
@@ -358,7 +360,14 @@ export async function loadManualFlowOverride(
   return flow === 'preventive' || flow === 'overdue_1_30' ? flow : null
 }
 
+// En el segundo intento de un Follow up las instrucciones van al FINAL, después de todas las reglas, porque tienen
+// prioridad sobre ellas (ej. no agendar otra rellamada).
 export function buildVoiceSystemPrompt(clientInfo: ClientInfo | null, phone: string): string {
+  const prompt = buildBaseVoicePrompt(clientInfo, phone)
+  return clientInfo?.followUpNote ? `${prompt}\n\n${clientInfo.followUpNote}` : prompt
+}
+
+function buildBaseVoicePrompt(clientInfo: ClientInfo | null, phone: string): string {
   const fechaHoy = new Date().toLocaleDateString('es-MX', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   })

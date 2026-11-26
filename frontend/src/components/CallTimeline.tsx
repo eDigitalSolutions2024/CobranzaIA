@@ -140,8 +140,9 @@ export function CallRecordingPlayer({ callId }: { callId: string }) {
 
 // Se usa tanto en la caja compacta (dentro de la fila de la llamada) como en el modal
 // grande — mismo cálculo de tiempos, solo cambia el tamaño/estilo de las burbujas.
-export function CallTimelineView({ call, compact = false }: { call: any; compact?: boolean }) {
-  const items = buildCallTimeline(call)
+// clientCopy: versión para entregar al cliente (descarga en JPG), sin datos técnicos (funciones ni latencias).
+export function CallTimelineView({ call, compact = false, clientCopy = false }: { call: any; compact?: boolean; clientCopy?: boolean }) {
+  const items = buildCallTimeline(call).filter((item) => !clientCopy || item.type === "message")
   if (items.length === 0) {
     return <p className={`text-center text-zinc-500 ${compact ? "text-xs py-2" : "text-sm"}`}>No transcript yet</p>
   }
@@ -179,7 +180,7 @@ export function CallTimelineView({ call, compact = false }: { call: any; compact
                 {item.elapsedMs != null && <span>{formatElapsed(item.elapsedMs)}</span>}
               </div>
               <p className={compact ? "" : "leading-relaxed"}>{item.content}</p>
-              {timingBits.length > 0 && <p className="mt-1 text-[10px] opacity-50">{timingBits.join(" · ")}</p>}
+              {!clientCopy && timingBits.length > 0 && <p className="mt-1 text-[10px] opacity-50">{timingBits.join(" · ")}</p>}
             </div>
           </div>
         )

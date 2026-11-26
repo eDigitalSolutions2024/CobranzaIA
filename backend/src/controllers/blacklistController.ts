@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import Client from '../models/Client'
 import { loadInvoiceSummary } from '../services/invoiceSummary.service'
+import { buildClientReportFilter } from '../utils/reportFilters'
 
 // Lista de clientes en la Blacklist (candidatos detectados por la IA + confirmados por un
 // administrador) — ver tarjeta "Implementar Blacklist de Clientes Morosos en el
@@ -14,6 +15,8 @@ export async function getBlacklist(req: Request, res: Response): Promise<void> {
     const minDaysOverdue = req.query.minDaysOverdue ? Number(req.query.minDaysOverdue) : null
 
     const query: Record<string, any> = {
+      // Los 5 filtros del Dashboard (country, collectorId, team, teamLeader, collector)
+      ...buildClientReportFilter(req.query),
       blacklistStatus: statusFilter === 'all' ? { $in: ['candidate', 'confirmed'] } : statusFilter,
     }
     if (search) query.name = { $regex: search, $options: 'i' }

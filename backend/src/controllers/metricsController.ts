@@ -1,35 +1,26 @@
 import { Request, Response } from "express"
 import Client from "../models/Client"
 import Message from "../models/Message"
-import PaymentPromise from "../models/PaymentPromise"
 import Conversation from "../models/Conversation"
 import Call from "../models/Call"
 import { buildClientReportFilter } from "../utils/reportFilters"
 
 // Semanas (lunes a domingo) que muestra la gráfica de promesas
 const CHART_WEEKS = 8
+const WEEK_MS = 7 * 24 * 3600_000
 
+// Lunes 00:00 en hora de CDMX (UTC-6, sin horario de verano desde 2022) de la semana de esa fecha. El servidor
+// corre en UTC, así que sin esto las llamadas del domingo por la noche caían en la semana siguiente.
 function startOfWeek(d: Date): Date {
-  const out = new Date(d)
-  out.setHours(0, 0, 0, 0)
-  out.setDate(out.getDate() - ((out.getDay() + 6) % 7))
-  return out
+  const wall = new Date(d.getTime() - 6 * 3600_000)
+  const daysSinceMonday = (wall.getUTCDay() + 6) % 7
+  return new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() - daysSinceMonday, 6))
 }
 
-// Disposiciones de llamada que cuentan como "algo parecido a un pago" en la tarjeta Payment promises
-// (Payment scheduled incluye las domiciliadas, ver computeVoiceDisposition)
+// Disposiciones de llamada que se refieren a un pago (Payment scheduled incluye las domiciliadas; Payment refused no
+// cuenta). La tarjeta Payment promises, la gráfica Voice calls overview y el filtro con el que se abre Calls usan
+// esta misma lista, para que los tres muestren el mismo número.
 const PAYMENT_LIKE_DISPOSITIONS = ["Payment scheduled", "Payment in process", "Payment received"]
-
-// Mes calendario en curso en hora de CDMX (UTC-6 fijo, sin horario de verano desde 2022): { month: 'AAAA-MM',
-// from: primer día, to: último día } en formato AAAA-MM-DD
-function currentMonthMexico(): { month: string; from: string; to: string } {
-  const now = new Date(Date.now() - 6 * 3600_000)
-  const year = now.getUTCFullYear()
-  const m = now.getUTCMonth()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const lastDay = new Date(Date.UTC(year, m + 1, 0)).getUTCDate()
-  return { month: year + '-' + pad(m + 1), from: year + '-' + pad(m + 1) + '-01', to: year + '-' + pad(m + 1) + '-' + pad(lastDay) }
-}
 
 // Todo se calcula en el servidor con agregaciones sobre TODOS los clientes (sin límite de
 // cantidad) y respeta los 5 filtros del dashboard (country, collectorId, team, teamLeader,
@@ -38,20 +29,17 @@ function currentMonthMexico(): { month: string; from: string; to: string } {
 export async function getMetrics(req: Request, res: Response) {
   try {
     const clientFilter = buildClientReportFilter(req.query)
-    const paymentMonth = currentMonthMexico()
     const hasFilter = Object.keys(clientFilter).length > 0
     const ids = hasFilter ? await Client.find(clientFilter).distinct("_id") : null
     const byClient = ids ? { clientId: { $in: ids } } : {}
 
-    const since = startOfWeek(new Date())
-    since.setDate(since.getDate() - 7 * (CHART_WEEKS - 1))
+    const since = new Date(startOfWeek(new Date()).getTime() - WEEK_MS * (CHART_WEEKS - 1))
 
     const [
       totalClients,
       activeClients,
       debtAgg,
       recoveredAgg,
-      paymentPromises,
       respondedClients,
       riskAgg,
       messageStatusAgg,
@@ -72,13 +60,6 @@ export async function getMetrics(req: Request, res: Response) {
         { $match: { ...clientFilter, status: "paid" } },
         { $group: { _id: null, total: { $sum: "$debt" } } },
       ]),
-      // Llamadas del mes en curso con algo parecido a un pago (promesa, pago en proceso o pago recibido): son
-      // las mismas que muestra la página Calls al abrir la tarjeta, con el mismo rango de fechas.
-      Call.countDocuments({
-        ...byClient,
-        disposition: { $in: PAYMENT_LIKE_DISPOSITIONS },
-        createdAt: { $gte: new Date(paymentMonth.from + 'T00:00:00-06:00'), $lte: new Date(paymentMonth.to + 'T23:59:59.999-06:00') },
-      }),
       // Respondió = ya hubo conversación real (por llamada o WhatsApp), no solo "se le marcó"
       Client.countDocuments({
         ...clientFilter,
@@ -88,12 +69,13 @@ export async function getMetrics(req: Request, res: Response) {
       Message.aggregate([{ $match: byClient }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
       Conversation.aggregate([{ $match: byClient }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
       Call.aggregate([{ $match: byClient }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
-      Call.countDocuments({ ...byClient, promiseDate: { $ne: null } }),
+      Call.countDocuments({ ...byClient, disposition: { $in: PAYMENT_LIKE_DISPOSITIONS } }),
       Call.countDocuments({
         ...byClient,
         $or: [{ status: "failed" }, { disposition: { $in: ["No answer", "Voice mail"] } }],
       }),
-      PaymentPromise.find({ ...byClient, createdAt: { $gte: since } }, "amount status createdAt").lean(),
+      // Gráfica semanal: las mismas llamadas que cuenta la tarjeta, de las últimas semanas
+      Call.find({ ...byClient, disposition: { $in: PAYMENT_LIKE_DISPOSITIONS }, createdAt: { $gte: since } }, "createdAt").lean(),
     ])
 
     const totalDebt = debtAgg[0]?.total || 0
@@ -129,27 +111,16 @@ export async function getMetrics(req: Request, res: Response) {
       if (c._id) { callStats[c._id] = c.count; totalCalls += c.count }
     })
 
-    // Serie semanal completa (las semanas sin promesas salen en 0 para que la gráfica no se salte)
+    // Serie semanal completa (las semanas sin llamadas salen en 0 para que la gráfica no se salte)
     // Se agrupa en JS (en vez de $dateTrunc) para no exigir MongoDB 5.0+
-    const weekly = new Map<number, { promised: number; completed: number; count: number }>()
-    promiseRows.forEach((p: any) => {
-      const key = startOfWeek(new Date(p.createdAt)).getTime()
-      const w = weekly.get(key) ?? { promised: 0, completed: 0, count: 0 }
-      w.promised += p.amount || 0
-      if (p.status === "completed") w.completed += p.amount || 0
-      w.count += 1
-      weekly.set(key, w)
+    const weekly = new Map<number, number>()
+    promiseRows.forEach((call: any) => {
+      const key = startOfWeek(new Date(call.createdAt)).getTime()
+      weekly.set(key, (weekly.get(key) ?? 0) + 1)
     })
     const promiseWeekly = Array.from({ length: CHART_WEEKS }, (_, i) => {
-      const weekStart = new Date(since)
-      weekStart.setDate(since.getDate() + 7 * i)
-      const w = weekly.get(weekStart.getTime())
-      return {
-        weekStart: weekStart.toISOString(),
-        promised: w?.promised ?? 0,
-        completed: w?.completed ?? 0,
-        count: w?.count ?? 0,
-      }
+      const weekStart = new Date(since.getTime() + WEEK_MS * i)
+      return { weekStart: weekStart.toISOString(), count: weekly.get(weekStart.getTime()) ?? 0 }
     })
 
     res.json({
@@ -157,9 +128,9 @@ export async function getMetrics(req: Request, res: Response) {
       activeClients,
       totalDebt,
       recoveredDebt,
-      paymentPromises,
-      // Mes que cubre la tarjeta (se reinicia cada mes, igual que las facturas) y el filtro que abre en Calls
-      paymentMonth: { ...paymentMonth, dispositions: PAYMENT_LIKE_DISPOSITIONS },
+      // Tarjeta Payment promises: histórico, el mismo número que la gráfica Voice calls overview (callStats.withPromise)
+      paymentPromises: callsWithPromise,
+      paymentDispositions: PAYMENT_LIKE_DISPOSITIONS,
       responseRate,
       riskBreakdown,
       messageStats: { ...msgStats, total: totalMessages },

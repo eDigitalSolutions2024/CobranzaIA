@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import KpiCard from "../components/KpiCard"
 import RecoveryChart from "../components/RecoveryChart"
-import RecentActivity from "../components/RecentActivity"
+// import RecentActivity from "../components/RecentActivity" // la tarjeta está comentada abajo
 import ClientsTable from "../components/ClientsTable"
 import NewClientModal from "../components/NewClientModal"
 import ReportFilters, { EMPTY_REPORT_FILTERS, type ReportFilterValue } from "../components/ReportFilters"
@@ -12,19 +12,13 @@ import { CircleDollarSign, UsersRound, CircleCheckBig,
         ArrowUpNarrowWide, TriangleAlert, Siren,SquareCheckBig } from "lucide-react"
 import VoiceViewCall from "../components/VoiceViewCall"
 import type { CallsPreset } from "./CallsPage"
+import { hasRegisteredPayment } from "../components/paymentStatus"
 
 interface Props {
   onOpenCalls?: (preset: CallsPreset) => void
   setCardPage: (page: string) => void
 }
 const PAGE_SIZE = 25
-
-// "2026-11-01" → "November 2026" (sin pasar por Date para que la zona horaria no mueva el mes)
-function monthLabel(isoDay: string): string {
-  const [year, month] = isoDay.split("-").map(Number)
-  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-  return `${names[month - 1]} ${year}`
-}
 
 export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
   const [openModal, setOpenModal] = useState(false)
@@ -56,12 +50,11 @@ export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
     }
   }
 
-  // La tarjeta de pagos abre Calls con las mismas llamadas que cuenta: disposiciones de pago, solo el mes
-  // en curso y los filtros de reporte que haya activos en el Dashboard
+  // La tarjeta de pagos abre Calls con las mismas llamadas que cuenta (todo el historial, disposiciones de pago)
+  // y los filtros de reporte que haya activos en el Dashboard
   function openPaymentCalls() {
-    const m = metrics?.paymentMonth
-    if (!m || !onOpenCalls) return
-    onOpenCalls({ reportFilters, disposition: m.dispositions.join("|"), from: m.from, to: m.to })
+    if (!metrics?.paymentDispositions) return
+    onOpenCalls?.({ reportFilters, disposition: metrics.paymentDispositions.join("|") })
   }
 
   const clients = useMemo(() => {
@@ -69,6 +62,7 @@ export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
       .map((client: any) => ({
         nombre: client.name,
         needsAdmin: Boolean(client.needsAdmin),
+        pago: hasRegisteredPayment(client) ? client : null,
         deuda: `$${Number(client.debt).toLocaleString("en-US")}`,
         estado: client.status ?? "pending",
         riesgo: client.risk,
@@ -104,7 +98,12 @@ export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
         <h2 className="mt-2 text-white">Welcome back</h2>
       </div>
 
-      <div className="mt-8 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+      {/* Arriba porque aplican a todo el Dashboard: tarjetas, pestañas, gráficas y tabla de clientes */}
+      <div className="mt-6">
+        <ReportFilters value={reportFilters} onChange={changeFilters} />
+      </div>
+
+      <div className="mt-6 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           title="Total active debt"
           icon={CircleDollarSign}
@@ -114,9 +113,8 @@ export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
             loading
               ? "..."
               : `$${Number(metrics?.totalDebt || 0 ,).toLocaleString("en-US",{
-                currency: "USD",
                 maximumFractionDigits: 0,
-              })} USD`
+              })} MXN`
           }
           change=""
         />
@@ -133,8 +131,8 @@ export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
 
         <KpiCard
           title="Payment promises"
-          subtitle={metrics?.paymentMonth ? `${monthLabel(metrics.paymentMonth.from)} only · click to view calls` : undefined}
-          onClick={metrics?.paymentMonth ? openPaymentCalls : undefined}
+          subtitle="All time · click to view calls"
+          onClick={metrics?.paymentDispositions ? openPaymentCalls : undefined}
           icon={CircleCheckBig}
           colorIcon="var(--success)"
           size={50}
@@ -188,13 +186,13 @@ export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
 
       {/* Blacklist de clientes morosos con negativa de pago */}
       <div className="mt-6">
-        <BlacklistSection />
+        <BlacklistSection reportFilters={reportFilters} />
       </div>
 
       {/* Voice Calls Overview + Weekly Recovery */}
       {metrics?.callStats && (
         <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-         <VoiceViewCall callStats={metrics.callStats} />
+         <VoiceViewCall callStats={metrics.callStats} onViewReport={() => setCardPage("calls")} />
           {/* =========================
               WEEKLY RECOVERY
           ========================== */}
@@ -206,7 +204,7 @@ export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
             bg-[var(--bg-card)]
             p-5
           ">
-            <RecoveryChart weeks={metrics.promiseWeekly ?? []} />
+            <RecoveryChart weeks={metrics.promiseWeekly ?? []} onViewCalls={openPaymentCalls} />
 
           </div>
       </div>
@@ -215,9 +213,6 @@ export default function DashboardPage({ onOpenCalls, setCardPage }: Props) {
         <div className="min-w-0 xl:col-span-2">
           <div className="mt-6">
 
-        <div className="mb-4">
-          <ReportFilters value={reportFilters} onChange={changeFilters} />
-        </div>
         <ClientsTable clients={clients} />
         <div className="mt-3 flex items-center justify-between text-sm text-zinc-400">
           <span>

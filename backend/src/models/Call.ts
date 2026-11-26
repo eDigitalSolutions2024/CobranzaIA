@@ -82,6 +82,17 @@ export interface ICall extends Document {
   // resolvió y se escaló a Collector Assistance, originalDisposition guarda lo que la llamada había sido, y
   // escalationReason por qué se escaló (ver followUpEscalation.service.ts).
   followUpOfCallId?: mongoose.Types.ObjectId | null
+  // 1 = la llamada que quedó en Follow up, 2 = el segundo intento (o su reintento). Para el historial.
+  followUpAttempt?: number | null
+  paymentAudit?: {
+    status: 'none' | 'pending' | 'confirmed' | 'dismissed'
+    reviewedAt?: Date
+    type?: string | null
+    date?: string | null
+    amount?: number | null
+    quote?: string | null
+    explanation?: string | null
+  } | null
   originalDisposition?: string | null
   escalationReason?: 'dispute' | 'customer_request' | 'followup_unresolved' | null
   // Grabación de la llamada en Twilio — se pide al crearla (outbound) o justo al
@@ -132,6 +143,25 @@ const CallSchema = new Schema<ICall>(
     callSid: { type: String, required: true, unique: true },
     triggeredBy: { type: String, enum: ['manual', 'auto', 'followup'], default: 'manual' },
     followUpOfCallId: { type: Schema.Types.ObjectId, ref: 'Call', default: null },
+    followUpAttempt: { type: Number, default: null },
+    // Revisión de pagos mal clasificados (ver paymentAudit.service.ts): status 'none' = analizada sin hallazgo,
+    // 'pending' = hallazgo por verificar, 'confirmed' / 'dismissed' = resuelto por una persona
+    // Sub-esquema aparte: tiene un campo llamado "type", que escrito en línea confunde a Mongoose
+    paymentAudit: {
+      type: new Schema(
+        {
+          status: { type: String, enum: ['none', 'pending', 'confirmed', 'dismissed'] },
+          reviewedAt: { type: Date },
+          type: { type: String, default: null },
+          date: { type: String, default: null },
+          amount: { type: Number, default: null },
+          quote: { type: String, default: null },
+          explanation: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
     originalDisposition: { type: String, default: null },
     escalationReason: { type: String, enum: ['dispute', 'customer_request', 'followup_unresolved', null], default: null },
     detectedVoicemail: { type: Boolean, default: false },

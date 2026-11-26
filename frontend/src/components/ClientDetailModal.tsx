@@ -7,7 +7,9 @@ import {
   CALL_STATUS_LABEL,
   CallRecordingPlayer,
   CallTimelineView,
+  dispositionLabel,
 } from "./CallTimeline"
+import FollowUpBadges from "./FollowUpBadges"
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending", contacted: "Contacted", negotiating: "Negotiating",
@@ -302,6 +304,8 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 interface Props {
   clientId: string | null
   onClose: () => void
+  // true: solo el panel, sin fondo oscuro propio, para ponerlo al lado de otro modal (ver CallDetailModal)
+  embedded?: boolean
 }
 
 const EMPTY_INVOICE_FORM = { invoiceNumber: "", amount: "", currencyCode: "MXN", issueDate: "", dueDate: "", status: "pending", notes: "" }
@@ -355,7 +359,7 @@ function SwitchboardMemory({ switchboard, extension }: { switchboard?: any; exte
   )
 }
 
-export default function ClientDetailModal({ clientId, onClose }: Props) {
+export default function ClientDetailModal({ clientId, onClose, embedded = false }: Props) {
   const [data, setData] = useState<any>(null)
   const [tab, setTab] = useState<"promises" | "calls" | "invoices" | "summaries" | "switchboard">("promises")
   const [expandedCall, setExpandedCall] = useState<string | null>(null)
@@ -485,8 +489,8 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
 
   return (
     <>
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-3xl max-h-[90vh] overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex flex-col">
+    <div className={embedded ? "flex h-full w-full" : "fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"}>
+      <div className={`w-full ${embedded ? "h-full" : "max-w-3xl max-h-[90vh]"} overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-main)] flex flex-col`}>
 
         {!data && <div className="p-16 text-center text-zinc-500">Loading...</div>}
 
@@ -518,9 +522,9 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                     {client.collectionExcludedUntil && new Date(client.collectionExcludedUntil) > new Date() && (
                       <span
                         title={`Pausado del ciclo automático hasta el ${formatDate(client.collectionExcludedUntil)}`}
-                        className="rounded-full px-3 py-1 text-xs font-medium bg-blue-500/10 text-blue-400"
+                        className="rounded-full px-3 py-1 text-xs font-medium bg-green-500/10 text-green-400"
                       >
-                        Excluded until {formatDate(client.collectionExcludedUntil)} — {client.collectionExclusionReason}
+                        Payment registered · excluded until {formatDate(client.collectionExcludedUntil)} — {client.collectionExclusionReason}
                       </span>
                     )}
                   </div>
@@ -569,7 +573,8 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
               </div>
 
               {/* Tabs */}
-              <div className="flex border-b border-zinc-800 px-6">
+              {/* Con el panel angosto (junto a una llamada) las pestañas se desplazan en horizontal */}
+              <div className="flex overflow-x-auto whitespace-nowrap border-b border-zinc-800 px-6">
                 <button
                   onClick={() => setTab("promises")}
                   className={`px-4 py-3 text-sm font-medium transition-colors ${
@@ -661,6 +666,11 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                                 <span className="text-zinc-500 ml-2">— {formatDate(call.promiseDate)}</span>
                               </p>
                             )}
+                            {/* Resultado de la llamada y, si es parte de un seguimiento, qué intento fue */}
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              {call.disposition && <span className="text-xs text-zinc-400">{dispositionLabel(call.disposition)}</span>}
+                              <FollowUpBadges call={call} />
+                            </div>
                           </div>
                           <div className="flex items-center gap-3">
                             <span className={`rounded-full px-3 py-1 text-xs ${CALL_STATUS_COLOR[call.status]}`}>
@@ -834,9 +844,10 @@ export default function ClientDetailModal({ clientId, onClose }: Props) {
                               {new Date(call.createdAt).toLocaleString("en-US")}
                             </p>
                             <div className="flex items-center gap-2">
+                              <FollowUpBadges call={call} />
                               {call.disposition && (
                                 <span className="rounded-full px-3 py-1 text-xs font-medium bg-zinc-800 text-zinc-300">
-                                  {call.disposition}
+                                  {dispositionLabel(call.disposition)}
                                 </span>
                               )}
                               <span className={`rounded-full px-3 py-1 text-xs ${CALL_STATUS_COLOR[call.status]}`}>

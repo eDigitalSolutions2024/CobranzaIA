@@ -8,6 +8,7 @@ import { prepareWhatsappMessage } from './whatsappService'
 import { verifyPayment } from './paymentsProvider.service'
 import { FlowContext } from '../types/flow'
 import { endOfCurrentMonthMexicoCity } from '../utils/collectionExclusion'
+import { excludeForPayment, PROMISE_EXCLUSION_REASON } from './paymentExclusion.service'
 import { normalizeMexicanPhone } from '../utils/phone'
 
 // "YYYY-MM-DD" + "HH:MM" en hora del centro de México (UTC-6, sin horario de verano desde
@@ -80,6 +81,7 @@ const registry: Record<string, ActionFn> = {
       paymentPromiseAmount: ctx.amount ?? 0,
       datePromise: ctx.payment_date ? new Date(ctx.payment_date) : new Date(),
     })
+    await excludeForPayment(call.clientId, PROMISE_EXCLUSION_REASON)
   },
 
   'crm.schedule_reminder': async (ctx, call) => {

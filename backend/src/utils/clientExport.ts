@@ -132,7 +132,8 @@ export function toClientExportRow(c: any): Record<string, unknown> {
     blacklistReason: BLACKLIST_LABEL[c.blacklistStatus as string] ? c.blacklistReason || "" : "",
     emailOnly: yesNo(c.emailOnly),
     contactEmail: c.contactEmail || "",
-    collectionExcludedUntil: excluded ? toDate(c.collectionExcludedUntil) : null,
+    // Fin de mes en hora de CDMX: se resta el desfase para que Excel muestre el último día y no el 1 siguiente
+    collectionExcludedUntil: excluded ? new Date(new Date(c.collectionExcludedUntil).getTime() - 6 * 3600_000) : null,
     collectionExclusionReason: excluded ? c.collectionExclusionReason || "" : "",
     scheduledCallbackAt: toDate(c.scheduledCallbackAt),
     paymentPromiseAmount: c.paymentPromiseAmount ?? "",

@@ -695,15 +695,15 @@ export async function markNeedsAdminSent(req: Request, res: Response) {
   }
 }
 
-// "Mark handled" — el gestor ya atendió el caso asignado a Collector Assistance (disputa, petición del cliente o
-// Follow up sin solución, ver followUpEscalation.service.ts): el cliente vuelve al ciclo automático. Cierra los
+// "Mark handled" — el gestor ya atendió el caso (Collector Assistance o Needs agent: disputa, petición del cliente
+// o Follow up sin solución, ver followUpEscalation.service.ts): el cliente vuelve al ciclo automático. Cierra los
 // tickets de escalamiento abiertos.
 export async function releaseCollectorCase(req: Request, res: Response) {
   try {
     const { id } = req.params
     const client = await Client.findByIdAndUpdate(
       id,
-      { collectorAssignedAt: null, escalationReason: null, followUp: null },
+      { collectorAssignedAt: null, escalationReason: null, followUp: null, requiresHuman: false, requiresHumanReason: null },
       { new: true }
     )
     if (!client) return res.status(404).json({ message: "Cliente no encontrado" })

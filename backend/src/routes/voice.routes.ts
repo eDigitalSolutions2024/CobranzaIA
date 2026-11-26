@@ -13,6 +13,13 @@ import {
   getCallRecording,
 } from '../controllers/voice.controller'
 import { requireAuth } from '../middleware/auth'
+import {
+  previewPaymentAudit,
+  analyzePaymentAudit,
+  getPaymentAuditFindings,
+  confirmPaymentAudit,
+  dismissPaymentAudit,
+} from '../controllers/paymentAuditController'
 import { validateTwilioSignature } from '../middleware/twilioSignature'
 import { handleOutboundCartesia, handleIncomingCartesia } from '../controllers/voiceStreamCartesia.controller'
 
@@ -21,6 +28,12 @@ const router = Router()
 router.get('/calls', requireAuth, getCalls)
 router.get('/calls/counts', requireAuth, getCallCounts)
 router.get('/calls/export', requireAuth, exportCalls)
+// Revisión de pagos mal clasificados (ver paymentAudit.service.ts)
+router.post('/payment-audit/preview', requireAuth, previewPaymentAudit)
+router.post('/payment-audit/analyze', requireAuth, analyzePaymentAudit)
+router.get('/payment-audit/findings', requireAuth, getPaymentAuditFindings)
+router.post('/payment-audit/:id/confirm', requireAuth, confirmPaymentAudit)
+router.post('/payment-audit/:id/dismiss', requireAuth, dismissPaymentAudit)
 router.post('/voice/outbound', requireAuth, handleOutbound)
 router.post('/voice/notify-human', requireAuth, handleNotifyHuman)
 router.get('/voice/notify-human-status/:callSid', requireAuth, getNotifyHumanStatus)

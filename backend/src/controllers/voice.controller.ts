@@ -10,6 +10,7 @@ import { analyzeCallTranscript, ClientInfo } from '../services/claudeVoice.servi
 import { DispositionStatus, nextActionFor } from '../config/disposition'
 import { runAction } from '../services/flowActions.service'
 import { applyFollowUpRules } from '../services/followUpEscalation.service'
+import { excludeForPayment, paymentExclusionReason } from '../services/paymentExclusion.service'
 import { CLIENT_REPORT_FIELDS, buildClientReportFilter, splitFilterValues } from '../utils/reportFilters'
 import { CALL_EXPORT_COLUMNS, CLIENT_EXPORT_COLUMNS, toCallExportRow, toClientExportRow } from '../utils/clientExport'
 import AutomationSettings, { DEFAULT_RECORDING_RETENTION, type RecordingRetentionConfig, type VoiceEngine } from '../models/AutomationSettings'
@@ -96,6 +97,9 @@ async function applyDisposition(
       lastCallConclusion: null,
       ...(clientStatus ? { status: clientStatus } : {}),
     })
+    // Registró algo de pago: fuera de las llamadas automáticas hasta fin de mes (ver paymentExclusion.service.ts)
+    const paymentReason = paymentExclusionReason(status)
+    if (paymentReason) await excludeForPayment(clientId, paymentReason)
   }
 }
 
@@ -108,8 +112,17 @@ const AUTO_CALL_TEST_MODE = process.env.AUTO_CALL_TEST_MODE === 'true'
 // entre las dos LLAMADAS (pasos 1->2) se da más margen que entre los MENSAJES que
 // siguen (pasos 2->3->4, ver autoCallScheduler.service.ts para el resto del ciclo:
 // arranca cada paso; esta función solo reacciona al RESULTADO de una llamada ya hecha).
-const AUTO_CALL_RETRY_GAP_MS = AUTO_CALL_TEST_MODE ? 30 * 1000 : 3 * 24 * 60 * 60 * 1000
+const AUTO_CALL_RETRY_GAP_DAYS = 2
 const AUTO_MESSAGE_GAP_MS = AUTO_CALL_TEST_MODE ? 30 * 1000 : 1 * 24 * 60 * 60 * 1000
+
+// Cuándo toca la segunda llamada: desde el INICIO (00:00 CDMX, UTC-6) del día que cae AUTO_CALL_RETRY_GAP_DAYS
+// después, no 48 horas exactas — así entra en cualquier lote de ese día (con horas exactas, una llamada de las
+// 18:10 del miércoles quedaba lista el viernes a las 18:10, después del último lote, y se perdía la semana).
+function nextCallRetryAt(now: Date = new Date()): Date {
+  if (AUTO_CALL_TEST_MODE) return new Date(now.getTime() + 30 * 1000)
+  const wall = new Date(now.getTime() - 6 * 3600_000)
+  return new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + AUTO_CALL_RETRY_GAP_DAYS, 6))
+}
 
 // El usuario decidió qué cuenta como "no hubo respuesta" para reintentar: no contestó/
 // ocupado/falló la conexión (disposition 'No answer', puesta directo en handleStatus) Y
@@ -149,8 +162,8 @@ async function advanceAutoCallCycle(
   // Sin respuesta — programa el siguiente paso. Qué TIPO de paso es (llamada o mensaje)
   // lo decide el scheduler según el número de intento cuando le toque correr, aquí solo
   // se define CUÁNDO.
-  const gapMs = (client.autoCallAttempt as number) >= 2 ? AUTO_MESSAGE_GAP_MS : AUTO_CALL_RETRY_GAP_MS
-  client.autoCallNextAttemptAt = new Date(Date.now() + gapMs)
+  client.autoCallNextAttemptAt =
+    (client.autoCallAttempt as number) >= 2 ? new Date(Date.now() + AUTO_MESSAGE_GAP_MS) : nextCallRetryAt()
   await client.save()
 }
 
@@ -477,6 +490,7 @@ export async function placeOutboundCall(
     triggeredBy,
     voiceEngine: engine,
     ...(followUpOfCallId ? { followUpOfCallId } : {}),
+    ...(triggeredBy === 'followup' ? { followUpAttempt: 2 } : {}),
   })
 
   return { callSid: call.sid, status: call.status }
